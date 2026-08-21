@@ -74,7 +74,9 @@ HONEST_SCOPE = (
     "chain (read `bindings`) nor that self-asserted keys prove issuer identity (read "
     "`provenance_classes`/`self_asserted_only`). KB-JWT holder binding is verified "
     "when the issuer payload carries cnf.jwk; without cnf.jwk it is recorded as "
-    "present-but-unverifiable, never painted green.")
+    "present-but-unverifiable, never painted green. KB-JWT aud/nonce/iat are RECORDED "
+    "for the auditor, not validated — their expected values are transaction context "
+    "this tool cannot know offline.")
 
 
 class Ap2EvidenceError(ValueError):
@@ -277,7 +279,9 @@ def _snapshot_key(parsed: Dict, supplied_jwk: Optional[Dict] = None,
         if not jwks_url.startswith("https://"):
             raise Ap2EvidenceError("JWKS URL must be https:// (TLS is the whole witness)")
         with urllib.request.urlopen(jwks_url, timeout=timeout) as r:  # nosec B310 - https enforced above
-            raw = r.read()
+            raw = r.read(1024 * 1024 + 1)          # cap: un JWKS gigante = DoS, non una chiave
+        if len(raw) > 1024 * 1024:
+            raise Ap2EvidenceError("JWKS response exceeds 1MB cap (refused fail-closed)")
         jwks = json.loads(raw.decode())
         kid = parsed["header"].get("kid")
         keys = jwks.get("keys", [])
@@ -322,7 +326,10 @@ def verify_kb_jwt(parsed: Dict, resolved_claims: Dict) -> Dict:
     presentation = parsed["compact"].rsplit("~", 1)[0] + "~"
     sd_hash_ok = payload.get("sd_hash") == _sha256_b64url(presentation.encode("ascii"))
     return {"present": True, "verified": bool(sig_ok and sd_hash_ok),
-            "signature_ok": sig_ok, "sd_hash_ok": sd_hash_ok}
+            "signature_ok": sig_ok, "sd_hash_ok": sd_hash_ok,
+            "claims_recorded_not_validated": {k: payload.get(k)
+                                              for k in ("aud", "nonce", "iat")
+                                              if k in payload}}
 
 
 
@@ -457,6 +464,10 @@ def build_evidence(artifacts: List[Dict], out_path: str,
     fails to verify aborts the build (an evidence file must never contain a red light
     dressed as evidence — fail-closed at the source)."""
     keys, jwks_urls = keys or {}, jwks_urls or {}
+    names = [a["name"] for a in artifacts]
+    if len(set(names)) != len(names):
+        raise Ap2EvidenceError("duplicate artifact names (bindings would silently "
+                               "overwrite each other — refused fail-closed)")
     entries, for_bindings = [], []
     for a in artifacts:
         parsed = parse_sd_jwt(a["sd_jwt"])

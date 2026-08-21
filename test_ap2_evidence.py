@@ -294,3 +294,26 @@ class TestKbJwtHolderBinding(_Base):
         kbr = v["artifacts"][0]["kb_jwt"]
         self.assertTrue(kbr["present"])
         self.assertIsNone(kbr["verified"])
+
+
+class TestFullContextReviewFindings(_Base):
+    """Finding della review a contesto pieno (Gemini flash su repo-pack, 21/08)."""
+
+    def test_duplicate_artifact_names_refused(self):
+        with self.assertRaises(ap2.Ap2EvidenceError):
+            ap2.build_evidence([{"name": "intent", "sd_jwt": self.intent},
+                                {"name": "intent", "sd_jwt": self.cart}], self.out)
+        self.assertFalse(os.path.exists(self.out))
+
+    def test_kb_claims_recorded_not_validated(self):
+        hsk, hjwk = _make_signer()
+        sd = _make_sd_jwt(self.sk, {"iss": "wallet", "cnf": {"jwk": hjwk}},
+                          {"amount": "1.00"}, header_extra={"jwk": self.jwk})
+        kb = _sign_jwt(hsk, {"alg": "ES256", "typ": "kb+jwt"},
+                       {"aud": "merchant-x", "nonce": "n42",
+                        "sd_hash": _b64u(hashlib.sha256(sd.encode("ascii")).digest())})
+        ap2.build_evidence([{"name": "i", "sd_jwt": sd + kb}], self.out)
+        v = ap2.verify_evidence(self.out)
+        rec = v["artifacts"][0]["kb_jwt"]["claims_recorded_not_validated"]
+        self.assertEqual(rec, {"aud": "merchant-x", "nonce": "n42"})
+        self.assertIn("not validated", ap2.HONEST_SCOPE)
