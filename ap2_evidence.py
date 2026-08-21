@@ -264,6 +264,9 @@ def _snapshot_key(parsed: Dict, supplied_jwk: Optional[Dict] = None,
                 "note": "key material supplied by the caller (caller vouches); "
                         "overrides any self-asserted header key by design"}
     if header.get("x5c"):
+        if not isinstance(header["x5c"], list) or len(header["x5c"]) > 10:
+            raise Ap2EvidenceError("x5c chain absent or too long (>10 certs): refused "
+                                   "(a huge chain is a DoS vector, not a key)")
         pub = _pubkey_from_x5c_leaf(header["x5c"])
         chain_fp = [hashlib.sha256(base64.b64decode(c)).hexdigest() for c in header["x5c"]]
         return {"jwk": _jwk_from_pubkey(pub), "provenance_class": "x5c_header",
@@ -553,7 +556,8 @@ def verify_evidence(path: str) -> Dict:
             "provenance_classes": classes,
             # tutto auto-asserito = la firma prova solo coerenza interna, mai identita'
             "self_asserted_only": bool(classes) and set(classes) <= {"jwk_header"},
-            "valid": bool(digest_ok and all_ok and bindings_ok
+            # un evidence senza artefatti non prova NULLA: mai 'valid' (falso-verde per l'auditor)
+            "valid": bool(art_results and digest_ok and all_ok and bindings_ok
                           and rfc.get("verified") is not False),
             "honest_scope": ev.get("honest_scope")}
 

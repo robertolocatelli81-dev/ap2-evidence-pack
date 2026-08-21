@@ -317,3 +317,28 @@ class TestFullContextReviewFindings(_Base):
         rec = v["artifacts"][0]["kb_jwt"]["claims_recorded_not_validated"]
         self.assertEqual(rec, {"aud": "merchant-x", "nonce": "n42"})
         self.assertIn("not validated", ap2.HONEST_SCOPE)
+
+
+class TestTripleMindReviewFixes(_Base):
+    """Fix dal controllo delle tre menti (21/08): zero-artefatti, cap x5c."""
+
+    def test_zero_artifacts_is_not_valid(self):
+        import ap2_evidence as ap2mod
+        ap2.build_evidence([{"name": "i", "sd_jwt": self.intent}], self.out)
+        ev = json.load(open(self.out))
+        ev["artifacts"] = []
+        # ricalcola il digest così digest_ok resta True: isoliamo il SOLO effetto zero-artefatti
+        e2 = {k: v for k, v in ev.items()
+              if k not in ("evidence_digest_sha256", "rfc3161_timestamp")}
+        ev["evidence_digest_sha256"] = ap2mod.hashlib.sha256(ap2mod._canon(e2)).hexdigest()
+        json.dump(ev, open(self.out, "w"))
+        v = ap2.verify_evidence(self.out)
+        self.assertTrue(v["digest_ok"])          # il file è intatto...
+        self.assertFalse(v["valid"])             # ...ma non prova nulla → non valido
+
+    def test_x5c_chain_too_long_refused(self):
+        # 11 certificati (>10) = vettore DoS, non una chiave
+        fake = _b64u(b"x" * 20)
+        jwt = _sign_jwt(self.sk, {"alg": "ES256", "x5c": [fake] * 11}, {"iss": "y"})
+        with self.assertRaises(ap2.Ap2EvidenceError):
+            ap2._snapshot_key(ap2.parse_sd_jwt(jwt + "~"))
