@@ -50,10 +50,41 @@ anchor. ES256 only, by design; other algorithms are rejected loudly, never half-
 `valid: true` means every artifact verifies and the file is intact — read `bindings` for
 chain linkage and `provenance_classes` / `self_asserted_only` for capture strength.
 
+## Producer signatures (post-quantum hybrid)
+
+`sign_evidence(...)` adds a **hybrid producer signature** over the pack digest — a
+classical signature (ed25519 or ecdsa-p256) plus **FIPS 204 ML-DSA-65** — so the pack's
+integrity/authenticity survives the quantum transition (NIST IR 8547). Verification is
+fail-closed; authenticity requires the relying party to **pin** the producer public keys
+out of band (an embedded key proves consistency, never authenticity). Policy flags on
+`verify_evidence`: `require_producer`, `require_pq`, `require_anchor`. The ML-DSA-65
+path is checked against a NIST ACVP sigVer subset (`pqcrypto/vectors/`) — the same nine
+cases the elara-mesh verifier runs, so both stacks answer to one NIST oracle.
+
+## Conformance (normative)
+
+The format is defined by `SPEC_AP2_EVIDENCE.md` plus the test vectors in
+`spec/vectors/ap2/` — one ACCEPT (`valid_signed`, the positive control) and five REJECTs
+(stripped-signature downgrade, valid-but-unpinned producer key, digest mismatch, time
+anchor required-but-missing, time anchor claimed-but-invalid). An independent verifier
+claims conformance by reproducing each vector's `normative` block under its declared
+policy, from the spec text alone:
+
+```bash
+python3 spec/vectors/ap2/run_ap2_conformance.py   # exit 0 = conformant
+```
+
+| Implementation | Runtime / deps | Status |
+|---|---|---|
+| `ap2_evidence.py` | Python 3 + `cryptography` | reference — conformant 6/6; ACVP ML-DSA-65 sigVer 9/9 |
+
+Independent implementations (any language): open a PR to be listed here.
+
 ## Tests
 
 ```bash
-python3 test_ap2_evidence.py    # 21 tests; negative controls first — the bench can fail
+python3 test_ap2_evidence.py      # negative controls first — the bench can fail
+python3 test_ap2_conformance.py   # conformance vectors + ACVP ML-DSA-65 + signature suite
 ```
 
 ## License
