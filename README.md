@@ -34,6 +34,7 @@ This tool turns a set of SD-JWT mandates into **one evidence file** that verifie
 ```bash
 pip install cryptography    # the only dependency
 
+python3 examples/make_samples.py     # generates sample intent.sdjwt + cart.sdjwt
 python3 ap2_evidence.py build evidence.json intent=intent.sdjwt cart=cart.sdjwt \
         [--key name=jwk.json] [--jwks-url name=https://...] [--tsa http://tsa.example]
 
