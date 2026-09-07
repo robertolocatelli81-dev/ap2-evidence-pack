@@ -1,3 +1,16 @@
+Metadata-Version: 2.4
+Name: ap2-evidence-pack
+Version: 1.0.2
+Summary: Self-contained, offline-verifiable dispute evidence for agentic-payment SD-JWT mandates (AP2)
+Author: Roberto Locatelli
+License: Apache-2.0
+Project-URL: Homepage, https://github.com/robertolocatelli81-dev/ap2-evidence-pack
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE
+License-File: NOTICE
+Dynamic: license-file
+
 # ap2-evidence-pack
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22539660.svg)](https://doi.org/10.5281/zenodo.22539660)
@@ -104,11 +117,3 @@ without warranties or conditions of any kind, and with no acceptance of liabilit
 the Apache-2.0 license (§7–8). Nothing in this repository is legal advice, and no
 representation is made that any output constitutes admissible or sufficient evidence in
 any legal or regulatory proceeding.
-
-## Install (pip)
-
-```bash
-pip install --extra-index-url https://robertolocatelli81-dev.github.io/pypi/ ap2-evidence-pack
-```
-
-Release artifacts are attached to GitHub Releases; the index links carry `#sha256=` fragments verified by pip. All documented `python3 <file>.py` commands keep working unchanged from a clone.
