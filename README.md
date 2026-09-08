@@ -1,6 +1,6 @@
 # ap2-evidence-pack
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22539660.svg)](https://doi.org/10.5281/zenodo.22539660)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22539659.svg)](https://doi.org/10.5281/zenodo.22539659)
 
 **Self-contained, offline-verifiable dispute evidence for agentic-payment SD-JWT mandates
 (AP2-style Intent / Cart / Payment mandate chains).**
