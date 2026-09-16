@@ -14,13 +14,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Dependencies (cryptography: Ed25519/P-256 and, since 50, ML-DSA-65 for the hybrid producer signature)
+      - name: "Dependencies — cryptography (Ed25519/P-256 and, since 50, ML-DSA-65 for the hybrid producer signature)"
         run: pip install cryptography
       - name: Unit + conformance tests (every suite in the repo, fail-closed)
         run: |
           set -e
           for t in test_*.py pqcrypto/test_*.py; do echo "== $t"; python "$t"; done
-      - name: Gate — build the sample evidence, verify it (exit 0), tamper one artifact, verify again (MUST exit 1)
+      - name: "Gate — build the sample evidence, verify it (exit 0), tamper one artifact, verify again (MUST exit 1)"
         run: |
           set -e
           T=$(mktemp -d); cp -r . "$T"; cd "$T"
