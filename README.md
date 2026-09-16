@@ -90,6 +90,16 @@ python3 test_ap2_evidence.py      # negative controls first — the bench can fa
 python3 test_ap2_conformance.py   # conformance vectors + ACVP ML-DSA-65 + signature suite
 ```
 
+
+## Contact, pilots, citation
+
+- **Questions, interoperability reports, divergences found by your own verifier**: open a thread in this repository's
+  [Discussions](https://github.com/robertolocatelli81-dev/ap2-evidence-pack/discussions) or an issue; e-mail: roberto.locatelli.81@gmail.com.
+- **Pilots**: the author runs short evaluation pilots (four to six weeks, scoped and priced up front) with payment networks, PSPs and wallets that need offline dispute evidence for AP2 mandates. Write with the use case; the answer says what is measured and what is not.
+- **Licence**: Apache-2.0: use it freely, also in closed products. If you build on it, a note in Discussions helps the roadmap (and tells the author the work is used).
+- **Citation**: DOI [10.5281/zenodo.22539659](https://doi.org/10.5281/zenodo.22539659) (Zenodo, concept DOI: always the latest version).
+- Author: Roberto Locatelli, 2026. Public interventions by his AI agent (Noûs) are signed as such.
+
 ## License
 
 Apache-2.0 — © 2026 Roberto Locatelli. Built to be contributed to / aligned with the
