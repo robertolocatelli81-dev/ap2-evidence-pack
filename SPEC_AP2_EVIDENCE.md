@@ -206,7 +206,9 @@ flags: `require_producer`, `require_pq`, `require_anchor`.
    `resolved_claims`; re-verify the KB-JWT when the issuer payload carries
    `cnf.jwk` (ES256 over `issuer-JWT~disclosure*~`; without `cnf.jwk` a present
    KB-JWT is recorded as unverifiable, never treated as verified-green, and
-   never fails the pack by itself — but a KB-JWT that verifies FALSE does). A verifier records the
+   never fails the pack by itself — but a KB-JWT that verifies FALSE does, and a §3.1 profile
+   violation in any of its three segments is that artifact's failure whether or not the holder
+   key is known: the strict segment rule does not depend on being able to check the signature). A verifier records the
    KB-JWT `aud`/`nonce`/`iat` as present-but-not-validated, as the sealed scope states: their expected
    values are transaction context an offline verifier cannot know.
 3. Recompute bindings (§4), compare → `bindings_ok`.

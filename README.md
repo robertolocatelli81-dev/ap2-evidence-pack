@@ -121,7 +121,10 @@ bindings sit under array-index claim keys, whose recorded binding list is revers
 duplicated binding entry; `provenance_class` `x5c_header` with no `x5c` in the signed header, out of
 enum, a list or absent; `evidence_format` `…/2.0` or absent; `subject`/`created_utc`/`honest_scope`
 absent or the wrong type, `created_utc` not ISO-8601; a SIGNED payload that is an array or a string,
-a signed 100000-deep header; a real self-signed `x5c` leaf — canonical, with a space, with a newline,
+a signed 100000-deep header; seven KB-JWT branches (two segments, a header that is not JSON, an array payload, `alg` RS256, `cnf.jwk` a string, and a
+signature segment with padding or with a space) and seven `resolve_disclosures` branches (a disclosure that is not
+base64url, not JSON, an object, four elements, a duplicate digest, one matching nothing, and a colliding claim name);
+a real self-signed `x5c` leaf — canonical, with a space, with a newline,
 one whose key differs from the snapshotted JWK, and one issued by a CA rather than self-signed;
 `provenance_class` `supplied`, out of enum, a list or absent; `honest_scope` absent; a pack whose mandate is
 self-asserted while a second artifact chains to the anchor) and 19 command-line grammar cases
@@ -132,9 +135,9 @@ controls (non-ASCII text in profile; a fresh-key pack that must be `valid` in bo
 leaf under `--trust-anchor`, the only case in the suite where `self_asserted_only` is false — and its
 negative control, the self-signed leaf against the same anchor, where it stays true):
 **144 cases, 0 disagreements, of which 4 are declared divergences** (the run prints its own
-decomposition — `9 vector runs + 99 hostile files + 3 positive controls + 19 CLI cases = 130` — so these
-numbers are copied from a measurement rather than counted by hand, which is how three of them went stale
-during the review rounds) — the real token under `--tsa-cert`, where the
+decomposition — `9 vector runs + 113 hostile files + 3 positive controls + 19 CLI cases = 144` — so these numbers are
+copied from that line rather than counted by hand, which is how several of them went stale during the
+review rounds; this very sentence had gone stale once more, and was caught by the final check) — the real token under `--tsa-cert`, where the
 reference proves the TSA with openssl and the JS verifier reports `tsa_verified: null` and does
 not pass the policy; and the three packs under `--trust-anchor` — the CA-issued leaf, the self-signed leaf and the mixed
 mandate-plus-chained pack — whose chains the reference validates with `openssl verify` (clearing `self_asserted_only` for

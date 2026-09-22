@@ -180,7 +180,7 @@ the policy flags.
   shape there as well. Both record them on every branch now, with identical fields, and the receipt-shape test covers a
   pack that carries a KB-JWT (red against the previous commit). Found by checking the branch the tests did not reach.
   That prompted a coverage measurement of the whole reference under the tests AND the oracle — 79% of its lines — which
-  named `verify_kb_jwt` as the least exercised path. Probing its six uncovered branches found a seventh defect, shared by
+  named `verify_kb_jwt` as the least exercised path. Probing its six uncovered branches found another defect, shared by
   both verifiers: a KB-JWT whose signature segment is non-canonical base64url verified with `valid: true`, because the
   branch for an unknown holder key returns before the signature is ever decoded, so the §3.1 profile never reached it.
   Both verifiers now apply the profile to all three KB-JWT segments; measured on the previous commit, that pack was
