@@ -612,8 +612,10 @@ def verify_kb_jwt(parsed: Dict, resolved_claims: Dict) -> Dict:
     if "cnf" in rc and not isinstance(rc["cnf"], dict):
         raise Ap2EvidenceError("cnf must be an object")
     cnf = rc.get("cnf", {})
+    recorded = {k: payload.get(k) for k in ("aud", "nonce", "iat") if k in payload}   # final check: the sealed scope says
+    # these are RECORDED whenever a KB-JWT is present — this branch returned before recording them, in both verifiers
     if "jwk" not in cnf:
-        return {"present": True, "verified": None,
+        return {"present": True, "verified": None, "claims_recorded_not_validated": recorded,
                 "note": "no cnf.jwk in issuer payload — holder key unknown (declared)"}
     jwk = cnf["jwk"]
     if not isinstance(jwk, dict):
@@ -623,10 +625,8 @@ def verify_kb_jwt(parsed: Dict, resolved_claims: Dict) -> Dict:
     presentation = parsed["compact"].rsplit("~", 1)[0] + "~"
     sd_hash_ok = payload.get("sd_hash") == _sha256_b64url(presentation.encode("ascii"))
     return {"present": True, "verified": bool(sig_ok and sd_hash_ok),
-            "signature_ok": sig_ok, "sd_hash_ok": sd_hash_ok,
-            "claims_recorded_not_validated": {k: payload.get(k)
-                                              for k in ("aud", "nonce", "iat")
-                                              if k in payload}}
+            "signature_ok": sig_ok, "sd_hash_ok": sd_hash_ok, "note": None,
+            "claims_recorded_not_validated": recorded}
 
 
 # ────────────────────────────────────────────────────────── bindings

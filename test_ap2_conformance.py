@@ -148,6 +148,21 @@ class TestAp2ConformanceVectors(unittest.TestCase):
         for a, b in zip(py["artifacts"], js["artifacts"]):
             self.assertEqual(sorted(a), sorted(b), f"artifact receipt fields differ for {a.get('name')!r}")
         self.assertEqual(sorted(py["rfc3161"]), sorted(js["rfc3161"]), "rfc3161 receipt fields differ")
+        # and on a pack WITH a KB-JWT — the branch where the two receipts had drifted apart (the reference carried a
+        # `note`, the JS did not, and neither recorded the aud/nonce/iat the sealed scope says are recorded)
+        import base64
+        sys.path.insert(0, os.path.join(_HERE, "verifiers")); import differential_oracle as O
+        b64u = lambda b: base64.urlsafe_b64encode(b).decode().rstrip("=")   # noqa: E731
+        base = json.load(open(V)); sk, n = O._fresh_key()
+        kb = ".".join([b64u(b'{"alg":"ES256","typ":"kb+jwt"}'), b64u(b'{"aud":"m","nonce":"n1","iat":1,"sd_hash":"x"}'), b64u(b"\x00" * 64)])
+        ev = O._fresh_pack(base, sk, n, '{"alg":"ES256","typ":"ap2-mandate+sd-jwt"}', '{"iss":"x"}', {"iss": "x"}, kb=kb)
+        kbp = os.path.join(tempfile.mkdtemp(), "kb.json"); json.dump(O.rehash(ev), open(kbp, "w"))
+        py, js = receipts(kbp)
+        self.assertEqual(sorted(py["artifacts"][0]["kb_jwt"]), sorted(js["artifacts"][0]["kb_jwt"]), "KB-JWT receipt fields differ")
+        self.assertEqual(py["artifacts"][0]["kb_jwt"]["claims_recorded_not_validated"],
+                         js["artifacts"][0]["kb_jwt"]["claims_recorded_not_validated"], "the recorded KB-JWT claims differ")
+        self.assertIn("aud", py["artifacts"][0]["kb_jwt"]["claims_recorded_not_validated"])
+
         d = tempfile.mkdtemp(); bad = os.path.join(d, "bad.json")   # and on a refusal, where the shapes had also drifted
         open(bad, "w").write('{"evidence_format":"nope"}')
         py, js = receipts(bad)

@@ -107,13 +107,14 @@ function verifyKbJwt(parsed, resolved) {
   if (typeof header !== "object" || header === null || Array.isArray(header) || typeof payload !== "object" || payload === null || Array.isArray(payload)) throw new Refused("kb-jwt header and payload must be objects");
   const cnf = resolved !== null && typeof resolved === "object" && "cnf" in resolved ? resolved.cnf : undefined;   // r2: cnf absent or object; cnf.jwk absent or object
   if (cnf !== undefined && (cnf === null || typeof cnf !== "object" || Array.isArray(cnf))) throw new Refused("cnf must be an object");
-  const jwk = cnf !== undefined && "jwk" in cnf ? cnf.jwk : undefined; if (jwk === undefined) return { present: true, verified: null };
+  const recorded = {}; for (const k of ["aud", "nonce", "iat"]) if (k in payload) recorded[k] = payload[k];   // the sealed scope says these are RECORDED whenever a KB-JWT is present
+  const jwk = cnf !== undefined && "jwk" in cnf ? cnf.jwk : undefined;
+  if (jwk === undefined) return { present: true, verified: null, claims_recorded_not_validated: recorded, note: "no cnf.jwk in issuer payload — holder key unknown (declared)" };
   if (jwk === null || typeof jwk !== "object" || Array.isArray(jwk)) throw new Refused("cnf.jwk must be an object");
   const sigOk = es256Verify(Buffer.from(seg[0] + "." + seg[1], "ascii"), b64uDecode(seg[2]), jwk);
   const presentation = parsed.compact.slice(0, parsed.compact.lastIndexOf("~")) + "~";
   const sdHashOk = payload.sd_hash === b64u(sha256(Buffer.from(presentation, "ascii")));
-  const recorded = {}; for (const k of ["aud", "nonce", "iat"]) if (k in payload) recorded[k] = payload[k];
-  return { present: true, verified: Boolean(sigOk && sdHashOk), claims_recorded_not_validated: recorded };   // final check: the sealed scope says these are RECORDED — the reference did it, this verifier did not
+  return { present: true, verified: Boolean(sigOk && sdHashOk), signature_ok: sigOk, sd_hash_ok: sdHashOk, note: null, claims_recorded_not_validated: recorded };   // final check: the sealed scope says these are RECORDED — the reference did it, this verifier did not
 }
 const PROVENANCE_CLASSES = new Set(["supplied", "x5c_header", "jwk_header", "jwks_fetched"]);
 function checkProvenance(pc, parsed, key) {   // returns: is this key SELF-ASSERTED as far as an offline verifier can tell? (r7, fail-closed)
