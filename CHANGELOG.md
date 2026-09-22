@@ -145,5 +145,19 @@ measured on the 1.0.2 verifier first (every case below was red there).
   `mldsa_backend`, emitted by the JS verifier alone and documented nowhere, which is now in both receipts and in SPEC §6.
   Last of the "asserted but not measured" class: `granted` is `null`, not `false`, when `tsr_b64` never decoded and no
   PKIStatus was ever read. Checked and clean: no hostile oracle case shares the intact vector's verdict tuple.
+- **Review round 11** (Opus/Sonnet/Haiku, 22/09/2026), the last before the release: the sealed `honest_scope` said the
+  format "does NOT validate x5c chains to a trust anchor", which round 8 had made false — so a `verify --trust-anchor`
+  printed `chain_verified: true` in the same JSON object as a scope denying that chains are ever validated. The scope is
+  pinned by SHA-256, so correcting it invalidates every existing pack: it was done now, before the tag, and the whole
+  vector set was regenerated with fresh keys and two re-issued RFC 3161 tokens (the declared genTime in the oracle moved
+  with them — the run reported the mismatch instead of passing silently, which is what that guard is for).
+  `chain_verified` no longer collapses to `null` because a pack also contains a non-x5c artifact: only artifacts that
+  attempted a chain count, so a mandate/cart pack mixing `jwk_header` and `x5c_header` now reports what was measured —
+  the round-10 `all()` defect one field over, and invisible to the oracle because the JS verifier always answers `null`.
+  `imprint_ok` is `null` wherever no messageImprint was read (it asserted `false`, the same accusation round 10 made of
+  `granted`, applied to half the object), and the two early `return`s of the JS token walk carry the same fields as every
+  other branch. The reference emits `x5c_leaf.chain_verified` always, as the JS receipt did: the same certificate was
+  producing a six-field receipt on one side and a seven-field one on the other. Oracle: 130 cases, 0 disagreements,
+  4 declared.
 
 Verdicts unchanged on in-profile evidence produced by 1.0.x `build`.

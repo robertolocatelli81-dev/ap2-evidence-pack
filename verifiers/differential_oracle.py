@@ -50,7 +50,7 @@ def _forged_tsr(digest, extra_tst=b""):
 # the cases that must PASS: they prove the bench can tell green from red (never hostile files)
 POSITIVE_CONTROLS = frozenset({"non-ascii-subject-rehashed", "fresh-pack-control-valid", "must-created_utc-ok"})
 
-_LEAF_CA = _LEAF_SELF = None   # the x5c leaves are freshly generated each run: the declaration ignores that one field
+_LEAF_CA = _LEAF_SELF = _LEAF_MIX = None   # the x5c leaves are freshly generated each run: the declaration ignores that one field
 
 DECLARED = {
     # The three declared divergences all have ONE cause: chain and TSA validation run `openssl` and are therefore the
@@ -58,11 +58,14 @@ DECLARED = {
     # passes a policy on their strength. NB the gen_time below is the probe TSA token's own genTime: regenerating the
     # anchor vectors changes it and this declaration must be updated with them (the run then reports the mismatch).
     "vector-anchor_valid-tsa-cert": {
-        "py": (True, True, True, True, True, None, True, True, True, True, True, "20260922110255Z", True, True, None, ("jwk_header",), ()),
-        "js": (False, True, True, True, True, None, True, True, True, True, True, "20260922110255Z", False, True, None, ("jwk_header",), ())},
+        "py": (True, True, True, True, True, None, True, True, True, True, True, "20260922165547Z", True, True, None, ("jwk_header",), ()),
+        "js": (False, True, True, True, True, None, True, True, True, True, True, "20260922165547Z", False, True, None, ("jwk_header",), ())},
     "x5c-ca-issued-with-trust-anchor": {
         "py": (True, True, True, False, None, None, False, False, None, None, None, None, True, False, True, ("x5c_header",), _LEAF_CA),
         "js": (True, True, True, False, None, None, False, False, None, None, None, None, True, True, None, ("x5c_header",), _LEAF_CA)},
+    "mixed-self-asserted-mandate-plus-chained-artifact": {
+        "py": (True, True, True, False, None, None, False, False, None, None, None, None, True, True, True, ("jwk_header", "x5c_header"), _LEAF_MIX),
+        "js": (True, True, True, False, None, None, False, False, None, None, None, None, True, True, None, ("jwk_header", "x5c_header"), _LEAF_MIX)},
     "x5c-self-signed-with-trust-anchor": {
         "py": (True, True, True, False, None, None, False, False, None, None, None, None, True, True, False, ("x5c_header",), _LEAF_SELF),
         "js": (True, True, True, False, None, None, False, False, None, None, None, None, True, True, None, ("x5c_header",), _LEAF_SELF)}}

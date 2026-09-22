@@ -43,7 +43,8 @@ build time, and (if stamped and the TSA verified against its certificate) that a
 it existed at the TSA's time — offline,
 vendor-free, years later. It does NOT prove the issuer authorised the key (that is the
 provenance class's job to DECLARE), does NOT confer eIDAS art. 45j qualified-archive legal
-presumption (a QTSP service does), and does NOT validate x5c chains to a trust anchor.
+presumption (a QTSP service does), and validates x5c chains only when the relying party supplies a trust anchor
+(`--trust-anchor`, SPEC §6.7): nothing about a chain is sealed in the file itself.
 ES256 only, by design; other algs are rejected loudly, never half-verified.
 
 Usage:
@@ -76,7 +77,9 @@ HONEST_SCOPE = (
     "key's provenance_class), verified at build time; the RFC 3161 token (if present) "
     "anchors their existence to the TSA's clock. Does NOT prove the issuer authorised "
     "the key beyond what the provenance class states, does NOT confer eIDAS qualified-"
-    "archive legal presumption, does NOT validate x5c chains to a trust anchor, and "
+    "archive legal presumption, and does NOT by itself validate x5c chains to a trust anchor "
+    "— that is an act of the relying party at verification time, with `--trust-anchor`, reported in "
+    "`chain_verified` and in each artifact's `x5c_leaf` (SPEC §6.7); nothing about a chain is sealed in this file — and "
     "never proves the truth of the recorded transaction itself. When a producer signature is present, it protects THIS pack integrity, and authenticity ONLY for a relying party that has PINNED the producer public key out of band (an embedded key alone proves consistency, not authenticity), across the retention window (hybrid: a classical signature + FIPS-204 ML-DSA-65, surviving the quantum transition per NIST IR 8547); it does NOT retro-protect the underlying ES256 mandate signature - for the existed-before-a-quantum-adversary claim you still need a trusted time anchor (RFC 3161 / RFC 4998 renewal). 'valid' means each "
     "artifact verifies and the file is intact — NOT that the mandates form a bound "
     "chain (read `bindings`) nor that self-asserted keys prove issuer identity (read "
@@ -453,6 +456,7 @@ def _check_provenance(pc, parsed: Dict, key: Dict, trust_anchor: Optional[str] =
              "not_valid_before": cert.not_valid_before_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
              "not_valid_after": cert.not_valid_after_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
              "sha256": hashlib.sha256(cert.public_bytes(_serialization().Encoding.DER)).hexdigest()}
+    ident["chain_verified"] = None     # r11: always present, as in the JS receipt — None = not measured
     if trust_anchor is None:
         return True, ident   # no anchor: the certificate proves only that the key is in a blob the signer wrote
     chain_ok = _verify_x5c_chain(x5c, trust_anchor, at_time=at_time)
@@ -779,15 +783,17 @@ def _verify_rfc3161(tsr_b64: str, expected_digest_hex: str, timeout: int = 15, t
     try:
         tsr = _sigsuite._unb64(tsr_b64)                       # strict base64 (a space inside the token used to be skipped)
     except (ValueError, TypeError):
-        return {"verified": False, "granted": None, "imprint_ok": False, "gen_time": None, "tsa_verified": None, "note": "tsr_b64 is not canonical base64"}   # r11: None = no status was read, not "the TSA refused"
+        return {"verified": False, "granted": None, "imprint_ok": None, "gen_time": None, "tsa_verified": None, "note": "tsr_b64 is not canonical base64"}   # r11: None = never read, not "it did not match"
     partial: Dict = {}
     try:
         info = parse_timestamp_resp(tsr, partial)
     except Exception as e:  # noqa: BLE001 — any malformed DER is "not parseable" (r2: an empty EXPLICIT [0] was an IndexError traceback)
-        return {"verified": False, "granted": partial.get("granted"), "imprint_ok": False, "gen_time": None, "tsa_verified": None,
-                "note": f"token not parseable: {type(e).__name__}: {str(e)[:80]}"}   # r10: the status READ, or None — never an unmeasured False
-    imprint_ok = info["imprint"] == expected_digest_hex.lower()
-    out = {"verified": bool(info["granted"] and imprint_ok), "granted": info["granted"], "imprint_ok": imprint_ok, "gen_time": info.get("gen_time"), "tsa_verified": None}
+        return {"verified": False, "granted": partial.get("granted"), "imprint_ok": partial.get("imprint_ok"), "gen_time": None, "tsa_verified": None,
+                "note": f"token not parseable: {type(e).__name__}: {str(e)[:80]}"}   # r11: imprint_ok too — None when never read   # r10: the status READ, or None — never an unmeasured False
+    # r11: None when the token carried no messageImprint at all — "never read" is not "did not match"
+    imprint_ok = None if info.get("imprint") is None else (info["imprint"] == expected_digest_hex.lower())
+    partial["imprint_ok"] = imprint_ok
+    out = {"verified": bool(info["granted"] and imprint_ok is True), "granted": info["granted"], "imprint_ok": imprint_ok, "gen_time": info.get("gen_time"), "tsa_verified": None}
     if tsa_cert is None:
         return out
     exe = shutil.which("openssl")
@@ -897,6 +903,15 @@ def sign_evidence(path, identity=None, classical_alg="ed25519"):
     return {"out": path, "scheme": ev["producer_signatures"]["scheme"], "sig_algs": algs,
             "pq_protected": any(a in _sigsuite.POST_QUANTUM for a in algs),
             "producer_public_keys": identity.public_keys()}
+
+
+def _chain_verdict(trust_anchor, art_results):
+    if trust_anchor is None:
+        return None
+    attempted = [r["x5c_leaf"] for r in art_results if r.get("x5c_leaf") is not None]
+    if not attempted or any(x.get("chain_verified") is None for x in attempted):
+        return None          # nothing was attempted, or openssl could not measure one of them
+    return all(x.get("chain_verified") is True for x in attempted)
 
 
 def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = False,
@@ -1046,10 +1061,11 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
             # the mandate-signing key had never been reconciled at all. A label ("supplied", "jwks_fetched") never clears it.
             "self_asserted_only": bool(art_results) and any(r.get("self_asserted", True) for r in art_results),
             # r8: what the verifier DID about chains — None when no anchor was supplied (so the flag above is fail-closed true)
-            # r9: True only if every artifact's chain really validated; None when openssl could not measure it; False otherwise
-            "chain_verified": None if trust_anchor is None else (
-                None if any((r.get("x5c_leaf") or {}).get("chain_verified") is None for r in art_results)
-                else (bool(art_results) and not any(r.get("self_asserted", True) for r in art_results))),
+            # r9: True only if every chain really validated; None when openssl could not measure it. r11: only artifacts that
+            # ATTEMPTED a chain count — before, one `jwk_header` artifact anywhere collapsed the field to None even when every
+            # x5c chain present had validated, which is the r10 `all()` defect one field over (invisible to the oracle, since
+            # the JS verifier always answers null).
+            "chain_verified": _chain_verdict(trust_anchor, art_results),
             # un evidence senza artefatti non prova NULLA: mai 'valid' (falso-verde per l'auditor)
             "policy_ok": policy_ok,
             "valid": bool(art_results and digest_ok and all_ok and bindings_ok

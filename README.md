@@ -51,8 +51,8 @@ Or as a library: `build_evidence(...)` / `verify_evidence(...)`.
 This file proves *what verified against which key material at capture time* — nothing
 more. It does **not** prove issuer key authorization beyond what each provenance class
 states, does **not** confer qualified-archive legal presumption (in the EU that is a
-QTSP service under eIDAS art. 45j), and does **not** validate x5c chains to a trust
-anchor. ES256 only, by design; other algorithms are rejected loudly, never half-verified.
+QTSP service under eIDAS art. 45j), and validates x5c chains only when you supply a trust anchor
+(`--trust-anchor`, SPEC §6.7) — nothing about a chain is sealed in the file itself. ES256 only, by design; other algorithms are rejected loudly, never half-verified.
 `valid: true` means every artifact verifies and the file is intact — read `bindings` for
 chain linkage and `provenance_classes` / `self_asserted_only` for capture strength.
 `self_asserted_only` is fail-closed (SPEC §6.7): offline **nothing** clears it — not a label
@@ -97,7 +97,8 @@ python3 spec/vectors/ap2/run_ap2_conformance.py   # exit 0 = conformant
 
 **Differential oracle** (`verifiers/differential_oracle.py`, 22/09/2026): the two verifiers must
 give the same `(valid, digest_ok, bindings_ok, producer_ok, pq_protected, rfc3161_verified,
-policy_ok, producer_present, producer_trusted, rfc3161_claimed, rfc3161_gen_time, self_asserted_only, provenance_classes)`
+policy_ok, producer_present, producer_trusted, rfc3161_claimed/granted/imprint_ok/gen_time, chain_verified,
+self_asserted_only, provenance_classes, and the `x5c_leaf` identity of every artifact)`
 — the eleven normative fields of SPEC §6 plus `rfc3161.granted`, `rfc3161.imprint_ok`, `rfc3161.gen_time`,
 `chain_verified`, `provenance_classes` and the `x5c_leaf` identity — on the 8 vectors under their declared policy (plus `anchor_valid` under
 `--require-anchor --tsa-cert`, and the CA-issued `x5c` leaf under `--trust-anchor`), 99 hostile files that carry the digest a lenient verifier would
@@ -129,7 +130,7 @@ nothing on stdout, in both — the bare invocation without a subcommand included
 controls (non-ASCII text in profile; a fresh-key pack that must be `valid` in both; the CA-issued `x5c`
 leaf under `--trust-anchor`, the only case in the suite where `self_asserted_only` is false — and its
 negative control, the self-signed leaf against the same anchor, where it stays true):
-**130 cases, 0 disagreements, of which 3 are declared divergences** (the run prints its own
+**130 cases, 0 disagreements, of which 4 are declared divergences** (the run prints its own
 decomposition — `9 vector runs + 99 hostile files + 3 positive controls + 19 CLI cases = 130` — so these
 numbers are copied from a measurement rather than counted by hand, which is how three of them went stale
 during the review rounds) — the real token under `--tsa-cert`, where the

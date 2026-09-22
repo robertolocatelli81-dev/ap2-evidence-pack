@@ -55,7 +55,7 @@ function canon(v) { if (v === null) return "null"; if (v === true) return "true"
 const sha256 = (b) => createHash("sha256").update(b).digest();
 const b64u = (b) => Buffer.from(b).toString("base64url");
 const EVIDENCE_FORMAT = "ap2-evidence-pack/1.0";
-const HONEST_SCOPE_SHA256 = "431877e44b759e99d306f79dd52739f08bd94bc05d70a6a03ee82f74fc0f15db";   // SPEC §1: sha256 of the canonical honest scope of this format version
+const HONEST_SCOPE_SHA256 = "7c93945f162da282cd695ef59270f455a97ff112ee61c03394f88bf8fa792de8";   // SPEC §1: sha256 of the canonical honest scope of this format version
 const B64URL = /^[A-Za-z0-9_-]+$/;
 function b64uDecode(s) { if (typeof s !== "string" || !s || !B64URL.test(s) || s.length % 4 === 1) throw new Refused("invalid base64url segment"); const raw = Buffer.from(s, "base64url"); if (b64u(raw) !== s) throw new Refused("non-canonical base64url"); return raw; }
 const b64Strict = (s) => { if (typeof s !== "string" || !s || s.length % 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(s)) return null; const raw = Buffer.from(s, "base64"); return raw.toString("base64") === s ? raw : null; };
@@ -197,22 +197,22 @@ function derTLV(buf, off) { if (off + 2 > buf.length) throw new Refused("der"); 
 function derChildren(buf, tlv) { const out = []; let o = tlv.start; while (o < tlv.end) { const c = derTLV(buf, o); out.push(c); o = c.next; } return out; }
 function verifyRfc3161(tsrB64, expectedDigestHex) {
   // r11: granted null = no status was read (the bytes never decoded), not "the TSA refused" — a value the receipt never measured
-  const raw = b64Strict(tsrB64); if (!raw) return { verified: false, granted: null, imprint_ok: false, gen_time: null, note: "tsr_b64 is not canonical base64" };
+  const raw = b64Strict(tsrB64); if (!raw) return { verified: false, granted: null, imprint_ok: null, gen_time: null, note: "tsr_b64 is not canonical base64" };   // r11: null = never read
   let grantedRead = null;   // r10: the status read before any later failure, so the receipt reports a measured granted, never an assumed one
   try {
-    const resp = derTLV(raw, 0); if (resp.tag !== 0x30) return { verified: false, note: "not a TimeStampResp" };
-    const [status, token] = derChildren(raw, resp); const st = derChildren(raw, status)[0]; if (!st || st.tag !== 0x02) return { verified: false, note: "no status" };
+    const resp = derTLV(raw, 0); if (resp.tag !== 0x30) return { verified: false, granted: null, imprint_ok: null, gen_time: null, note: "not a TimeStampResp" };   // r11: same receipt shape as every other branch
+    const [status, token] = derChildren(raw, resp); const st = derChildren(raw, status)[0]; if (!st || st.tag !== 0x02) return { verified: false, granted: null, imprint_ok: null, gen_time: null, note: "no status" };   // r11
     const granted = st.end - st.start === 1 && (raw[st.start] === 0 || raw[st.start] === 1); grantedRead = granted;   // granted (0) / grantedWithMods (1)
-    if (!token) return { verified: false, granted, imprint_ok: false };
-    const ci = derChildren(raw, token); const sd = ci[1] && derChildren(raw, ci[1])[0]; if (!sd) return { verified: false, granted, imprint_ok: false };
+    if (!token) return { verified: false, granted, imprint_ok: null, gen_time: null };   // r11: no token, so no imprint was read
+    const ci = derChildren(raw, token); const sd = ci[1] && derChildren(raw, ci[1])[0]; if (!sd) return { verified: false, granted, imprint_ok: null, gen_time: null };
     const sdc = derChildren(raw, sd);           // version, digestAlgorithms, encapContentInfo, [certs], [crls], signerInfos
-    const eci = sdc[2]; const ecic = derChildren(raw, eci); const wrap = ecic[1] && derChildren(raw, ecic[1])[0]; if (!wrap || wrap.tag !== 0x04) return { verified: false, granted, imprint_ok: false };
+    const eci = sdc[2]; const ecic = derChildren(raw, eci); const wrap = ecic[1] && derChildren(raw, ecic[1])[0]; if (!wrap || wrap.tag !== 0x04) return { verified: false, granted, imprint_ok: null, gen_time: null };
     const tst = derTLV(raw, wrap.start); const tstc = derChildren(raw, tst);   // version, policy, messageImprint, serial, genTime, ...
-    const mi = tstc[2]; const mic = derChildren(raw, mi); const hash = mic[1]; if (!hash || hash.tag !== 0x04) return { verified: false, granted, imprint_ok: false };
+    const mi = tstc[2]; const mic = derChildren(raw, mi); const hash = mic[1]; if (!hash || hash.tag !== 0x04) return { verified: false, granted, imprint_ok: null, gen_time: null };
     const imprint = raw.subarray(hash.start, hash.end).toString("hex"); const imprintOk = imprint === expectedDigestHex.toLowerCase();
     let genTime = null; const gt = tstc[4]; if (gt && gt.tag === 0x18) { const s = raw.subarray(gt.start, gt.end).toString("latin1"); if (/^\d{14}(\.\d+)?Z$/.test(s)) genTime = s; }   // r4: TSTInfo.genTime, reported as in the reference
     return { verified: Boolean(granted && imprintOk), granted, imprint_ok: imprintOk, gen_time: genTime };
-  } catch (e) { return { verified: false, granted: grantedRead, imprint_ok: false, gen_time: null, note: "token not parseable: " + (e.message ?? e) }; }   // r10: same shape and same measured status as the reference
+  } catch (e) { return { verified: false, granted: grantedRead, imprint_ok: null, gen_time: null, note: "token not parseable: " + (e.message ?? e) }; }   // r10: same shape and same measured status as the reference
 }
 // ---- evidence ----
 export function verifyEvidence(path, opts = {}) {
