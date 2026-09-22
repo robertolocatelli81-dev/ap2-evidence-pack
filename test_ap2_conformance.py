@@ -136,6 +136,12 @@ class TestAp2ConformanceVectors(unittest.TestCase):
             r = ap2.verify_evidence(p); self.assertFalse(r["valid"], name); self.assertTrue(r["digest_ok"], name); self.assertIn("error", r["artifacts"][0], name)
         p = os.path.join(d, "ok.json"); json.dump(O._fresh_pack(base, sk, n, H, '{"iss":"x","_sd":[],"_sd_alg":"sha-256"}', {"iss": "x"}), open(p, "w"))
         self.assertTrue(ap2.verify_evidence(p)["valid"])   # positive control of the builder
+        # r4: strict base64url measured by the unit suite too (the ablation of that layer alone left the suite green): the same
+        # signature segment padded, with a space, with '+' — a lenient decoder verifies it, the profile refuses it
+        ok = O._fresh_pack(base, sk, n, H, '{"iss":"x"}', {"iss": "x"}); c = ok["artifacts"][0]["sd_jwt_compact"]; jwt, rest = c.split("~", 1); h_, p_, s_ = jwt.split(".")
+        for nm, sig in (("padded", s_ + "=="), ("space", s_[:10] + " " + s_[10:]), ("plus", s_.replace("-", "+", 1) if "-" in s_ else s_[:-1] + "+")):
+            e = json.loads(json.dumps(ok)); e["artifacts"][0]["sd_jwt_compact"] = ".".join([h_, p_, sig]) + "~" + rest; p = os.path.join(d, "b64" + nm + ".json"); json.dump(O.rehash(e), open(p, "w"))
+            r = ap2.verify_evidence(p); self.assertFalse(r["valid"], nm); self.assertIn("error", r["artifacts"][0], nm)
         # top-level shapes of r2: anchored must be a boolean (refusal), provenance_class a string (artifact error), sig_alg a string (FAIL entry)
         e = dict(base); e["rfc3161_timestamp"] = {"anchored": []}; p = os.path.join(d, "anch.json"); json.dump(e, open(p, "w"))
         r = ap2.verify_evidence(p); self.assertFalse(r["valid"]); self.assertIn("anchored", r["refused"])

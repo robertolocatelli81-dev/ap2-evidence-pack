@@ -167,7 +167,8 @@ function verifyRfc3161(tsrB64, expectedDigestHex) {
     const tst = derTLV(raw, wrap.start); const tstc = derChildren(raw, tst);   // version, policy, messageImprint, serial, genTime, ...
     const mi = tstc[2]; const mic = derChildren(raw, mi); const hash = mic[1]; if (!hash || hash.tag !== 0x04) return { verified: false, granted, imprint_ok: false };
     const imprint = raw.subarray(hash.start, hash.end).toString("hex"); const imprintOk = imprint === expectedDigestHex.toLowerCase();
-    return { verified: Boolean(granted && imprintOk), granted, imprint_ok: imprintOk };
+    let genTime = null; const gt = tstc[4]; if (gt && gt.tag === 0x18) { const s = raw.subarray(gt.start, gt.end).toString("latin1"); if (/^\d{14}(\.\d+)?Z$/.test(s)) genTime = s; }   // r4: TSTInfo.genTime, reported as in the reference
+    return { verified: Boolean(granted && imprintOk), granted, imprint_ok: imprintOk, gen_time: genTime };
   } catch (e) { return { verified: false, note: "token not parseable: " + (e.message ?? e) }; }
 }
 // ---- evidence ----
@@ -197,7 +198,8 @@ export function verifyEvidence(path, opts = {}) {
       allOk = allOk && sigOk && claimsOk && kb.verified !== false; forBindings.push({ name: a.name, compact: parsed.compact, resolved });
     } catch (e) { artResults.push({ name: a?.name, error: String(e.message ?? e) }); allOk = false; }
   }
-  const bindingsOk = allOk ? canon(findBindings(forBindings)) === canon(ev.bindings ?? []) : false;   // `bindings` absent = [] in both; null is refused above
+  const asSet = (l) => l.map((b) => canon(b)).sort().join("\n");   // r4: binding SET (SPEC §4) — Object.keys enumerates index keys first, so the scan order is not the reference's
+  const bindingsOk = allOk ? asSet(findBindings(forBindings)) === asSet(ev.bindings ?? []) : false;   // `bindings` absent = [] in both; null is refused above
   const ts = ev.rfc3161_timestamp ?? {}; let rfc = { claimed: Boolean(ts.anchored), verified: null };   // `anchored` is a boolean by the shape check above
   if (ts.anchored && typeof ts.tsr_b64 === "string") rfc = { claimed: true, ...verifyRfc3161(ts.tsr_b64, recomputed), tsa_verified: null };   // BINDING only (status granted + messageImprint == digest, SPEC §3.2); TSA signature/chain: this verifier cannot (no openssl) -> tsa_verified null = incomplete under --tsa-cert
   else if (ts.anchored) rfc = { claimed: true, verified: false, note: "anchored claimed but tsr_b64 absent or not a string" };

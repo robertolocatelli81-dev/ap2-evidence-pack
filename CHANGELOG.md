@@ -52,5 +52,15 @@ measured on the 1.0.2 verifier first (every case below was red there).
   help on stdout with exit 2 (now stderr, like every usage path and the JS verifier); the oracle's usage rule is exit 2 AND
   nothing on stdout. Oracle: 97 cases, 0 disagreements, 1 declared; positive controls 5 red on the round-2 state, 26 on the
   round-1 state, 71 on 1.0.2.
+- **Review round 4** (Opus/Sonnet/Haiku, 22/09/2026): `bindings` is compared as a SET in both verifiers (SPEC §4 now defines
+  the entry schema, the claim-path grammar and both encodings) — JavaScript's `Object.keys` enumerates array-index keys
+  (`"0"`, `"2"`) before the others, so a cart committing under `intent_hash` and `"0"` was scanned in a different order and
+  the ORDERED comparison gave `valid: true` in the reference and `false` in the JS verifier on a pack `build` had produced.
+  The ablation is now one layer at a time (ablating strict base64url alone had left the unit suite green — that layer was
+  not measured; three base64url cases added). The probe TSA certificate is re-issued for 20 years and the two anchor tokens
+  with it (it expired in 2 days, so `tsa_verified` would have gone false in 48 hours); the reference validates the chain at
+  the token's own `genTime` (`openssl ts -verify -attime`), both verifiers report `rfc3161.gen_time`; the stale
+  `requires: ["openssl"]` is off the anchor vectors (the binding check needs no openssl). Oracle: 102 cases,
+  0 disagreements, 1 declared; positive control 2 red on the round-3 state.
 
 Verdicts unchanged on in-profile evidence produced by 1.0.x `build`.

@@ -104,10 +104,12 @@ an object / `0` / `"false"`, and — inside a freshly ES256-signed payload, dige
 a duplicate key, a BOM, `_sd` `null` / `{}` / `[1]`, `_sd_alg: null`, `{"...": [1]}`, a
 disclosure whose name is a list, `cnf` `null` / a string, `cnf.jwk` `{}`, JWK `x` of 31 and of 33
 bytes; an artifact `name` absent / an int / `"__proto__"` / empty / duplicate; a DER element with a
-4-byte length whose top bit is set inside the TSTInfo) and 16 command-line grammar cases (usage exit 2,
+4-byte length whose top bit is set inside the TSTInfo; and — built by the reference itself — packs whose
+bindings sit under array-index claim keys, whose recorded binding list is reversed, or which carry a
+duplicated binding entry) and 16 command-line grammar cases (usage exit 2,
 nothing on stdout, in both — the bare invocation without a subcommand included), plus two positive
 controls (non-ASCII text in profile; a fresh-key pack that must be `valid` in both):
-**97 cases, 0 disagreements, of which 1 is a declared divergence** — the real token under `--tsa-cert`, where the
+**102 cases, 0 disagreements, of which 1 is a declared divergence** — the real token under `--tsa-cert`, where the
 reference proves the TSA with openssl and the JS verifier reports `tsa_verified: null` and does
 not pass the policy. A crash counts as a disagreement, and a declared divergence that stops
 appearing is reported. Positive controls (`AP2_ORACLE_PY_ROOT` / `AP2_ORACLE_JS` point the oracle
@@ -116,7 +118,8 @@ at another checkout), measured 22/09/2026: against the 1.0.2 reference the oracl
 signature or inside `tsr_b64` accepted; `producer_signatures: {}` and `producer_signatures: []`
 treated as absent, `valid: true`; tracebacks on non-UTF-8, 100000-deep, BOM, a missing path and
 on wrong-typed `artifacts`/`key`/`jwk`/`rfc3161_timestamp`; `--help` exit 0, `--` a verdict);
-against the state after review round 2 it is red on 5 (the round-3 cases: an absent artifact `name`
+against the state after review round 3 it is red on 2 (the binding-set cases above),
+against the state after round 2 on 5 (the round-3 cases: an absent artifact `name`
 crashed the JS binding table, an int name was stringified by it and `"__proto__"` vanished from it; a
 4-byte DER length went negative in the JS `<<` and a token the reference refuses verified there; the bare
 invocation printed the reference's help on stdout) and against the state after round 1 on 26 (the round-2 cases: the reference read
@@ -124,10 +127,14 @@ the signed payload with `json.loads` — duplicate key last-wins, BOM skipped �
 refused; present-with-`null` was "absent" in JS and a `TypeError` in the reference; 31/33-byte JWK
 coordinates verified in the reference; `anchored: []` was not anchored in the reference and
 anchored-unverified in JS; `sig_alg: "constructor"` under a pin crashed the JS verifier;
-an empty EXPLICIT `[0]` in the token was an `IndexError` in the reference). Ablation
-(`verifiers/lax_python_ablation.sh`, measured 22/09/2026): with the strict JSON (file and JWT level),
-strict base64url and the JWK length check removed from a copy of the reference, `test_ap2_conformance.py`
-is red (1 failure, 2 errors) — the strict layers are what the tests measure.
+an empty EXPLICIT `[0]` in the token was an `IndexError` in the reference). Round 4 added the binding
+cases: `bindings` is a SET (SPEC §4) in both, because JavaScript enumerates array-index object keys
+first — an ordered comparison split the verdict on a pack the reference itself had built.
+Ablation (`verifiers/lax_python_ablation.sh`, measured 22/09/2026): each strict layer of the reference
+removed **alone** from a copy — file-level strict JSON, JWT-level strict JSON, strict base64url, the JWK
+coordinate length — must turn `test_ap2_conformance.py` red by itself, and each does (2 errors + 1
+failure, then 1 failure each). Measured on 22/09 before that split: ablating base64url alone left the
+suite green, so that layer was not measured by the unit suite; three unit cases were added for it.
 
 Independent implementations (any language): open a PR to be listed here.
 

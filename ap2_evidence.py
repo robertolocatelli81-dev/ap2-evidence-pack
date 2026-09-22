@@ -58,6 +58,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import sys
 import urllib.request
 from datetime import datetime, timezone
@@ -629,7 +630,12 @@ def parse_timestamp_resp(tsr: bytes) -> Dict:
     mic = _der_children(tsr, tstc[2][1], tstc[2][2])
     if len(mic) < 2 or mic[1][0] != 0x04:
         raise Ap2EvidenceError("no messageImprint hash")
-    return {"granted": granted, "imprint": tsr[mic[1][1]:mic[1][2]].hex()}
+    gen_time = None   # r4: TSTInfo.genTime (GeneralizedTime, UTC) — reported, and the TSA chain is validated AT that time
+    if len(tstc) >= 5 and tstc[4][0] == 0x18:
+        gt = tsr[tstc[4][1]:tstc[4][2]].decode("ascii", "replace")
+        if re.fullmatch(r"\d{14}(\.\d+)?Z", gt):
+            gen_time = gt
+    return {"granted": granted, "imprint": tsr[mic[1][1]:mic[1][2]].hex(), "gen_time": gen_time}
 
 
 def _verify_rfc3161(tsr_b64: str, expected_digest_hex: str, timeout: int = 15, tsa_cert: Optional[str] = None) -> Dict:
@@ -651,7 +657,7 @@ def _verify_rfc3161(tsr_b64: str, expected_digest_hex: str, timeout: int = 15, t
     except Exception as e:  # noqa: BLE001 — any malformed DER is "not parseable" (r2: an empty EXPLICIT [0] was an IndexError traceback)
         return {"verified": False, "note": f"token not parseable: {type(e).__name__}: {str(e)[:80]}"}
     imprint_ok = info["imprint"] == expected_digest_hex.lower()
-    out = {"verified": bool(info["granted"] and imprint_ok), "granted": info["granted"], "imprint_ok": imprint_ok, "tsa_verified": None}
+    out = {"verified": bool(info["granted"] and imprint_ok), "granted": info["granted"], "imprint_ok": imprint_ok, "gen_time": info.get("gen_time"), "tsa_verified": None}
     if tsa_cert is None:
         return out
     exe = shutil.which("openssl")
@@ -662,8 +668,12 @@ def _verify_rfc3161(tsr_b64: str, expected_digest_hex: str, timeout: int = 15, t
         path = os.path.join(d, "t.tsr")
         with open(path, "wb") as f:
             f.write(tsr)
-        r = subprocess.run([exe, "ts", "-verify", "-digest", expected_digest_hex, "-sha256", "-in", path, "-CAfile", tsa_cert],
-                           capture_output=True, text=True, timeout=timeout)
+        cmd = [exe, "ts", "-verify", "-digest", expected_digest_hex, "-sha256", "-in", path, "-CAfile", tsa_cert]
+        if info.get("gen_time"):   # r4: validate the chain at the token's own genTime (`-attime`), so a TSA certificate that expired
+            # AFTER issuing does not turn `tsa_verified` False years later; revocation is not checked (declared)
+            import calendar, time as _t
+            cmd += ["-attime", str(calendar.timegm(_t.strptime(info["gen_time"].split(".")[0].rstrip("Z"), "%Y%m%d%H%M%S")))]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         out["tsa_verified"] = r.returncode == 0 and "Verification: OK" in (r.stdout or "")
         if not out["tsa_verified"]:   # `verified` keeps its §3.2 meaning (binding); the TSA outcome is its own field, in both verifiers
             out["tsa_note"] = (r.stderr or r.stdout).strip()[-160:]
@@ -825,8 +835,9 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
             art_results.append({"name": a.get("name") if isinstance(a, dict) else None, "error": f"{type(e).__name__}: {str(e)[:120]}"})
             all_ok = False
 
-    try:
-        bindings_ok = find_bindings(for_bindings) == ev.get("bindings", []) if all_ok else False
+    try:   # r4: the binding SET (SPEC §4) — entries compared by sorted canonical form; the scan order of JS Object.keys puts
+        # array-index keys ("0", "7") first, so an ordered comparison split the verdict on a pack the reference itself built
+        bindings_ok = (sorted(_canon(b) for b in find_bindings(for_bindings)) == sorted(_canon(b) for b in ev.get("bindings", []))) if all_ok else False
     except Exception:  # noqa: BLE001
         bindings_ok = False
 

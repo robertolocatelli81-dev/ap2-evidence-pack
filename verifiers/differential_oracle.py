@@ -170,6 +170,18 @@ def build_cases(d):
     e = copy.deepcopy(base); e["artifacts"][intent]["name"] = "cart"; cases["name-duplicate-rehashed"] = (w("ndup", json.dumps(rehash(e))), [])
     e = dict(base); e["rfc3161_timestamp"] = {"anchored": True, "tsa_url": "forged", "tsr_b64": base64.b64encode(_forged_tsr(bytes.fromhex(base["evidence_digest_sha256"]), extra_tst=bytes([0x04, 0x84, 0x80, 0, 0, 0]))).decode()}
     cases["tsr-der-len-4byte-negative"] = (w("tsrneg", json.dumps(e)), ["--require-anchor"])
+    # ── review r4 (2026-09-22): the binding SET — JS Object.keys enumerates array-index keys first, so a cart whose payload holds
+    # two commitments under "intent_hash" and "0" was scanned in another order and an ORDERED comparison failed in JS on a pack the
+    # reference built; the recorded list reversed must verify in both; a duplicated entry must fail in both (multiset)
+    import ap2_evidence as _ap2
+    def two(name_a, name_b, cart_payload):
+        intent = _sign_compact(sk, n, '{"iss":"x"}'); H = hashlib.sha256(intent.encode()).hexdigest()
+        out = os.path.join(d, f"two_{name_a}_{len(cases)}.json"); _ap2.build_evidence([{"name": name_a, "sd_jwt": intent}, {"name": name_b, "sd_jwt": _sign_compact(sk, n, cart_payload % (H, H))}], out); return out
+    cases["bindings-index-key-after-plain"] = (two("intent", "cart", '{"iss":"x","intent_hash":"%s","0":"%s"}'), [])
+    cases["bindings-index-keys-reversed"] = (two("intent", "cart", '{"iss":"x","2":"%s","1":"%s"}'), [])
+    cases["bindings-artifact-named-0"] = (two("0", "cart", '{"iss":"x","h":"%s","g":"%s"}'), [])
+    p = two("intent", "cart", '{"iss":"x","a":"%s","b":"%s"}'); ev2 = json.load(open(p)); ev2["bindings"] = list(reversed(ev2["bindings"])); cases["bindings-recorded-reversed-rehashed"] = (w("brev", json.dumps(rehash(ev2))), [])
+    ev2 = json.load(open(p)); ev2["bindings"] = ev2["bindings"] + ev2["bindings"][:1]; cases["bindings-entry-duplicated-rehashed"] = (w("bdup", json.dumps(rehash(ev2))), [])
     cases["jwk-x-33-bytes-rehashed"] = (w("jwk33", json.dumps(_fresh_pack(base, sk, n, H, '{"iss":"x"}', {"iss": "x"}, jwk_x_bytes=n.x.to_bytes(33, "big")))), [])
     return cases
 
@@ -180,6 +192,18 @@ def _fresh_key(top_zero=False):
         sk = ec.generate_private_key(ec.SECP256R1()); n = sk.public_key().public_numbers()
         if not top_zero or n.x >> 248 == 0:   # a coordinate whose leading byte is zero (about 1 key in 256): the 31-byte spelling
             return sk, n
+
+
+def _sign_compact(sk, n, payload_txt):
+    """An SD-JWT (no disclosures) with the JWK in the header, signed by `sk` — what the reference's `build` snapshots as jwk_header."""
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+    b64u = lambda b: base64.urlsafe_b64encode(b).decode().rstrip("=")  # noqa: E731
+    jwk = {"kty": "EC", "crv": "P-256", "x": b64u(n.x.to_bytes(32, "big")), "y": b64u(n.y.to_bytes(32, "big"))}
+    si = b64u(json.dumps({"alg": "ES256", "typ": "ap2-mandate+sd-jwt", "jwk": jwk}, separators=(",", ":")).encode()) + "." + b64u(payload_txt.encode())
+    r, s_ = decode_dss_signature(sk.sign(si.encode("ascii"), ec.ECDSA(hashes.SHA256())))
+    return si + "." + b64u(r.to_bytes(32, "big") + s_.to_bytes(32, "big")) + "~"
 
 
 def _fresh_pack(base, sk, n, header_txt, payload_txt, resolved, disclosures=(), kb=None, jwk_x_bytes=None):

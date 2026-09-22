@@ -1,21 +1,18 @@
 {
- "vector": "anchor_valid",
  "description": "A real RFC 3161 token (local probe TSA, EC P-256, certificate shipped as anchor_probe_tsa.crt) whose messageImprint is the pack digest: status Granted, imprint matches -> rfc3161 verified True. Neither verifier validates the TSA certificate chain (declared): 'verified' means status + imprint.",
  "normative": {
-  "valid": true,
-  "digest_ok": true,
   "bindings_ok": true,
+  "digest_ok": true,
   "policy_ok": true,
+  "pq_protected": true,
+  "producer_ok": true,
+  "producer_present": true,
+  "producer_trusted": null,
   "rfc3161_claimed": true,
   "rfc3161_verified": true,
-  "producer_present": true,
-  "producer_ok": true,
-  "producer_trusted": null,
-  "pq_protected": true,
-  "self_asserted_only": true
+  "self_asserted_only": true,
+  "valid": true
  },
  "policy": {},
- "requires": [
-  "openssl"
- ]
+ "vector": "anchor_valid"
 }

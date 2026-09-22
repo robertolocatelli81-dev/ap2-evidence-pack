@@ -104,15 +104,28 @@ reference verifies the token's signature and chain with `openssl ts -verify -CAf
 when the relying party passes `--tsa-cert <PEM>`; the JS verifier cannot (no openssl)
 and reports `null`. Under `--require-anchor --tsa-cert`, `tsa_verified` must be `true`
 for `policy_ok` — so the JS verifier never passes that policy (declared divergence).
-`tsr_b64` is strict base64 (RFC 4648) like the producer block.
+`tsr_b64` is strict base64 (RFC 4648) like the producer block. Both verifiers report the
+TSTInfo `genTime` as `rfc3161.gen_time` (GeneralizedTime, UTC, or `null` when absent or
+malformed); the reference validates the TSA chain **at that time** (`openssl ts -verify
+-attime`), so a TSA certificate that expired after issuing the token does not turn
+`tsa_verified` false years later. Revocation is not checked (declared).
 
 ## 4. Bindings (NORMATIVE)
 
 A binding records that one artifact commits to another **by value**: artifact
-`A` binds `B` iff some string claim in `A`'s resolved claims equals
-`HEX(SHA-256(B.sd_jwt_compact))` — the hash of the exact compact serialization
-(the primary quantity, not a proxy field). A verifier MUST recompute the full
-binding set and compare it to the recorded `bindings`; a mismatch fails the pack.
+`A` binds `B` iff some string value anywhere in `A`'s resolved claims equals
+`HEX(SHA-256(B.sd_jwt_compact))` (lowercase hex) or `BASE64URL(SHA-256(B.sd_jwt_compact))`
+(no padding) — the hash of the exact compact serialization (the primary quantity, not a
+proxy field). Each binding is the object
+`{"in": A.name, "claim": <path>, "commits_to": B.name, "encoding": "hex" | "b64url"}`
+where `<path>` locates the matching value in `A`'s resolved claims: object keys joined
+with `.`, array positions as `[i]`, no leading separator (`cart.items[0].ref`, `intent_hash`).
+An artifact never binds itself. The recorded `bindings` is a **set** (a JSON list whose
+order carries no meaning): a verifier MUST recompute every binding and compare the two lists
+as multisets of canonical entries (each entry in the §3 canonical form, sorted); any
+difference fails the pack. 1.1.0 r4: an ordered comparison split the verdict between two
+conformant verifiers on a pack the reference built (JavaScript enumerates array-index keys
+such as `"0"` before the other keys, whatever the insertion order).
 
 ## 5. Producer signatures (NORMATIVE when present)
 
