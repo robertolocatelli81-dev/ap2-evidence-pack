@@ -128,13 +128,15 @@ reference proves the TSA with openssl and the JS verifier reports `tsa_verified:
 not pass the policy; and the `x5c` chain under `--trust-anchor`, which the reference validates with
 `openssl verify` (clearing `self_asserted_only`) and the JS verifier cannot (`chain_verified: null`). A crash counts as a disagreement, and a declared divergence that stops
 appearing is reported. Positive controls (`AP2_ORACLE_PY_ROOT` / `AP2_ORACLE_JS` point the oracle
-at another checkout), measured 22/09/2026: against the 1.0.2 reference the oracle is red on 71
+at another checkout), measured 22/09/2026 with the 124-case oracle: against the 1.0.2 reference it is red on 97
 (the CLI had no policy flags; float / 2^53+1 / lone surrogate / a space inside a producer
 signature or inside `tsr_b64` accepted; `producer_signatures: {}` and `producer_signatures: []`
 treated as absent, `valid: true`; tracebacks on non-UTF-8, 100000-deep, BOM, a missing path and
 on wrong-typed `artifacts`/`key`/`jwk`/`rfc3161_timestamp`; `--help` exit 0, `--` a verdict);
-against the state after review round 6 it is red on 0 — the round-7 findings were again defects the
-two verifiers SHARED, held by two unit tests measured red against the round-6 code
+against the state after review round 7 it is red on 3 — the two `--trust-anchor` cases, which that reference
+does not know (it exits 2 on the flag), plus the declared divergence that stops appearing there and is reported as
+a disagreement — against the state after round 6 on 0 — the round-7
+findings were defects the two verifiers SHARED, held instead by two unit tests measured red against the round-6 code
 (`test_provenance_class_is_reconciled_and_format_is_pinned`, `test_build_side_x5c_and_jwks_errors_are_receipts`) —
 against the state after round 5 on 3 (a signed array payload verified in the JS
 verifier, whose shape check had spent a round inside an unterminated line comment; an `x5c` leaf spelled
