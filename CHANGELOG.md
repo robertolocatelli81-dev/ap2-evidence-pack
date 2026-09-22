@@ -177,5 +177,5 @@ the policy flags.
 **Breaking: 1.1.0 refuses every pack built by 1.0.x.** The scope statement is sealed and pinned by SHA-256 (SPEC §1/§8),
 and it was corrected during the review rounds, so a 1.0.x pack is refused with `honest_scope does not match the canonical
 scope of this evidence_format` — measured on a pack built with the `v1.0.2` tree and verified with this one, in both
-verifiers. Re-build with 1.1.0. Verdicts on packs built by 1.1.0 are unchanged by the review rounds except where a round
-names the change.
+verifiers. Re-build with 1.1.0: a pack built by this tree is ACCEPT in both verifiers and the
+conformance runner exits 0 on all eight vectors.

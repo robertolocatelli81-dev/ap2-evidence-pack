@@ -33,14 +33,18 @@ One UTF-8 JSON object. A strict parser MUST reject duplicate object keys
 
 **The scope statement is fixed by the format version, not chosen by the pack.** For
 `ap2-evidence-pack/1.0` it is the exact string whose SHA-256 over its UTF-8 bytes is
-`c2007dab4b72e88499c06d34611e0635e45dcf64394e2849c4c201020fb6842c`
+`a4b12a682847c23c4a136dd399c6aa0dfa69540a5c7200039d506e86ac31dfbf`
 (the canonical text is `HONEST_SCOPE` in `ap2_evidence.py` and is reproduced in §8). A verifier
-MUST refuse a pack whose `honest_scope` hashes to anything else, before any other check: the
+MUST refuse a pack whose `honest_scope` hashes to anything else, whatever else the pack contains —
+after the §3.1 profile parse and the `evidence_format` check, which come first: the
 receipt reprints the scope beside its verdict, so a pack that could rewrite it could make the
-receipt state anything. 1.1.0: the sealed text was corrected twice before release — it claimed the
-format never validates x5c chains (false since `--trust-anchor`), and it said an RFC 3161 token
-attests the TSA's clock without saying that this holds only once the relying party verifies the
-TSA's signature.
+receipt state anything. 1.1.0: the sealed text was corrected three times before release, on five sentences — it claimed the
+format never validates x5c chains (false since `--trust-anchor`); it said an RFC 3161 token attests
+the TSA's clock without adding that this holds only once the relying party verifies the TSA
+signature; it said nothing about a chain is sealed (the x5c bytes are, the validation result is not);
+and it described the producer signature and `valid` as covering "the file", when both cover the
+SEALED CONTENT — §3 excludes the digest, the anchor block and the signatures, so a removed time
+anchor is caught only under `require_anchor`.
 | `evidence_digest_sha256` | MUST | hex SHA-256 over the canonical content (§3) |
 | `rfc3161_timestamp` | MUST at build (a verifier treats an absent block as `anchored: false`) | `{"anchored": false, ...}` or `{"anchored": true, "tsr_b64": <b64 DER TimeStampResp>, ...}` |
 | `producer_signatures` | MAY | hybrid producer-signature block (§5) |
@@ -190,9 +194,9 @@ only on a valid ML-DSA-65 signature whose key is pinned (or no pin set given).
 Inputs: the pack file, an optional pinned producer trust set, and three policy
 flags: `require_producer`, `require_pq`, `require_anchor`.
 
-1. Parse under the profile (§3.1; duplicate keys reject). Refuse unless `honest_scope` matches the
-   canonical scope of the declared format version by SHA-256 (§1), and unless `evidence_format` is
-   exactly `"ap2-evidence-pack/1.0"` and `subject`, `created_utc`, `honest_scope` are strings
+1. Parse under the profile (§3.1; duplicate keys reject). Refuse unless `evidence_format` is
+   exactly `"ap2-evidence-pack/1.0"`, unless `honest_scope` matches the canonical scope of that version
+   by SHA-256 (§1, §8), and unless `subject`, `created_utc`, `honest_scope` are strings
    (§1 MUSTs — 1.1.0 r5: a `…/2.0` pack used to be verified under the 1.0 rules, and a pack
    with no `honest_scope` produced a receipt with `honest_scope: null`). Recompute the digest (§3) → `digest_ok`.
 2. For EVERY artifact: parse `sd_jwt_compact` (its JSON under the §3.1 profile); verify the ES256 signature with
@@ -202,7 +206,9 @@ flags: `require_producer`, `require_pq`, `require_anchor`.
    `resolved_claims`; re-verify the KB-JWT when the issuer payload carries
    `cnf.jwk` (ES256 over `issuer-JWT~disclosure*~`; without `cnf.jwk` a present
    KB-JWT is recorded as unverifiable, never treated as verified-green, and
-   never fails the pack by itself — but a KB-JWT that verifies FALSE does).
+   never fails the pack by itself — but a KB-JWT that verifies FALSE does). A verifier records the
+   KB-JWT `aud`/`nonce`/`iat` as present-but-not-validated, as the sealed scope states: their expected
+   values are transaction context an offline verifier cannot know.
 3. Recompute bindings (§4), compare → `bindings_ok`.
 4. If `rfc3161_timestamp.anchored`: check the token's binding (§3.2) — status
    granted AND messageImprint == the **recomputed** digest → `rfc3161_verified`
@@ -265,8 +271,9 @@ Independent implementations: open a PR to be listed in the README conformance ta
 
 ## 8. Canonical scope statement for `ap2-evidence-pack/1.0` (NORMATIVE)
 
-SHA-256 of the UTF-8 bytes: `c2007dab4b72e88499c06d34611e0635e45dcf64394e2849c4c201020fb6842c`
+SHA-256 of the UTF-8 bytes of the decoded JSON string value (not of the escaped bytes on disk):
+`a4b12a682847c23c4a136dd399c6aa0dfa69540a5c7200039d506e86ac31dfbf`
 
 ```text
-Proves: these exact SD-JWT artifacts, with the snapshotted key material (see each key's provenance_class), verified at build time; the RFC 3161 token (if present) binds this digest to a TimeStampResp, and attests the TSA's clock only once the relying party has verified the TSA's signature (--tsa-cert): a self-issued token satisfies the binding alone. Does NOT prove the issuer authorised the key beyond what the provenance class states, does NOT confer eIDAS qualified-archive legal presumption, and does NOT by itself validate x5c chains to a trust anchor — that is an act of the relying party at verification time, with `--trust-anchor`, reported in `chain_verified` and in each artifact's `x5c_leaf` (SPEC §6.7): the x5c bytes are sealed inside the signed header, the validation RESULT never is — and never proves the truth of the recorded transaction itself. When a producer signature is present, it protects THIS pack integrity, and authenticity ONLY for a relying party that has PINNED the producer public key out of band (an embedded key alone proves consistency, not authenticity), across the retention window (hybrid: a classical signature + FIPS-204 ML-DSA-65, surviving the quantum transition per NIST IR 8547); it does NOT retro-protect the underlying ES256 mandate signature - for the existed-before-a-quantum-adversary claim you still need a trusted time anchor (RFC 3161 / RFC 4998 renewal). 'valid' means each artifact verifies and the file is intact — NOT that the mandates form a bound chain (read `bindings`) nor that self-asserted keys prove issuer identity (read `provenance_classes`/`self_asserted_only`). KB-JWT holder binding is verified when the issuer payload carries cnf.jwk; without cnf.jwk it is recorded as present-but-unverifiable, never painted green. KB-JWT aud/nonce/iat are RECORDED for the auditor, not validated — their expected values are transaction context this tool cannot know offline.
+Proves: these exact SD-JWT artifacts, with the snapshotted key material (see each key's provenance_class), verified at build time; the RFC 3161 token (if present) binds this digest to a TimeStampResp, and attests the TSA's clock only once the relying party has verified the TSA's signature (--tsa-cert): a self-issued token satisfies the binding alone. Does NOT prove the issuer authorised the key beyond what the provenance class states, does NOT confer eIDAS qualified-archive legal presumption, and does NOT by itself validate x5c chains to a trust anchor — that is an act of the relying party at verification time, with `--trust-anchor`, reported in `chain_verified` and in each artifact's `x5c_leaf` (SPEC §6.7): the x5c bytes are sealed inside the signed header, the validation RESULT never is — and never proves the truth of the recorded transaction itself. When a producer signature is present, it protects the SEALED CONTENT (the file minus the digest, the anchor block and the signatures themselves - so a removed or downgraded time anchor is caught only under a require-anchor policy), and authenticity ONLY for a relying party that has PINNED the producer public key out of band (an embedded key alone proves consistency, not authenticity), across the retention window (hybrid: a classical signature + FIPS-204 ML-DSA-65, surviving the quantum transition per NIST IR 8547); it does NOT retro-protect the underlying ES256 mandate signature - for the existed-before-a-quantum-adversary claim you still need a trusted time anchor (RFC 3161 / RFC 4998 renewal). 'valid' means each artifact verifies and the SEALED CONTENT is intact — NOT that the file as a whole is unaltered (the anchor block lies outside the digest), NOT that the mandates form a bound chain (read `bindings`) nor that self-asserted keys prove issuer identity (read `provenance_classes`/`self_asserted_only`). KB-JWT holder binding is verified when the issuer payload carries cnf.jwk; without cnf.jwk it is recorded as present-but-unverifiable, never painted green. KB-JWT aud/nonce/iat are RECORDED for the auditor, not validated — their expected values are transaction context this tool cannot know offline.
 ```

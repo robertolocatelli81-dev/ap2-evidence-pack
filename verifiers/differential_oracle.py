@@ -58,8 +58,8 @@ DECLARED = {
     # passes a policy on their strength. NB the gen_time below is the probe TSA token's own genTime: regenerating the
     # anchor vectors changes it and this declaration must be updated with them (the run then reports the mismatch).
     "vector-anchor_valid-tsa-cert": {
-        "py": (True, True, True, True, True, None, True, True, True, True, True, "20260922172820Z", True, True, None, ("jwk_header",), ()),
-        "js": (False, True, True, True, True, None, True, True, True, True, True, "20260922172820Z", False, True, None, ("jwk_header",), ())},
+        "py": (True, True, True, True, True, None, True, True, True, True, True, "20260922175855Z", True, True, None, ("jwk_header",), ()),
+        "js": (False, True, True, True, True, None, True, True, True, True, True, "20260922175855Z", False, True, None, ("jwk_header",), ())},
     "x5c-ca-issued-with-trust-anchor": {
         "py": (True, True, True, False, None, None, False, False, None, None, None, None, True, False, True, ("x5c_header",), _LEAF_CA),
         "js": (True, True, True, False, None, None, False, False, None, None, None, None, True, True, None, ("x5c_header",), _LEAF_CA)},

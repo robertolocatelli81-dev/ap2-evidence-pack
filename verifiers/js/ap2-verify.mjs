@@ -55,7 +55,7 @@ function canon(v) { if (v === null) return "null"; if (v === true) return "true"
 const sha256 = (b) => createHash("sha256").update(b).digest();
 const b64u = (b) => Buffer.from(b).toString("base64url");
 const EVIDENCE_FORMAT = "ap2-evidence-pack/1.0";
-const HONEST_SCOPE_SHA256 = "c2007dab4b72e88499c06d34611e0635e45dcf64394e2849c4c201020fb6842c";   // SPEC §1: sha256 of the canonical honest scope of this format version
+const HONEST_SCOPE_SHA256 = "a4b12a682847c23c4a136dd399c6aa0dfa69540a5c7200039d506e86ac31dfbf";   // SPEC §1: sha256 of the canonical honest scope of this format version
 const B64URL = /^[A-Za-z0-9_-]+$/;
 function b64uDecode(s) { if (typeof s !== "string" || !s || !B64URL.test(s) || s.length % 4 === 1) throw new Refused("invalid base64url segment"); const raw = Buffer.from(s, "base64url"); if (b64u(raw) !== s) throw new Refused("non-canonical base64url"); return raw; }
 const b64Strict = (s) => { if (typeof s !== "string" || !s || s.length % 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(s)) return null; const raw = Buffer.from(s, "base64"); return raw.toString("base64") === s ? raw : null; };
@@ -112,7 +112,8 @@ function verifyKbJwt(parsed, resolved) {
   const sigOk = es256Verify(Buffer.from(seg[0] + "." + seg[1], "ascii"), b64uDecode(seg[2]), jwk);
   const presentation = parsed.compact.slice(0, parsed.compact.lastIndexOf("~")) + "~";
   const sdHashOk = payload.sd_hash === b64u(sha256(Buffer.from(presentation, "ascii")));
-  return { present: true, verified: Boolean(sigOk && sdHashOk) };
+  const recorded = {}; for (const k of ["aud", "nonce", "iat"]) if (k in payload) recorded[k] = payload[k];
+  return { present: true, verified: Boolean(sigOk && sdHashOk), claims_recorded_not_validated: recorded };   // final check: the sealed scope says these are RECORDED — the reference did it, this verifier did not
 }
 const PROVENANCE_CLASSES = new Set(["supplied", "x5c_header", "jwk_header", "jwks_fetched"]);
 function checkProvenance(pc, parsed, key) {   // returns: is this key SELF-ASSERTED as far as an offline verifier can tell? (r7, fail-closed)
