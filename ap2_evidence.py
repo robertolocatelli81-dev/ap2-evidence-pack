@@ -779,7 +779,7 @@ def _verify_rfc3161(tsr_b64: str, expected_digest_hex: str, timeout: int = 15, t
     try:
         tsr = _sigsuite._unb64(tsr_b64)                       # strict base64 (a space inside the token used to be skipped)
     except (ValueError, TypeError):
-        return {"verified": False, "granted": False, "imprint_ok": False, "gen_time": None, "tsa_verified": None, "note": "tsr_b64 is not canonical base64"}
+        return {"verified": False, "granted": None, "imprint_ok": False, "gen_time": None, "tsa_verified": None, "note": "tsr_b64 is not canonical base64"}   # r11: None = no status was read, not "the TSA refused"
     partial: Dict = {}
     try:
         info = parse_timestamp_resp(tsr, partial)
@@ -1054,7 +1054,10 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
             "policy_ok": policy_ok,
             "valid": bool(art_results and digest_ok and all_ok and bindings_ok
                           and rfc.get("verified") is not False and policy_ok),
-            "honest_scope": ev.get("honest_scope")}
+            "honest_scope": ev.get("honest_scope"),
+            # informative, both verifiers (SPEC §6): whether THIS verifier can check ML-DSA-65 at all — without it a
+            # producer signature is SKIP, never a pass, and the reader of the receipt should not have to guess why
+            "mldsa_backend": bool(_sigsuite.MLDSA_AVAILABLE)}
 
 
 # ────────────────────────────────────────────────────────── CLI

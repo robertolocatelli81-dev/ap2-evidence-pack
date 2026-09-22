@@ -116,6 +116,27 @@ class TestAp2ConformanceVectors(unittest.TestCase):
         with self.assertRaises(ap2.Ap2EvidenceError):
             ap2.build_evidence([{"name": "", "sd_jwt": compact}], os.path.join(d, "o.json"))
 
+    @unittest.skipUnless(shutil.which("node"), "node absent: the JS receipt is not measured")
+    def test_both_receipts_carry_the_same_field_names(self):
+        # r10 lesson, measured twice in one day: a trailing `//` comment silently swallowed the rest of its line — first a
+        # shape check (dead code for a whole round), then `policy_ok` (gone from the JS receipt). Neither broke the syntax.
+        # This compares the KEY SETS of the two receipts, so the next field that disappears into a comment turns red here.
+        import subprocess, tempfile
+        V = os.path.join(_HERE, "spec", "vectors", "ap2", "valid_signed.json")
+        def receipts(path, flags=()):
+            py = ap2.verify_evidence(path)
+            out = subprocess.run(["node", os.path.join(_HERE, "verifiers", "js", "ap2-verify.mjs"), path, *flags], capture_output=True, text=True)
+            return py, json.loads(out.stdout)
+        py, js = receipts(V)
+        self.assertEqual(sorted(py), sorted(js), "top-level receipt fields differ between the verifiers")
+        for a, b in zip(py["artifacts"], js["artifacts"]):
+            self.assertEqual(sorted(a), sorted(b), f"artifact receipt fields differ for {a.get('name')!r}")
+        self.assertEqual(sorted(py["rfc3161"]), sorted(js["rfc3161"]), "rfc3161 receipt fields differ")
+        d = tempfile.mkdtemp(); bad = os.path.join(d, "bad.json")   # and on a refusal, where the shapes had also drifted
+        open(bad, "w").write('{"evidence_format":"nope"}')
+        py, js = receipts(bad)
+        self.assertEqual(sorted(py), sorted(js), "refusal receipt fields differ between the verifiers")
+
     @unittest.skipUnless(shutil.which("openssl"), "openssl absent: chain validation not measured")
     def test_expired_leaf_clears_the_flag_only_at_a_proven_time(self):
         # r9: `openssl verify` checks validity at the CURRENT clock, so a leaf valid 2020-2021 — the ordinary case for a

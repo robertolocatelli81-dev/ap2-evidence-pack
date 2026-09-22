@@ -204,6 +204,10 @@ flags: `require_producer`, `require_pq`, `require_anchor`.
    block; if `require_pq` and not (`pq_protected` and `producer_trusted` true);
    if `require_anchor` and `rfc3161_verified` is not true (missing, unverifiable
    and failing all reject — "claimed" never upgrades to "proven").
+   The receipt also carries `mldsa_backend` (informative): whether that verifier can check
+   ML-DSA-65 at all. Without the backend a post-quantum producer signature is SKIP — never a pass —
+   and the reader should not have to infer why.
+
 7. `self_asserted_only` is FAIL-CLOSED: `true` if ANY artifact's key is still self-asserted — it is
    cleared only when EVERY artifact's key was reconciled to an
    `x5c` chain that VALIDATES to a trust anchor the relying party supplies (`--trust-anchor`,

@@ -47,6 +47,9 @@ def _forged_tsr(digest, extra_tst=b""):
 # and under --require-anchor --tsa-cert does NOT pass (policy_ok false) — the same verdict, one different field.
 # NB: the gen_time below is the probe TSA token's own genTime — regenerating the anchor vectors changes it and this
 # declaration must be updated with them (the run then reports the mismatch instead of silently passing).
+# the cases that must PASS: they prove the bench can tell green from red (never hostile files)
+POSITIVE_CONTROLS = frozenset({"non-ascii-subject-rehashed", "fresh-pack-control-valid", "must-created_utc-ok"})
+
 _LEAF_CA = _LEAF_SELF = None   # the x5c leaves are freshly generated each run: the declaration ignores that one field
 
 DECLARED = {
@@ -400,6 +403,9 @@ def main():
         shutil.rmtree(tmp, ignore_errors=True)
     if declared != len(DECLARED):   # r2: a declared divergence that stops appearing (e.g. openssl absent) is reported, not silently counted OK
         print(f"  [WARN] declared divergences observed: {declared}/{len(DECLARED)} — the declaration no longer matches this machine"); diffs += 1
+    n_vec = sum(1 for k in cases if k.startswith("vector-")); n_cli = len(CLI)
+    n_pos = sum(1 for k in cases if k in POSITIVE_CONTROLS)
+    print(f"decomposition: {n_vec} vector runs + {len(cases) - n_vec - n_pos} hostile files + {n_pos} positive controls + {n_cli} CLI cases = {n}")
     print(f"disagreements: {diffs}/{n} (declared: {declared})"); return 1 if diffs else 0
 
 

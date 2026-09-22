@@ -196,7 +196,8 @@ function derTLV(buf, off) { if (off + 2 > buf.length) throw new Refused("der"); 
   if (off + hl + len > buf.length) throw new Refused("der overrun"); return { tag, start: off + hl, end: off + hl + len, next: off + hl + len }; }
 function derChildren(buf, tlv) { const out = []; let o = tlv.start; while (o < tlv.end) { const c = derTLV(buf, o); out.push(c); o = c.next; } return out; }
 function verifyRfc3161(tsrB64, expectedDigestHex) {
-  const raw = b64Strict(tsrB64); if (!raw) return { verified: false, granted: false, imprint_ok: false, gen_time: null, note: "tsr_b64 is not canonical base64" };   // r7: same receipt shape as the reference
+  // r11: granted null = no status was read (the bytes never decoded), not "the TSA refused" — a value the receipt never measured
+  const raw = b64Strict(tsrB64); if (!raw) return { verified: false, granted: null, imprint_ok: false, gen_time: null, note: "tsr_b64 is not canonical base64" };
   let grantedRead = null;   // r10: the status read before any later failure, so the receipt reports a measured granted, never an assumed one
   try {
     const resp = derTLV(raw, 0); if (resp.tag !== 0x30) return { verified: false, note: "not a TimeStampResp" };

@@ -136,5 +136,14 @@ measured on the 1.0.2 verifier first (every case below was red there).
   two different receipts in the field §6.7 asks for precisely to tell `CN=the-bank` from `CN=attacker`; RFC 4514 in both.
   The oracle now compares `rfc3161.granted`, `rfc3161.imprint_ok`, `chain_verified` and the `x5c_leaf` identity: 130 cases,
   0 disagreements, 3 declared, and **10 red** against the round-9 state. README: 19 CLI cases, not 16.
+- **Self-audit before release** (22/09/2026, on the error classes committed during these rounds): the README's "hostile
+  files" count had gone stale a third time (97 against 99 measured), so the oracle now PRINTS its own decomposition
+  (`9 vector runs + 99 hostile files + 3 positive controls + 19 CLI cases = 130`) and the public numbers are copied from a
+  measurement instead of counted by hand. A trailing `//` comment swallowed the rest of its line twice in one day — a shape
+  check, then `policy_ok` — so `test_both_receipts_carry_the_same_field_names` now compares the KEY SETS of the two
+  receipts (top level, per artifact, `rfc3161`, and on a refusal), measured red against the previous commit; it caught
+  `mldsa_backend`, emitted by the JS verifier alone and documented nowhere, which is now in both receipts and in SPEC §6.
+  Last of the "asserted but not measured" class: `granted` is `null`, not `false`, when `tsr_b64` never decoded and no
+  PKIStatus was ever read. Checked and clean: no hostile oracle case shares the intact vector's verdict tuple.
 
 Verdicts unchanged on in-profile evidence produced by 1.0.x `build`.
