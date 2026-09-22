@@ -16,6 +16,7 @@ if L == "jwk_len": s = s.replace("    if len(xb) != 32 or len(yb) != 32:", "    
 assert len(s) != n, "ablation anchor not found: " + L
 open("ap2_evidence.py", "w").write(s)
 PY
+  if ! python3 -c "import ap2_evidence" 2>/dev/null; then echo "  -> $L: the patched module does not import — a botched ablation, not a measurement"; rc_all=1; cd "$ROOT"; rm -rf "$T"; continue; fi
   python3 -B -m unittest test_ap2_conformance > "$T/ablation.log" 2>&1; rc=$?
   printf "%-10s %s  %s\n" "$L" "$(tail -1 "$T/ablation.log")" "$(grep -E '^(FAIL|ERROR):' "$T/ablation.log" | sed 's/ (.*//' | sort -u | tr '\n' ' ')"
   if [ $rc -eq 0 ]; then echo "  -> GREEN: layer $L is not measured by the suite"; rc_all=1; fi

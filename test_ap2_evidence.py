@@ -219,7 +219,9 @@ class TestProLevelSelfAttack(_Base):
 
     def test_supplied_matching_key_still_green(self):
         # correzione nell'ALTRO senso: chiave fornita GIUSTA su jwt con header jwk → verde,
-        # con classe 'supplied' (la scelta del chiamante domina, dichiarata)
+        # con classe 'supplied' (la scelta del chiamante domina, dichiarata).
+        # r7: 'supplied' NON azzera più self_asserted_only (SPEC §6.7, fail-closed): è un'etichetta
+        # che un verificatore offline non può controllare, e un'etichetta non è una prova.
         jwt_with_hdr = _make_sd_jwt(self.sk, {"iss": "wallet"}, {"a": 1},
                                     header_extra={"jwk": self.jwk})
         ap2.build_evidence([{"name": "i", "sd_jwt": jwt_with_hdr}], self.out,
@@ -227,7 +229,7 @@ class TestProLevelSelfAttack(_Base):
         v = ap2.verify_evidence(self.out)
         self.assertTrue(v["valid"], v)
         self.assertEqual(v["provenance_classes"], ["supplied"])
-        self.assertFalse(v["self_asserted_only"])
+        self.assertTrue(v["self_asserted_only"])
 
     def test_self_asserted_forgery_is_valid_but_flagged(self):
         # limite INERENTE dichiarato, non nascosto: un forge auto-coerente senza chiave

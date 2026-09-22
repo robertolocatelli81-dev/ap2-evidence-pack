@@ -72,6 +72,25 @@ class TestAp2ConformanceVectors(unittest.TestCase):
         e = copy.deepcopy(base)   # positive control: the honest label verifies and keeps self_asserted_only true
         r = ap2.verify_evidence(write("intact", O.rehash(e)))
         self.assertTrue(r["valid"]); self.assertEqual(r["provenance_classes"], ["jwk_header"]); self.assertTrue(r["self_asserted_only"])
+        # r7: self_asserted_only is FAIL-CLOSED — a label alone must not clear it, and deleting the field is a refusal
+        for name, v in (("supplied", "supplied"), ("jwks_fetched", "jwks_fetched")):
+            e = copy.deepcopy(base)
+            for a in e["artifacts"]: a["key"]["provenance_class"] = v
+            r = ap2.verify_evidence(write("sa-" + name, O.rehash(e)))
+            self.assertTrue(r["valid"], name); self.assertTrue(r["self_asserted_only"], name)   # the label is not evidence
+        for name, v in (("null", None), ("absent", "__DEL__")):
+            e = copy.deepcopy(base)
+            for a in e["artifacts"]:
+                if v == "__DEL__": a["key"].pop("provenance_class", None)
+                else: a["key"]["provenance_class"] = v
+            r = ap2.verify_evidence(write("sa-" + name, O.rehash(e)))
+            self.assertFalse(r["valid"], name); self.assertIn("provenance_class", r["artifacts"][0]["error"], name)
+        cases = dict(O._x5c_cases(base))   # positive control of the flag: only a leaf ISSUED BY SOMEONE ELSE clears it
+        r = ap2.verify_evidence(write("x5c-self", O.rehash(cases["canonical"])))
+        self.assertTrue(r["valid"]); self.assertTrue(r["self_asserted_only"])
+        r = ap2.verify_evidence(write("x5c-ca", O.rehash(cases["ca-issued-leaf"])))
+        self.assertTrue(r["valid"]); self.assertFalse(r["self_asserted_only"])
+
         for name, mut, frag in (("format2", lambda e: e.__setitem__("evidence_format", "ap2-evidence-pack/2.0"), "evidence_format"),
                                 ("noformat", lambda e: e.pop("evidence_format", None), "evidence_format"),
                                 ("nosubject", lambda e: e.pop("subject", None), "subject"),
@@ -89,6 +108,33 @@ class TestAp2ConformanceVectors(unittest.TestCase):
         ap2.build_evidence([{"name": "intent", "sd_jwt": compact}], os.path.join(d, "ok.json"))   # positive control: it builds
         with self.assertRaises(ap2.Ap2EvidenceError):
             ap2.build_evidence([{"name": "", "sd_jwt": compact}], os.path.join(d, "o.json"))
+
+    def test_build_side_x5c_and_jwks_errors_are_receipts(self):
+        # r7: `build` tracebacked (bare ValueError / URLError) on a leaf wrapped at 76 columns, a non-certificate, a
+        # non-string entry, an unreachable JWKS — the verify side had been made fail-closed in r1, build had not
+        import base64 as _b64, datetime, textwrap, subprocess
+        sys.path.insert(0, os.path.join(_HERE, "verifiers")); import differential_oracle as O
+        from cryptography import x509
+        from cryptography.x509.oid import NameOID
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+        b64u = lambda b: _b64.urlsafe_b64encode(b).decode().rstrip("=")   # noqa: E731
+        sk = ec.generate_private_key(ec.SECP256R1())
+        nm = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "probe")])
+        cert = (x509.CertificateBuilder().subject_name(nm).issuer_name(nm).public_key(sk.public_key()).serial_number(1)
+                .not_valid_before(datetime.datetime(2026, 1, 1)).not_valid_after(datetime.datetime(2046, 1, 1)).sign(sk, hashes.SHA256()))
+        leaf = _b64.b64encode(cert.public_bytes(serialization.Encoding.DER)).decode(); d = tempfile.mkdtemp()
+        def mandate(x5c_entry):
+            hdr = json.dumps({"alg": "ES256", "typ": "ap2-mandate+sd-jwt", "x5c": [x5c_entry]}, separators=(",", ":"))
+            si = b64u(hdr.encode()) + "." + b64u(b'{"iss":"x"}')
+            r, s_ = decode_dss_signature(sk.sign(si.encode("ascii"), ec.ECDSA(hashes.SHA256())))
+            p = os.path.join(d, "m.sdjwt"); open(p, "w").write(si + "." + b64u(r.to_bytes(32, "big") + s_.to_bytes(32, "big")) + "~"); return p
+        for name, entry in (("wrapped", "\n".join(textwrap.wrap(leaf, 76))), ("not-a-cert", "AAAA"), ("non-string", 1)):
+            out = subprocess.run([sys.executable, "-B", os.path.join(_HERE, "ap2_evidence.py"), "build", os.path.join(d, "o.json"), "intent=" + mandate(entry)], capture_output=True, text=True)
+            self.assertEqual(out.returncode, 1, (name, out.stderr[-200:])); self.assertIn("error", json.loads(out.stderr)); self.assertNotIn("Traceback", out.stderr)
+        out = subprocess.run([sys.executable, "-B", os.path.join(_HERE, "ap2_evidence.py"), "build", os.path.join(d, "ok.json"), "intent=" + mandate(leaf)], capture_output=True, text=True)
+        self.assertEqual(out.returncode, 0, out.stderr[-200:])   # positive control: the canonical leaf builds
 
     @unittest.skipUnless(shutil.which("node"), "node absent: the JS verifier is not measured, so 'one grammar' is not measurable")
     def test_cli_grammar_is_one_with_the_js_verifier(self):

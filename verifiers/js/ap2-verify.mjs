@@ -114,26 +114,29 @@ function verifyKbJwt(parsed, resolved) {
   return { present: true, verified: Boolean(sigOk && sdHashOk) };
 }
 const PROVENANCE_CLASSES = new Set(["supplied", "x5c_header", "jwk_header", "jwks_fetched"]);
-function checkProvenance(pc, parsed, key) {
+function checkProvenance(pc, parsed, key) {   // returns: is this key SELF-ASSERTED as far as an offline verifier can tell? (r7, fail-closed)
   // r5: `jwk_header`/`x5c_header` are RECONCILED with the header the verifier just parsed (relabelling jwk_header as
   // x5c_header used to flip self_asserted_only to false with no x5c anywhere); `supplied`/`jwks_fetched` are capture-time
   // assertions that cannot be checked offline (SPEC §2).
-  if (pc !== "jwk_header" && pc !== "x5c_header") return;
+  if (pc !== "jwk_header" && pc !== "x5c_header") return true;   // supplied / jwks_fetched: capture-time labels, not checkable here
   const header = parsed.header && typeof parsed.header === "object" ? parsed.header : {};
   const jwk = key.jwk ?? {};
   if (pc === "jwk_header") {
     const hj = header.jwk;
     if (!hj || typeof hj !== "object" || Array.isArray(hj) || ["kty", "crv", "x", "y"].some((f) => hj[f] !== jwk[f])) throw new Refused("provenance_class jwk_header but the signed header carries no matching jwk");
-    return;
+    return true;
   }
   const x5c = header.x5c;
   if (!Array.isArray(x5c) || !x5c.length || typeof x5c[0] !== "string") throw new Refused("provenance_class x5c_header but the signed header carries no x5c");
-  let leaf;
+  let leaf, selfSigned;
   try {
     const der = b64Strict(x5c[0]); if (!der) throw new Error("leaf not base64");
-    leaf = createPublicKey({ key: new X509Certificate(der).publicKey.export({ format: "jwk" }), format: "jwk" }).export({ format: "jwk" });
+    const cert = new X509Certificate(der);
+    leaf = createPublicKey({ key: cert.publicKey.export({ format: "jwk" }), format: "jwk" }).export({ format: "jwk" });
+    selfSigned = cert.subject === cert.issuer;
   } catch (e) { throw new Refused("provenance_class x5c_header but the x5c leaf is unusable"); }
   if (["kty", "crv", "x", "y"].some((f) => leaf[f] !== jwk[f])) throw new Refused("provenance_class x5c_header but the x5c leaf key differs from the snapshotted jwk");
+  return selfSigned;   // a self-signed leaf is the issuer vouching for itself: still self-asserted (the chain is never validated to an anchor here)
 }
 function findBindings(arts) {
   const byValue = new Map();   // r5: inverse index (digest string -> [name, encoding]) — the per-leaf scan was O(artifacts), quadratic
@@ -179,7 +182,7 @@ function derTLV(buf, off) { if (off + 2 > buf.length) throw new Refused("der"); 
   if (off + hl + len > buf.length) throw new Refused("der overrun"); return { tag, start: off + hl, end: off + hl + len, next: off + hl + len }; }
 function derChildren(buf, tlv) { const out = []; let o = tlv.start; while (o < tlv.end) { const c = derTLV(buf, o); out.push(c); o = c.next; } return out; }
 function verifyRfc3161(tsrB64, expectedDigestHex) {
-  const raw = b64Strict(tsrB64); if (!raw) return { verified: false, note: "tsr_b64 is not canonical base64" };
+  const raw = b64Strict(tsrB64); if (!raw) return { verified: false, granted: false, imprint_ok: false, gen_time: null, note: "tsr_b64 is not canonical base64" };   // r7: same receipt shape as the reference
   try {
     const resp = derTLV(raw, 0); if (resp.tag !== 0x30) return { verified: false, note: "not a TimeStampResp" };
     const [status, token] = derChildren(raw, resp); const st = derChildren(raw, status)[0]; if (!st || st.tag !== 0x02) return { verified: false, note: "no status" };
@@ -217,16 +220,16 @@ export function verifyEvidence(path, opts = {}) {
   for (const a of ev.artifacts) {
     try { const compact = a.sd_jwt_compact; if (typeof compact !== "string" || compact !== compact.trim() || !/^[\x00-\x7f]*$/.test(compact)) throw new Refused("sd_jwt_compact must be the exact ASCII compact serialization");
       if (!a.key || typeof a.key !== "object" || Array.isArray(a.key)) throw new Refused("artifact key.jwk must be an object");
-      const pc = a.key.provenance_class ?? null;   // r2: a list was sorted here; r5: out-of-enum passed as a strong class
-      if (pc !== null && !PROVENANCE_CLASSES.has(pc)) throw new Refused("artifact key.provenance_class must be one of " + [...PROVENANCE_CLASSES].sort().join(", "));
+      const pc = a.key.provenance_class;   // r2: a list was sorted here; r5: out-of-enum passed as a strong class; r7: absent/null used to CLEAR self_asserted_only
+      if (typeof pc !== "string" || !PROVENANCE_CLASSES.has(pc)) throw new Refused("artifact key.provenance_class must be one of " + [...PROVENANCE_CLASSES].sort().join(", "));
       const parsed = parseSdJwt(compact);
       // r6: this shape check spent round 5 INSIDE an unterminated line comment — a signed payload that is a JSON array
       // verified in this verifier and failed in the reference. It runs before checkProvenance, which reads the header.
       if (parsed.payload === null || typeof parsed.payload !== "object" || Array.isArray(parsed.payload) || parsed.header === null || typeof parsed.header !== "object" || Array.isArray(parsed.header)) throw new Refused("JWT header and payload must be objects");
-      checkProvenance(pc, parsed, a.key);   // r5: header-derived classes are reconciled with the signed header
+      const selfAsserted = checkProvenance(pc, parsed, a.key);   // r5: reconciled with the signed header; r7: decides self_asserted_only
       const sigOk = es256Verify(parsed.signingInput, parsed.signature, a.key.jwk); const resolved = resolveDisclosures(parsed.payload, parsed.disclosures);
       const claimsOk = canon(resolved) === canon(a.resolved_claims ?? null); const kb = verifyKbJwt(parsed, resolved);
-      artResults.push({ name: a.name, signature_ok: sigOk, claims_match: claimsOk, kb_jwt: kb, provenance_class: a.key?.provenance_class });
+      artResults.push({ name: a.name, signature_ok: sigOk, claims_match: claimsOk, kb_jwt: kb, provenance_class: a.key?.provenance_class, self_asserted: selfAsserted });
       allOk = allOk && sigOk && claimsOk && kb.verified !== false; forBindings.push({ name: a.name, compact: parsed.compact, resolved });
     } catch (e) { artResults.push({ name: a?.name, error: String(e.message ?? e) }); allOk = false; }
   }
@@ -245,7 +248,7 @@ export function verifyEvidence(path, opts = {}) {
   if (opts.requireAnchor && rfc.verified !== true) policyOk = false;
   if (opts.requireAnchor && opts.tsaCert && rfc.tsa_verified !== true) policyOk = false;   // TSA verification requested: this verifier cannot perform it -> not a pass (declared)
   return { digest_ok: digestOk, artifacts: artResults, producer_signatures: producer, pq_protected: producer.pq_protected ?? false, bindings_ok: bindingsOk, rfc3161: rfc, provenance_classes: classes,
-    self_asserted_only: classes.length > 0 && classes.every((c) => c === "jwk_header"), policy_ok: policyOk,
+    self_asserted_only: artResults.length > 0 && artResults.every((r) => r.self_asserted !== false), policy_ok: policyOk,   // r7 FAIL-CLOSED: a label alone no longer clears it; a missing class is a refusal
     valid: Boolean(artResults.length && digestOk && allOk && bindingsOk && rfc.verified !== false && policyOk), honest_scope: ev.honest_scope ?? null, mldsa_backend: HAVE_MLDSA };
 }
 function main(argv) {

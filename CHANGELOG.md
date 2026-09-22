@@ -90,5 +90,17 @@ measured on the 1.0.2 verifier first (every case below was red there).
   producer content binding, x5c chain limits): removed, and CI now fails if a module collects fewer tests as a script than
   as a module. `created_utc` is imposed as ISO-8601 UTC in both verifiers (SPEC §1 said MUST, only the type was checked).
   Oracle: 121 cases, 0 disagreements, 1 declared; positive control 3 red on the round-5 state.
+- **Review round 7** (Opus/Sonnet/Haiku, 22/09/2026): `self_asserted_only` is FAIL-CLOSED (SPEC §6.7). Round 5 reconciled
+  two of the six spellings of `provenance_class`; the other four still cleared the flag with no evidence at all —
+  measured: `"supplied"` and `"jwks_fetched"` cleared it on the strength of the label, and `null` or a DELETED field
+  cleared it by making the class set empty. Since `producer_signatures` sits outside the digest, an unsigned pack is
+  freely editable, so the one field the honest scope sends the auditor to was the pack author's to choose. Now the class
+  is REQUIRED and in the enum (absent/null/other = refusal of that artifact), and the flag is true unless every key was
+  reconciled to a certificate leaf that someone else issued — a self-signed `x5c` leaf is still self-asserted. `build`
+  no longer tracebacks on an `x5c` leaf wrapped at 76 columns, a non-certificate, a non-string entry or an unreachable
+  JWKS (bare `ValueError`/`URLError` escaped `except Ap2EvidenceError`): they are `{"error": …}` receipts, exit 1. The
+  oracle compares `rfc3161.gen_time` too and gets a CA-issued `x5c` leaf as the positive control of the honesty flag
+  (122 cases, 0 disagreements, 1 declared); an unparseable token returns the same receipt shape in both verifiers; the
+  ablation checks the patched module still imports, so a botched patch cannot masquerade as a red ablation.
 
 Verdicts unchanged on in-profile evidence produced by 1.0.x `build`.

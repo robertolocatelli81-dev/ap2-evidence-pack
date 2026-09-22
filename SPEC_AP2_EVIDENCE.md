@@ -56,6 +56,9 @@ signed `x5c` whose leaf public key equals it; `x5c` entries are strict base64 (R
 no whitespace) like every other base64 value in the format. `supplied` and `jwks_fetched` are
 capture-time assertions that cannot be checked offline — a verifier records them,
 and a relying party MUST NOT read them as proof of anything beyond the declaration.
+`provenance_class` is REQUIRED on every artifact: absent, `null`, a non-string or an
+out-of-enum value is a refusal of that artifact (1.1.0 r7 — before, a missing class
+silently CLEARED `self_asserted_only`).
 1.1.0 r5: before this rule `provenance_class` was believed, so relabelling
 `jwk_header` as `x5c_header` flipped `self_asserted_only` to false with no `x5c`
 anywhere in the pack — the one field the honest scope sends the auditor to.
@@ -201,7 +204,14 @@ flags: `require_producer`, `require_pq`, `require_anchor`.
    block; if `require_pq` and not (`pq_protected` and `producer_trusted` true);
    if `require_anchor` and `rfc3161_verified` is not true (missing, unverifiable
    and failing all reject — "claimed" never upgrades to "proven").
-7. `self_asserted_only` = every artifact's provenance class is `jwk_header`
+7. `self_asserted_only` is FAIL-CLOSED: `true` unless EVERY artifact's key was reconciled,
+   against the signed header, to a certificate leaf that **someone else issued**. So it is
+   `true` for `jwk_header`, `true` for an `x5c_header` whose leaf is self-signed, and `true`
+   for `supplied`/`jwks_fetched` — those labels cannot be checked offline, and a label is not
+   evidence. It is `false` only for an `x5c_header` leaf whose issuer differs from its subject,
+   and even then the chain is NOT validated to a trust anchor (that is a relying-party step).
+   1.1.0 r7: before this rule, writing `"supplied"` — or deleting the field — cleared the flag,
+   so the one field the honest scope sends the auditor to was under the pack author's control.
    (flag, not a failure: the verdict names the weakness instead of hiding it).
 8. `valid` = artifacts non-empty AND `digest_ok` AND every artifact verifies
    AND `bindings_ok` AND `rfc3161_verified` is not false AND producer block ok

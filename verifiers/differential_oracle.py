@@ -16,7 +16,7 @@ JS = ["node", os.environ.get("AP2_ORACLE_JS", os.path.join(HERE, "js", "ap2-veri
 # `rfc3161_claimed` and `self_asserted_only` were never compared on the hostile files, and one of them (the sorted
 # `provenance_classes` behind self_asserted_only) really did diverge (code point vs UTF-16 code unit).
 KEYS = ("valid", "digest_ok", "bindings_ok", "producer_present", "producer_ok", "producer_trusted", "pq_protected",
-        "rfc3161_claimed", "rfc3161_verified", "policy_ok", "self_asserted_only", "provenance_classes")
+        "rfc3161_claimed", "rfc3161_verified", "rfc3161_gen_time", "policy_ok", "self_asserted_only", "provenance_classes")
 
 
 def canon(obj):
@@ -41,9 +41,11 @@ def _forged_tsr(digest, extra_tst=b""):
 
 # Declared divergence: TSA signature/chain verification needs openssl (Python only); the JS verifier reports tsa_verified null
 # and under --require-anchor --tsa-cert does NOT pass (policy_ok false) — the same verdict, one different field.
+# NB: the gen_time below is the probe TSA token's own genTime — regenerating the anchor vectors changes it and this
+# declaration must be updated with them (the run then reports the mismatch instead of silently passing).
 DECLARED = {"vector-anchor_valid-tsa-cert": {   # only the REAL token differs: Python proves the TSA (openssl), JS cannot -> policy_ok False
-    "py": (True, True, True, True, True, None, True, True, True, True, True, ("jwk_header",)),
-    "js": (False, True, True, True, True, None, True, True, True, False, True, ("jwk_header",))}}
+    "py": (True, True, True, True, True, None, True, True, True, "20260922110255Z", True, True, ("jwk_header",)),
+    "js": (False, True, True, True, True, None, True, True, True, "20260922110255Z", False, True, ("jwk_header",))}}
 
 
 def flags_for(policy):
@@ -62,7 +64,7 @@ def run(cmd, path, flags):
         out = subprocess.run(list(cmd) + [path] + flags, capture_output=True, text=True, timeout=120)
         r = json.loads(out.stdout); prod = r.get("producer_signatures") or {}; ts = r.get("rfc3161") or {}
         return (r.get("valid"), r.get("digest_ok"), r.get("bindings_ok"), prod.get("present"), prod.get("ok"), prod.get("trusted"),
-                r.get("pq_protected"), ts.get("claimed"), ts.get("verified"), r.get("policy_ok"), r.get("self_asserted_only"), tuple(r.get("provenance_classes") or ()))
+                r.get("pq_protected"), ts.get("claimed"), ts.get("verified"), ts.get("gen_time"), r.get("policy_ok"), r.get("self_asserted_only"), tuple(r.get("provenance_classes") or ()))
     except Exception:  # noqa: BLE001
         return ("NONJSON/CRASH:" + os.path.basename(cmd[-1] if cmd[-1] != "verify" else cmd[-2]),) * len(KEYS)   # distinct per verifier: two crashes never agree
 
@@ -249,8 +251,17 @@ def _x5c_cases(base):
             .not_valid_before(datetime.datetime(2026, 1, 1)).not_valid_after(datetime.datetime(2046, 1, 1)).sign(sk, hashes.SHA256()))
     leaf = base64.b64encode(cert.public_bytes(serialization.Encoding.DER)).decode()
     other = ec.generate_private_key(ec.SECP256R1()); on = other.public_key().public_numbers()
+    # r7: a leaf ISSUED BY SOMEONE ELSE (issuer != subject) is the only shape that clears self_asserted_only — the positive
+    # control of that flag, and the only case in the whole suite where it is false
+    ca = ec.generate_private_key(ec.SECP256R1())
+    ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "oracle probe CA")])
+    issued = (x509.CertificateBuilder().subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "oracle probe subject")]))
+              .issuer_name(ca_name).public_key(sk.public_key()).serial_number(2)
+              .not_valid_before(datetime.datetime(2026, 1, 1)).not_valid_after(datetime.datetime(2046, 1, 1)).sign(ca, hashes.SHA256()))
+    leaf_issued = base64.b64encode(issued.public_bytes(serialization.Encoding.DER)).decode()
     out = []
     for nm, c, key_jwk in (("canonical", leaf, jwk), ("leaf-with-space", leaf[:20] + " " + leaf[20:], jwk), ("leaf-newline", leaf[:20] + "\n" + leaf[20:], jwk),
+                           ("ca-issued-leaf", leaf_issued, jwk),
                            ("leaf-key-mismatch", leaf, {"kty": "EC", "crv": "P-256", "x": b64u(on.x.to_bytes(32, "big")), "y": b64u(on.y.to_bytes(32, "big"))})):
         hdr = json.dumps({"alg": "ES256", "typ": "ap2-mandate+sd-jwt", "x5c": [c]}, separators=(",", ":"))
         si = b64u(hdr.encode()) + "." + b64u(b'{"iss":"x"}')

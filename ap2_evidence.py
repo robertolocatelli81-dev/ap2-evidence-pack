@@ -366,13 +366,25 @@ def _pubkey_from_jwk(jwk: Dict):
     return ec.EllipticCurvePublicNumbers(x, y, ec.SECP256R1()).public_key()
 
 
-def _pubkey_from_x5c_leaf(x5c: List[str]):
+def _load_x5c_leaf(x5c: List[str]):
+    """The leaf CERTIFICATE (not just its key): r7 also reads subject/issuer, to tell a self-signed leaf (still self-asserted)
+    from one someone else issued."""
     from cryptography import x509
     from cryptography.hazmat.primitives.asymmetric import ec
-    leaf = x509.load_der_x509_certificate(_sigsuite._unb64(x5c[0]))   # r6: strict RFC 4648 — b64decode() dropped a space/newline in the leaf, the JS verifier refused it
+    try:   # r7: a leaf wrapped at 76 columns, not a certificate, or not a string used to be a bare ValueError -> traceback out of `build`
+        leaf = x509.load_der_x509_certificate(_sigsuite._unb64(x5c[0]))   # r6: strict RFC 4648 — b64decode() dropped a space/newline, the JS verifier refused it
+    except Ap2EvidenceError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise Ap2EvidenceError(f"x5c leaf is not a strict-base64 DER certificate: {type(e).__name__}") from e
     pub = leaf.public_key()
     if not isinstance(pub, ec.EllipticCurvePublicKey) or pub.curve.name != "secp256r1":
         raise Ap2EvidenceError("x5c leaf key is not EC P-256 (ES256 only, declared)")
+    return leaf
+
+
+def _pubkey_from_x5c_leaf(x5c: List[str]):
+    return _load_x5c_leaf(x5c).public_key()
     return pub
 
 
@@ -403,29 +415,38 @@ def verify_es256(signing_input: bytes, signature: bytes, jwk: Dict) -> bool:
 PROVENANCE_CLASSES = frozenset({"supplied", "x5c_header", "jwk_header", "jwks_fetched"})
 
 
-def _check_provenance(pc, parsed: Dict, key: Dict) -> None:
+def _check_provenance(pc, parsed: Dict, key: Dict) -> bool:
     """1.1.0 r5: the provenance class is the field the honest_scope sends the relying party to, and it was the one field
     entirely under the pack author's control — relabelling `jwk_header` as `x5c_header` flipped `self_asserted_only` to
     False with no x5c anywhere. The two header-derived classes are now RECONCILED against the header the verifier just
-    parsed; `supplied` and `jwks_fetched` remain capture-time assertions that cannot be checked offline (SPEC §2)."""
+    parsed; `supplied` and `jwks_fetched` remain capture-time assertions that cannot be checked offline (SPEC §2).
+
+    Returns whether the key is SELF-ASSERTED as far as an offline verifier can tell (r7, fail-closed): a key taken from the
+    signed header (`jwk_header`, or an `x5c_header` whose leaf is self-signed) is self-asserted, and `supplied`/`jwks_fetched`
+    cannot be checked here so they count as self-asserted too — before r7 a label alone CLEARED `self_asserted_only`, so
+    relabelling or simply DELETING the field hid the weakness the honest scope sends the auditor to."""
     if pc not in ("jwk_header", "x5c_header"):
-        return
+        return True
     header = parsed.get("header") if isinstance(parsed.get("header"), dict) else {}
     jwk = key.get("jwk") or {}
     if pc == "jwk_header":
         hj = header.get("jwk")
         if not isinstance(hj, dict) or any(hj.get(f) != jwk.get(f) for f in ("kty", "crv", "x", "y")):
             raise Ap2EvidenceError("provenance_class jwk_header but the signed header carries no matching jwk")
-        return
+        return True
     x5c = header.get("x5c")
     if not isinstance(x5c, list) or not x5c or not isinstance(x5c[0], str):
         raise Ap2EvidenceError("provenance_class x5c_header but the signed header carries no x5c")
     try:
-        leaf = _jwk_from_pubkey(_pubkey_from_x5c_leaf(x5c))
+        cert = _load_x5c_leaf(x5c)
+        leaf = _jwk_from_pubkey(cert.public_key())
     except Exception as e:  # noqa: BLE001
         raise Ap2EvidenceError(f"provenance_class x5c_header but the x5c leaf is unusable: {type(e).__name__}") from e
     if any(leaf.get(f) != jwk.get(f) for f in ("kty", "crv", "x", "y")):
         raise Ap2EvidenceError("provenance_class x5c_header but the x5c leaf key differs from the snapshotted jwk")
+    # a SELF-SIGNED leaf is the issuer vouching for itself: still self-asserted. A leaf someone else issued is not — though
+    # the chain is NOT validated to a trust anchor here (SPEC §2, honest scope).
+    return cert.subject == cert.issuer
 
 
 def _snapshot_key(parsed: Dict, supplied_jwk: Optional[Dict] = None,
@@ -448,7 +469,10 @@ def _snapshot_key(parsed: Dict, supplied_jwk: Optional[Dict] = None,
             raise Ap2EvidenceError("x5c chain absent or too long (>10 certs): refused "
                                    "(a huge chain is a DoS vector, not a key)")
         pub = _pubkey_from_x5c_leaf(header["x5c"])
-        chain_fp = [hashlib.sha256(_sigsuite._unb64(c)).hexdigest() for c in header["x5c"]]   # r6: strict, like the leaf
+        try:
+            chain_fp = [hashlib.sha256(_sigsuite._unb64(c)).hexdigest() for c in header["x5c"]]   # r6: strict, like the leaf
+        except Exception as e:  # noqa: BLE001 — r7: a receipt, not a traceback
+            raise Ap2EvidenceError(f"x5c chain entry is not strict base64: {type(e).__name__}") from e
         return {"jwk": _jwk_from_pubkey(pub), "provenance_class": "x5c_header",
                 "x5c_chain_sha256": chain_fp,
                 "note": "leaf cert key verified the signature; chain recorded, PKI path "
@@ -461,11 +485,17 @@ def _snapshot_key(parsed: Dict, supplied_jwk: Optional[Dict] = None,
     if jwks_url:
         if not jwks_url.startswith("https://"):
             raise Ap2EvidenceError("JWKS URL must be https:// (TLS is the whole witness)")
-        with urllib.request.urlopen(jwks_url, timeout=timeout) as r:  # nosec B310 - https enforced above
-            raw = r.read(1024 * 1024 + 1)          # cap: un JWKS gigante = DoS, non una chiave
+        try:   # r7: an unreachable endpoint or a non-JSON body used to be a URLError/JSONDecodeError traceback
+            with urllib.request.urlopen(jwks_url, timeout=timeout) as r:  # nosec B310 - https enforced above
+                raw = r.read(1024 * 1024 + 1)      # cap: un JWKS gigante = DoS, non una chiave
+        except Exception as e:  # noqa: BLE001
+            raise Ap2EvidenceError(f"JWKS fetch failed: {type(e).__name__}") from e
         if len(raw) > 1024 * 1024:
             raise Ap2EvidenceError("JWKS response exceeds 1MB cap (refused fail-closed)")
-        jwks = json.loads(raw.decode())
+        try:
+            jwks = json.loads(raw.decode())
+        except Exception as e:  # noqa: BLE001
+            raise Ap2EvidenceError(f"JWKS body is not JSON: {type(e).__name__}") from e
         kid = parsed["header"].get("kid")
         keys = jwks.get("keys", [])
         match = [k for k in keys if not kid or k.get("kid") == kid]
@@ -677,11 +707,12 @@ def _verify_rfc3161(tsr_b64: str, expected_digest_hex: str, timeout: int = 15, t
     try:
         tsr = _sigsuite._unb64(tsr_b64)                       # strict base64 (a space inside the token used to be skipped)
     except (ValueError, TypeError):
-        return {"verified": False, "note": "tsr_b64 is not canonical base64"}
+        return {"verified": False, "granted": False, "imprint_ok": False, "gen_time": None, "tsa_verified": None, "note": "tsr_b64 is not canonical base64"}
     try:
         info = parse_timestamp_resp(tsr)
     except Exception as e:  # noqa: BLE001 — any malformed DER is "not parseable" (r2: an empty EXPLICIT [0] was an IndexError traceback)
-        return {"verified": False, "note": f"token not parseable: {type(e).__name__}: {str(e)[:80]}"}
+        return {"verified": False, "granted": False, "imprint_ok": False, "gen_time": None, "tsa_verified": None,   # r7: same receipt shape as the JS verifier
+                "note": f"token not parseable: {type(e).__name__}: {str(e)[:80]}"}
     imprint_ok = info["imprint"] == expected_digest_hex.lower()
     out = {"verified": bool(info["granted"] and imprint_ok), "granted": info["granted"], "imprint_ok": imprint_ok, "gen_time": info.get("gen_time"), "tsa_verified": None}
     if tsa_cert is None:
@@ -851,19 +882,20 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
             if not isinstance(key, dict) or not isinstance(key.get("jwk"), dict):
                 raise Ap2EvidenceError("artifact key.jwk must be an object")
             pc = key.get("provenance_class")
-            if pc is not None and (not isinstance(pc, str) or pc not in PROVENANCE_CLASSES):   # a list is unhashable: type first   # r2: a list was a TypeError in sorted(); r5: an out-of-enum value passed as a strong class
+            if not isinstance(pc, str) or pc not in PROVENANCE_CLASSES:   # r7: absent/null used to mean "no class", which CLEARED self_asserted_only   # r2: a list was a TypeError in sorted(); r5: an out-of-enum value passed as a strong class
                 raise Ap2EvidenceError(f"artifact key.provenance_class must be one of {sorted(PROVENANCE_CLASSES)}")
             parsed = parse_sd_jwt(compact)
-            _check_provenance(pc, parsed, key)   # r5: jwk_header / x5c_header are RECONCILED with the signed header, not believed
             if not isinstance(parsed["payload"], dict) or not isinstance(parsed["header"], dict):
                 raise Ap2EvidenceError("JWT header and payload must be objects")
+            self_asserted = _check_provenance(pc, parsed, key)   # r5: reconciled, not believed; r7: and it decides self_asserted_only
             sig_ok = verify_es256(parsed["signing_input"], parsed["signature"], key["jwk"])
             resolved = resolve_disclosures(parsed["payload"], parsed["disclosures"])
             claims_ok = _canon(resolved) == _canon(a.get("resolved_claims"))
             kb = verify_kb_jwt(parsed, resolved)
             art_results.append({"name": a.get("name"), "signature_ok": sig_ok,
                                 "claims_match": claims_ok, "kb_jwt": kb,
-                                "provenance_class": key.get("provenance_class")})
+                                "provenance_class": key.get("provenance_class"),
+                                "self_asserted": self_asserted})
             all_ok = (all_ok and sig_ok and claims_ok
                       and kb.get("verified") is not False)
             for_bindings.append({"name": a.get("name"), "compact": parsed["compact"],
@@ -925,8 +957,9 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
             "producer_signatures": producer, "pq_protected": producer.get("pq_protected", False),
             "bindings_ok": bindings_ok, "rfc3161": rfc,
             "provenance_classes": classes,
-            # tutto auto-asserito = la firma prova solo coerenza interna, mai identita'
-            "self_asserted_only": bool(classes) and set(classes) <= {"jwk_header"},
+            # r7 FAIL-CLOSED: self-asserted unless EVERY artifact's key was reconciled to a leaf that someone else issued.
+            # A label alone ("supplied", "jwks_fetched") no longer clears it, and deleting the field is a refusal now.
+            "self_asserted_only": bool(art_results) and all(r.get("self_asserted", True) for r in art_results),
             # un evidence senza artefatti non prova NULLA: mai 'valid' (falso-verde per l'auditor)
             "policy_ok": policy_ok,
             "valid": bool(art_results and digest_ok and all_ok and bindings_ok
