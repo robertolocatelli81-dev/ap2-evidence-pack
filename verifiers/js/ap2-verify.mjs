@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// ap2-verify — independent JavaScript verifier of ap2-evidence-pack evidence files (SPEC_AP2_EVIDENCE.md), Node >= 20,
+// ap2-verify — independent JavaScript verifier of ap2-evidence-pack evidence files (SPEC_AP2_EVIDENCE.md), Node with OpenSSL >= 3.5 for ML-DSA-65,
 // node:crypto only (no ap2_evidence code, no dependency). Same normative facts as ap2_evidence.verify_evidence:
 // digest_ok, per-artifact ES256 signature / disclosures / KB-JWT, bindings, producer signatures (ed25519, ecdsa-p256;
 // ml-dsa-65 through the Node build's OpenSSL >= 3.5, else SKIP = incomplete, never a pass), policy flags, valid.
@@ -113,7 +113,7 @@ function verifyKbJwt(parsed, resolved) {
   return { present: true, verified: Boolean(sigOk && sdHashOk) };
 }
 function findBindings(arts) {
-  const digests = {}; for (const a of arts) { const raw = Buffer.from(a.compact, "ascii"); digests[a.name] = { hex: sha256(raw).toString("hex"), b64url: b64u(sha256(raw)) }; }
+  const digests = Object.create(null); for (const a of arts) { const raw = Buffer.from(a.compact, "ascii"); digests[a.name] = { hex: sha256(raw).toString("hex"), b64url: b64u(sha256(raw)) }; }
   const found = [];
   function scan(node, path, holder) { if (node !== null && typeof node === "object" && !Array.isArray(node)) { for (const k of Object.keys(node)) scan(node[k], path ? path + "." + k : k, holder); }
     else if (Array.isArray(node)) node.forEach((v, i) => scan(v, path + "[" + i + "]", holder));
@@ -149,9 +149,9 @@ function verifyProducerBlock(block, message, trusted) {
 }
 // ---- RFC 3161 token: minimal DER walk — TimeStampResp{ status PKIStatusInfo{ INTEGER }, timeStampToken ContentInfo{ OID, [0] SignedData{ ..., encapContentInfo{ OID id-ct-TSTInfo, [0] OCTET STRING TSTInfo } } } }
 // TSTInfo{ version, policy OID, messageImprint{ AlgorithmIdentifier, OCTET STRING hash } ... }. Same two facts the reference checks
-// through `openssl ts -reply -text` (Status: Granted, Message data == digest); no TSA signature/chain validation in either (declared).
+// (SPEC §3.2). TSA signature/chain: only the reference, with `--tsa-cert` through `openssl ts -verify`; here `tsa_verified` is null (declared).
 function derTLV(buf, off) { if (off + 2 > buf.length) throw new Refused("der"); const tag = buf[off]; let len = buf[off + 1], hl = 2;
-  if (len & 0x80) { const n = len & 0x7f; if (n === 0 || n > 4 || off + 2 + n > buf.length) throw new Refused("der len"); len = 0; for (let k = 0; k < n; k++) len = (len << 8) | buf[off + 2 + k]; hl = 2 + n; }
+  if (len & 0x80) { const n = len & 0x7f; if (n === 0 || n > 4 || off + 2 + n > buf.length) throw new Refused("der len"); len = 0; for (let k = 0; k < n; k++) len = len * 256 + buf[off + 2 + k]; hl = 2 + n; }   // r3: `<<` is int32 — 0x84 80 00 00 00 went negative and passed the overrun check
   if (off + hl + len > buf.length) throw new Refused("der overrun"); return { tag, start: off + hl, end: off + hl + len, next: off + hl + len }; }
 function derChildren(buf, tlv) { const out = []; let o = tlv.start; while (o < tlv.end) { const c = derTLV(buf, o); out.push(c); o = c.next; } return out; }
 function verifyRfc3161(tsrB64, expectedDigestHex) {
@@ -177,6 +177,8 @@ export function verifyEvidence(path, opts = {}) {
   if (ev === null || typeof ev !== "object" || Array.isArray(ev)) return refuse("not a JSON object");
   // shape of the top-level fields (SPEC §1), the same refusals as the reference
   if (!Array.isArray(ev.artifacts) || ev.artifacts.some((a) => a === null || typeof a !== "object" || Array.isArray(a))) return refuse("artifacts must be a list of objects");
+  const names = ev.artifacts.map((a) => a.name); if (names.some((n) => typeof n !== "string" || !n)) return refuse("artifacts[].name must be a non-empty string");   // r3
+  if (new Set(names).size !== names.length) return refuse("artifacts[].name must be unique within the pack");
   if ("bindings" in ev && !Array.isArray(ev.bindings)) return refuse("bindings must be a list");
   if ("rfc3161_timestamp" in ev && (ev.rfc3161_timestamp === null || typeof ev.rfc3161_timestamp !== "object" || Array.isArray(ev.rfc3161_timestamp))) return refuse("rfc3161_timestamp must be an object");
   if ("rfc3161_timestamp" in ev && typeof ev.rfc3161_timestamp.anchored !== "boolean") return refuse("rfc3161_timestamp.anchored must be a boolean");   // r2: [] / {} were "anchored, unverified" here and "not anchored" in the reference

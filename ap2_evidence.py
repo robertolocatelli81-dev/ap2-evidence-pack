@@ -777,6 +777,11 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
     # type used to be a TypeError/AttributeError traceback (the JS verifier answered); `producer_signatures: {}` was "absent".
     if not isinstance(ev.get("artifacts"), list) or any(not isinstance(a, dict) for a in ev["artifacts"]):
         return refusal("artifacts must be a list of objects")
+    names = [a.get("name") for a in ev["artifacts"]]   # r3: the name keys the binding table — a non-string crashed the JS table, "__proto__" vanished from it
+    if any(not isinstance(n, str) or not n for n in names):
+        return refusal("artifacts[].name must be a non-empty string")
+    if len(set(names)) != len(names):
+        return refusal("artifacts[].name must be unique within the pack")
     if not isinstance(ev.get("bindings", []), list):
         return refusal("bindings must be a list")
     if "rfc3161_timestamp" in ev and not isinstance(ev["rfc3161_timestamp"], dict):
@@ -961,7 +966,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                             require_producer=a.require_producer, require_anchor=a.require_anchor, tsa_cert=a.tsa_cert)
         print(json.dumps(r, indent=1))
         return 0 if r["valid"] else 1
-    p.print_help()
+    p.print_help(sys.stderr)   # r3: usage goes to stderr, no verdict on stdout — as every other usage path and the JS verifier
     return 2
 
 

@@ -41,8 +41,16 @@ measured on the 1.0.2 verifier first (every case below was red there).
   (`[]` was "not anchored" in the reference and "anchored, unverified" in JS); `sig_alg` a string (`"constructor"` under a
   pinned key crashed the JS verifier on its prototype-bearing table, now `Object.create(null)`; a list was a `TypeError`
   in the reference); an empty EXPLICIT `[0]` in the TimeStampResp was an `IndexError` traceback. Oracle: 90 cases,
-  0 disagreements, 1 declared; 21 red against the round-1 state, 65 against 1.0.2; `proto-key` case rehashed so that it
+  0 disagreements, 1 declared; `proto-key` case rehashed so that it
   can fail; a declared divergence that stops appearing is reported. README: the Node requirement is OpenSSL ≥ 3.5 for
   ML-DSA-65 (not "Node ≥ 20"); the JS conformance test SKIPS on a build without ML-DSA instead of failing.
+- **Review round 3** (Opus/Sonnet/Haiku, 22/09/2026): `artifacts[].name` must be a non-empty unique string (refusal) — the
+  JS binding table was a prototype-bearing object: an absent name was a `TypeError` crash, an int name was stringified
+  (`bindings_ok` false against the reference's `true`), `"__proto__"` set the prototype and vanished (valid in the
+  reference, not in JS); the JS DER length used `<<` (int32): a 4-byte length `84 80 00 00 00` went negative, passed the
+  overrun check and a TimeStampResp the reference refuses verified in JS; the bare invocation of the reference printed its
+  help on stdout with exit 2 (now stderr, like every usage path and the JS verifier); the oracle's usage rule is exit 2 AND
+  nothing on stdout. Oracle: 97 cases, 0 disagreements, 1 declared; positive controls 5 red on the round-2 state, 26 on the
+  round-1 state, 71 on 1.0.2.
 
 Verdicts unchanged on in-profile evidence produced by 1.0.x `build`.

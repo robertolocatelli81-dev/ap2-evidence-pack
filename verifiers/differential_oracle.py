@@ -28,8 +28,8 @@ def _der(tag, body):
     n = len(body); lb = bytes([n]) if n < 128 else bytes([0x82, n >> 8, n & 0xFF]); return bytes([tag]) + lb + body
 
 
-def _forged_tsr(digest):
-    tst = _der(0x30, _der(0x02, b"\x01") + _der(0x06, bytes.fromhex("2a03")) + _der(0x30, _der(0x30, _der(0x06, bytes.fromhex("608648016503040201"))) + _der(0x04, digest)) + _der(0x02, b"\x01") + _der(0x18, b"20260922100000Z"))
+def _forged_tsr(digest, extra_tst=b""):
+    tst = _der(0x30, _der(0x02, b"\x01") + _der(0x06, bytes.fromhex("2a03")) + _der(0x30, _der(0x30, _der(0x06, bytes.fromhex("608648016503040201"))) + _der(0x04, digest)) + _der(0x02, b"\x01") + _der(0x18, b"20260922100000Z") + extra_tst)
     eci = _der(0x30, _der(0x06, bytes.fromhex("2a864886f70d010904")) + _der(0xA0, _der(0x04, tst)))
     sd = _der(0x30, _der(0x02, b"\x03") + _der(0x31, b"") + eci + _der(0x31, b""))
     return _der(0x30, _der(0x30, _der(0x02, b"\x00")) + _der(0x30, _der(0x06, bytes.fromhex("2a864886f70d010702")) + _der(0xA0, sd)))
@@ -156,6 +156,20 @@ def build_cases(d):
     P("fresh-pack-control-valid", '{"iss":"x","_sd":[],"_sd_alg":"sha-256"}', {"iss": "x"})   # positive control of the fresh-key builder: both must say valid
     sk0, n0 = _fresh_key(top_zero=True)
     cases["jwk-x-31-bytes-rehashed"] = (w("jwk31", json.dumps(_fresh_pack(base, sk0, n0, H, '{"iss":"x"}', {"iss": "x"}, jwk_x_bytes=n0.x.to_bytes(31, "big")))), [])
+    # ── review r3 (2026-09-22): artifact `name` shapes (the JS binding table was a prototype-bearing object: an absent name was a
+    # TypeError crash, an int name was stringified, "__proto__" vanished from it), a 4-byte DER length with the top bit set (JS `<<`
+    # is int32: the length went negative, the overrun check passed and a token the reference refuses verified), the bare invocation
+    binder = next(i for i, a in enumerate(base["artifacts"]) if a["name"] == "cart"); intent = next(i for i, a in enumerate(base["artifacts"]) if a["name"] == "intent")
+    e = copy.deepcopy(base); del e["artifacts"][binder]["name"]; cases["name-absent-rehashed"] = (w("nabs", json.dumps(rehash(e))), [])
+    for nm, v in (("int", 1), ("proto", "__proto__"), ("empty", "")):
+        e = copy.deepcopy(base); e["artifacts"][intent]["name"] = v
+        for b in e["bindings"]:
+            for k in ("in", "commits_to"):
+                if b[k] == "intent": b[k] = v
+        cases[f"name-{nm}-rehashed"] = (w("n" + nm, json.dumps(rehash(e))), [])
+    e = copy.deepcopy(base); e["artifacts"][intent]["name"] = "cart"; cases["name-duplicate-rehashed"] = (w("ndup", json.dumps(rehash(e))), [])
+    e = dict(base); e["rfc3161_timestamp"] = {"anchored": True, "tsa_url": "forged", "tsr_b64": base64.b64encode(_forged_tsr(bytes.fromhex(base["evidence_digest_sha256"]), extra_tst=bytes([0x04, 0x84, 0x80, 0, 0, 0]))).decode()}
+    cases["tsr-der-len-4byte-negative"] = (w("tsrneg", json.dumps(e)), ["--require-anchor"])
     cases["jwk-x-33-bytes-rehashed"] = (w("jwk33", json.dumps(_fresh_pack(base, sk, n, H, '{"iss":"x"}', {"iss": "x"}, jwk_x_bytes=n.x.to_bytes(33, "big")))), [])
     return cases
 
@@ -189,7 +203,7 @@ def _fresh_pack(base, sk, n, header_txt, payload_txt, resolved, disclosures=(), 
 CLI = {"cli-no-path": [], "cli-unknown-flag": ["V", "--no-such"], "cli-two-positionals": ["V", "V"], "cli-empty-path": [""], "cli-help": ["--help"], "cli-h": ["-h"],
        "cli-double-dash": ["--", "V"], "cli-bool-with-value": ["V", "--require-pq=1"], "cli-key-empty": ["V", "--trusted-producer-key", ""], "cli-key-missing-value": ["V", "--trusted-producer-key"],
        "cli-key-flag-as-value": ["V", "--trusted-producer-key", "--require-pq"], "cli-key-no-alg": ["V", "--trusted-producer-key", "abc"], "cli-tsa-cert-empty": ["V", "--tsa-cert", ""], "cli-repeated-key-empty-first": ["V", "--trusted-producer-key", "", "--trusted-producer-key", "ed25519=AA=="],
-       "cli-eq-form-verdict": ["V", "--trusted-producer-key=ed25519=AA=="]}
+       "cli-eq-form-verdict": ["V", "--trusted-producer-key=ed25519=AA=="], "cli-bare-no-subcommand": ["BARE"]}   # r3: no "verify" prefix at all
 
 
 def main():
@@ -207,13 +221,13 @@ def main():
             print(f"  [{'OK ' if ok else 'DIFF'}] {name:34} py={py} js={js}")
         valid = os.path.join(ROOT, "spec", "vectors", "ap2", "valid_signed.json")
         for name, argv in CLI.items():
-            args = [valid if a == "V" else a for a in argv]; row = {}
+            bare = argv == ["BARE"]; args = [] if bare else [valid if a == "V" else a for a in argv]; row = {}
             for k, cmd in (("py", PY[:-1]), ("js", JS)):
-                full = list(cmd) + (["verify"] if k == "py" else []) + args
+                full = list(cmd) + (["verify"] if k == "py" and not bare else []) + args
                 try:
                     out = subprocess.run(full, capture_output=True, text=True, timeout=60)
                     try: row[k] = "verdict:" + str(json.loads(out.stdout).get("valid"))
-                    except Exception: row[k] = "usage" if out.returncode == 2 else f"exit{out.returncode}"
+                    except Exception: row[k] = "usage" if out.returncode == 2 and out.stdout == "" else f"exit{out.returncode}{'+stdout' if out.stdout else ''}"   # r3: usage = exit 2 AND nothing on stdout
                 except Exception: row[k] = "CRASH"
             want = "verdict:False" if name.endswith("-verdict") else "usage"   # the eq-form pins an unknown key: a verdict (not authentic), not usage
             ok = all(v == want for v in row.values()); diffs += 0 if ok else 1; n += 1

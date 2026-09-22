@@ -90,7 +90,7 @@ python3 spec/vectors/ap2/run_ap2_conformance.py   # exit 0 = conformant
 **Differential oracle** (`verifiers/differential_oracle.py`, 22/09/2026): the two verifiers must
 give the same `(valid, digest_ok, bindings_ok, producer_ok, pq_protected, rfc3161_verified,
 policy_ok)` on the 8 vectors under their declared policy (plus `anchor_valid` under
-`--require-anchor --tsa-cert`), 39 hostile files that carry the digest a lenient verifier would
+`--require-anchor --tsa-cert`), 70 hostile files that carry the digest a lenient verifier would
 recompute or a wrong JSON shape (`__proto__` key with the digest recomputed over it, non-UTF-8, float `1.0`, 2^53+1, 100000-deep,
 `NaN`, lone surrogate, duplicate key, BOM, non-object, `artifacts`/`key`/`jwk`/`rfc3161_timestamp`/
 `producer_signatures` of the wrong type, an empty producer block, base64url with a space /
@@ -103,18 +103,23 @@ a list / an object under a pinned key, `provenance_class` a list or an int, `anc
 an object / `0` / `"false"`, and — inside a freshly ES256-signed payload, digest recomputed —
 a duplicate key, a BOM, `_sd` `null` / `{}` / `[1]`, `_sd_alg: null`, `{"...": [1]}`, a
 disclosure whose name is a list, `cnf` `null` / a string, `cnf.jwk` `{}`, JWK `x` of 31 and of 33
-bytes) and 15 command-line grammar cases (usage exit 2, no verdict, in both), plus two positive
+bytes; an artifact `name` absent / an int / `"__proto__"` / empty / duplicate; a DER element with a
+4-byte length whose top bit is set inside the TSTInfo) and 16 command-line grammar cases (usage exit 2,
+nothing on stdout, in both — the bare invocation without a subcommand included), plus two positive
 controls (non-ASCII text in profile; a fresh-key pack that must be `valid` in both):
-**0 disagreements on 90 cases, 1 declared** — the real token under `--tsa-cert`, where the
+**97 cases, 0 disagreements, of which 1 is a declared divergence** — the real token under `--tsa-cert`, where the
 reference proves the TSA with openssl and the JS verifier reports `tsa_verified: null` and does
 not pass the policy. A crash counts as a disagreement, and a declared divergence that stops
 appearing is reported. Positive controls (`AP2_ORACLE_PY_ROOT` / `AP2_ORACLE_JS` point the oracle
-at another checkout), measured 22/09/2026: against the 1.0.2 reference the oracle is red on 65
+at another checkout), measured 22/09/2026: against the 1.0.2 reference the oracle is red on 71
 (the CLI had no policy flags; float / 2^53+1 / lone surrogate / a space inside a producer
 signature or inside `tsr_b64` accepted; `producer_signatures: {}` and `producer_signatures: []`
 treated as absent, `valid: true`; tracebacks on non-UTF-8, 100000-deep, BOM, a missing path and
 on wrong-typed `artifacts`/`key`/`jwk`/`rfc3161_timestamp`; `--help` exit 0, `--` a verdict);
-against the state after review round 1 it is red on 21 (the round-2 cases: the reference read
+against the state after review round 2 it is red on 5 (the round-3 cases: an absent artifact `name`
+crashed the JS binding table, an int name was stringified by it and `"__proto__"` vanished from it; a
+4-byte DER length went negative in the JS `<<` and a token the reference refuses verified there; the bare
+invocation printed the reference's help on stdout) and against the state after round 1 on 26 (the round-2 cases: the reference read
 the signed payload with `json.loads` — duplicate key last-wins, BOM skipped — while the JS parser
 refused; present-with-`null` was "absent" in JS and a `TypeError` in the reference; 31/33-byte JWK
 coordinates verified in the reference; `anchored: []` was not anchored in the reference and

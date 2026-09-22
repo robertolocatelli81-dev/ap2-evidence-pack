@@ -31,14 +31,14 @@ One UTF-8 JSON object. A strict parser MUST reject duplicate object keys
 | `bindings` | MUST | array of discovered hash bindings (§4) |
 | `honest_scope` | MUST | the scope statement, part of the sealed content |
 | `evidence_digest_sha256` | MUST | hex SHA-256 over the canonical content (§3) |
-| `rfc3161_timestamp` | MUST | `{"anchored": false, ...}` or `{"anchored": true, "tsr_b64": <b64 DER TimeStampResp>, ...}` |
+| `rfc3161_timestamp` | MUST at build (a verifier treats an absent block as `anchored: false`) | `{"anchored": false, ...}` or `{"anchored": true, "tsr_b64": <b64 DER TimeStampResp>, ...}` |
 | `producer_signatures` | MAY | hybrid producer-signature block (§5) |
 
 ## 2. Artifact entry
 
 | Field | Meaning |
 |---|---|
-| `name` | unique within the pack (duplicate names MUST reject at build) |
+| `name` | non-empty string, unique within the pack (a non-string, empty or duplicate name is a refusal at verify; duplicate names MUST reject at build) |
 | `sd_jwt_compact` | the EXACT compact serialization `issuer-JWT~disclosure*~[kb-jwt]` |
 | `header` | the decoded protected header (informative copy) |
 | `key` | `{"jwk": <P-256 JWK>, "provenance_class": <class>, ...}` — the snapshotted verification key |

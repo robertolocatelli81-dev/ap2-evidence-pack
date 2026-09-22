@@ -68,6 +68,10 @@ class TestAp2ConformanceVectors(unittest.TestCase):
         for cli in clis:
             out = subprocess.run(cli + [V], capture_output=True, text=True)
             self.assertEqual(out.returncode, 0, cli[0]); self.assertTrue(json.loads(out.stdout)["valid"])
+        # r3: the BARE invocation (no subcommand at all) — the reference printed its help on stdout with exit 2, the JS verifier usage on stderr
+        for cli in ([sys.executable, os.path.join(_HERE, "ap2_evidence.py")], clis[-1]):
+            out = subprocess.run(cli, capture_output=True, text=True)
+            self.assertEqual(out.returncode, 2, cli[0]); self.assertEqual(out.stdout, "", cli[0]); self.assertNotEqual(out.stderr, "", cli[0])
 
     def test_wrong_json_shapes_are_refusals_in_both_verifiers(self):
         # review r1: artifacts / key / jwk / rfc3161_timestamp / producer_signatures of the wrong type were TypeError /
@@ -109,7 +113,6 @@ class TestAp2ConformanceVectors(unittest.TestCase):
         r = ap2.verify_evidence(p, require_anchor=True); self.assertTrue(r["rfc3161"]["verified"]); self.assertTrue(r["valid"])       # binding only: passes (declared)
         r = ap2.verify_evidence(p, require_anchor=True, tsa_cert=cert); self.assertFalse(r["rfc3161"]["tsa_verified"]); self.assertFalse(r["valid"])
 
-    @unittest.skipUnless(shutil.which("node"), "node absent: the JS verifier is not measured")
     def test_signed_payload_shapes_are_artifact_errors_in_the_reference(self):
         # review r2: the §3.1 profile inside the SD-JWT and the imposed shapes — each case is a fresh ES256-signed single-artifact
         # pack with the digest recomputed, built by the oracle's helper, so only the artifact layer decides; the same builder's
@@ -142,6 +145,7 @@ class TestAp2ConformanceVectors(unittest.TestCase):
         r = ap2.verify_evidence(p, trusted_producer_keys={"ed25519": [base["producer_signatures"]["signatures"][0]["public_key_b64"]]})
         self.assertFalse(r["valid"]); self.assertEqual(r["producer_signatures"]["signatures"][-1]["status"], "FAIL")
 
+    @unittest.skipUnless(shutil.which("node"), "node absent: the JS verifier is not measured")
     def test_js_verifier_is_conformant_on_all_normative_fields(self):
         # the JS verifier through the SAME conformance runner as the reference: every normative field of every vector
         import subprocess, run_ap2_conformance as rc
