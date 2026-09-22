@@ -182,6 +182,16 @@ coordinate length — must turn `test_ap2_conformance.py` red by itself, and eac
 failure for the file-level layer, then 1 failure each). Measured on 22/09 before that split: ablating base64url alone left the
 suite green, so that layer was not measured by the unit suite; three unit cases were added for it.
 
+**Why not an ETSI container?** For the long-term preservation of *signed documents* the standard answer is an ASiC
+container (ETSI EN 319 162) or PAdES/XAdES LTV, which already embed certificates, revocation data and timestamps, and
+which any eIDAS validator can read. If your artifacts are documents and your counterparties run eIDAS tooling, use those:
+this format is not a replacement and does not try to be one. It exists for a narrower case those containers do not cover —
+SD-JWT mandates with selective disclosure, where what has to survive is the resolution of the disclosures, the
+cross-mandate hash bindings and the key material *as captured*, verifiable by a single self-contained file with no
+trust-list infrastructure. The cost of that choice is explicit: this is not a standardised container, and a relying party
+years from now has to run this verifier (or the format's SPEC, which is written to be re-implementable) rather than an
+off-the-shelf eIDAS validator.
+
 Independent implementations (any language): open a PR to be listed here.
 
 ## Tests

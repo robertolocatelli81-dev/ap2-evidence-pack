@@ -1,6 +1,26 @@
 # Changelog
 
-## 1.1.1 — 2026-09-22 — the dependency is declared
+## 1.1.1 — 2026-09-22 — the dependency is declared, and CI tests the distributed package
+
+**Independent review by Gemini 3.1 Pro, after publication** (the review attacked the framing, not the code, which is what
+three passes of a same-family reviewer could not do). Two findings were measured and acted on here; a third is recorded
+below because it cannot be fixed without changing the sealed scope.
+
+- **CI tested the repository, never the package.** Every step ran `python test_*.py` inside the checkout with
+  `cryptography` installed by the workflow — which is exactly why a missing dependency declaration survived four releases.
+  CI now builds the wheel, installs it ALONE in a clean venv, imports it and verifies a vector from there.
+- **The README did not name the standards that solve the neighbouring problem.** ASiC (ETSI EN 319 162) and PAdES/XAdES
+  LTV already embed certificates, revocation data and timestamps for long-term preservation of signed documents, and any
+  eIDAS validator reads them. The README now says so, says when to use those instead, and states the cost of not being a
+  standardised container.
+- **Recorded, not fixed:** the sealed scope says that for the "existed before a quantum adversary" claim you still need a
+  trusted time anchor. Measured: the probe TSA — like essentially every TSA in service — signs with `ecdsa-with-SHA256`.
+  An adversary able to forge the ES256 mandate signature can forge that timestamp too, so the anchor does not carry the
+  claim unless the TSA itself is post-quantum or the token is renewed under RFC 4998 before the algorithm falls. The
+  sentence is not false as written ("you still need") but it is incomplete, and correcting it changes the pinned scope
+  hash and therefore rejects every existing pack: it belongs to the next format version, not to a patch release.
+
+
 
 `cryptography` was never listed in `[project].dependencies`, in any release: installing from the index produced a package
 whose first import failed with `ModuleNotFoundError: No module named 'cryptography'`. The README said to install it by

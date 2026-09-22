@@ -54,3 +54,13 @@ jobs:
         run: python verifiers/differential_oracle.py
       - name: "Ablation: the strict layers removed from a copy of the reference must turn the suite red"
         run: bash verifiers/lax_python_ablation.sh
+      - name: "The DISTRIBUTED package, not the repository: build the wheel, install it alone in a clean venv, import and verify a vector"
+        run: |
+          set -e
+          python -m pip install -q build
+          python -m build --wheel --outdir /tmp/dist .
+          python -m venv /tmp/pkgvenv
+          /tmp/pkgvenv/bin/pip install -q /tmp/dist/*.whl          # no other install: the wheel must bring what it needs
+          /tmp/pkgvenv/bin/python -c "import ap2_evidence, pqcrypto.sigsuite; print('import ok', ap2_evidence.EVIDENCE_FORMAT)"
+          /tmp/pkgvenv/bin/python -m ap2_evidence verify spec/vectors/ap2/valid_signed.json > /dev/null
+          echo "the published package imports and verifies on its own"
