@@ -7,7 +7,7 @@
 // +/-(2^53-1), nesting <= 512, no lone surrogate escape, 64 MiB bound. A refused file is a receipt with valid=false.
 // Usage: ap2-verify.mjs <evidence.json> [--trusted-producer-key ALG=B64]... [--require-producer] [--require-pq] [--require-anchor] [--tsa-cert PEM]
 import { readFileSync, statSync } from "node:fs";
-import { createHash, createPublicKey, verify as cryptoVerify } from "node:crypto";
+import { createHash, createPublicKey, verify as cryptoVerify, X509Certificate } from "node:crypto";
 
 const MAX_DEPTH = 512, MAX_BYTES = 64 * 1024 * 1024, SAFE = 2 ** 53 - 1;
 const UTF8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
@@ -54,6 +54,7 @@ function canon(v) { if (v === null) return "null"; if (v === true) return "true"
   if (Array.isArray(v)) return "[" + v.map(canon).join(",") + "]"; return "{" + Object.keys(v).sort(cmp).map((k) => esc(k) + ":" + canon(v[k])).join(",") + "}"; }
 const sha256 = (b) => createHash("sha256").update(b).digest();
 const b64u = (b) => Buffer.from(b).toString("base64url");
+const EVIDENCE_FORMAT = "ap2-evidence-pack/1.0";
 const B64URL = /^[A-Za-z0-9_-]+$/;
 function b64uDecode(s) { if (typeof s !== "string" || !s || !B64URL.test(s) || s.length % 4 === 1) throw new Refused("invalid base64url segment"); const raw = Buffer.from(s, "base64url"); if (b64u(raw) !== s) throw new Refused("non-canonical base64url"); return raw; }
 const b64Strict = (s) => { if (typeof s !== "string" || !s || s.length % 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(s)) return null; const raw = Buffer.from(s, "base64"); return raw.toString("base64") === s ? raw : null; };
@@ -112,12 +113,35 @@ function verifyKbJwt(parsed, resolved) {
   const sdHashOk = payload.sd_hash === b64u(sha256(Buffer.from(presentation, "ascii")));
   return { present: true, verified: Boolean(sigOk && sdHashOk) };
 }
+const PROVENANCE_CLASSES = new Set(["supplied", "x5c_header", "jwk_header", "jwks_fetched"]);
+function checkProvenance(pc, parsed, key) {
+  // r5: `jwk_header`/`x5c_header` are RECONCILED with the header the verifier just parsed (relabelling jwk_header as
+  // x5c_header used to flip self_asserted_only to false with no x5c anywhere); `supplied`/`jwks_fetched` are capture-time
+  // assertions that cannot be checked offline (SPEC §2).
+  if (pc !== "jwk_header" && pc !== "x5c_header") return;
+  const header = parsed.header && typeof parsed.header === "object" ? parsed.header : {};
+  const jwk = key.jwk ?? {};
+  if (pc === "jwk_header") {
+    const hj = header.jwk;
+    if (!hj || typeof hj !== "object" || Array.isArray(hj) || ["kty", "crv", "x", "y"].some((f) => hj[f] !== jwk[f])) throw new Refused("provenance_class jwk_header but the signed header carries no matching jwk");
+    return;
+  }
+  const x5c = header.x5c;
+  if (!Array.isArray(x5c) || !x5c.length || typeof x5c[0] !== "string") throw new Refused("provenance_class x5c_header but the signed header carries no x5c");
+  let leaf;
+  try {
+    const der = b64Strict(x5c[0]); if (!der) throw new Error("leaf not base64");
+    leaf = createPublicKey({ key: new X509Certificate(der).publicKey.export({ format: "jwk" }), format: "jwk" }).export({ format: "jwk" });
+  } catch (e) { throw new Refused("provenance_class x5c_header but the x5c leaf is unusable"); }
+  if (["kty", "crv", "x", "y"].some((f) => leaf[f] !== jwk[f])) throw new Refused("provenance_class x5c_header but the x5c leaf key differs from the snapshotted jwk");
+}
 function findBindings(arts) {
-  const digests = Object.create(null); for (const a of arts) { const raw = Buffer.from(a.compact, "ascii"); digests[a.name] = { hex: sha256(raw).toString("hex"), b64url: b64u(sha256(raw)) }; }
+  const byValue = new Map();   // r5: inverse index (digest string -> [name, encoding]) — the per-leaf scan was O(artifacts), quadratic
+  for (const a of arts) { const raw = Buffer.from(a.compact, "ascii"); const h = sha256(raw); for (const [v, enc] of [[h.toString("hex"), "hex"], [b64u(h), "b64url"]]) { if (!byValue.has(v)) byValue.set(v, []); byValue.get(v).push([a.name, enc]); } }
   const found = [];
   function scan(node, path, holder) { if (node !== null && typeof node === "object" && !Array.isArray(node)) { for (const k of Object.keys(node)) scan(node[k], path ? path + "." + k : k, holder); }
     else if (Array.isArray(node)) node.forEach((v, i) => scan(v, path + "[" + i + "]", holder));
-    else if (typeof node === "string") { for (const [other, d] of Object.entries(digests)) { if (other === holder) continue; if (node === d.hex || node === d.b64url) found.push({ in: holder, claim: path, commits_to: other, encoding: node === d.hex ? "hex" : "b64url" }); } } }
+    else if (typeof node === "string") { for (const [other, enc] of byValue.get(node) ?? []) { if (other === holder) continue; found.push({ in: holder, claim: path, commits_to: other, encoding: enc }); } } }
   for (const a of arts) scan(a.resolved, "", a.name); return found;
 }
 // ---- producer signatures ----
@@ -177,6 +201,8 @@ export function verifyEvidence(path, opts = {}) {
   let ev; try { if (statSync(path).size > MAX_BYTES) return refuse("evidence file exceeds bound"); const raw = readFileSync(path); const text = UTF8.decode(raw); if (text.startsWith("﻿")) return refuse("BOM"); ev = parseStrict(text); } catch (e) { return refuse(String(e.message ?? e)); }
   if (ev === null || typeof ev !== "object" || Array.isArray(ev)) return refuse("not a JSON object");
   // shape of the top-level fields (SPEC §1), the same refusals as the reference
+  if (ev.evidence_format !== EVIDENCE_FORMAT) return refuse("evidence_format must be " + JSON.stringify(EVIDENCE_FORMAT));   // r5: a "…/2.0" pack was verified under the 1.0 rules
+  for (const f of ["subject", "created_utc", "honest_scope"]) if (typeof ev[f] !== "string") return refuse(f + " must be a string (SPEC §1)");
   if (!Array.isArray(ev.artifacts) || ev.artifacts.some((a) => a === null || typeof a !== "object" || Array.isArray(a))) return refuse("artifacts must be a list of objects");
   const names = ev.artifacts.map((a) => a.name); if (names.some((n) => typeof n !== "string" || !n)) return refuse("artifacts[].name must be a non-empty string");   // r3
   if (new Set(names).size !== names.length) return refuse("artifacts[].name must be unique within the pack");
@@ -190,8 +216,9 @@ export function verifyEvidence(path, opts = {}) {
   for (const a of ev.artifacts) {
     try { const compact = a.sd_jwt_compact; if (typeof compact !== "string" || compact !== compact.trim() || !/^[\x00-\x7f]*$/.test(compact)) throw new Refused("sd_jwt_compact must be the exact ASCII compact serialization");
       if (!a.key || typeof a.key !== "object" || Array.isArray(a.key)) throw new Refused("artifact key.jwk must be an object");
-      if ("provenance_class" in a.key && a.key.provenance_class !== null && typeof a.key.provenance_class !== "string") throw new Refused("artifact key.provenance_class must be a string");   // r2: a list was sorted here and a TypeError in the reference
-      const parsed = parseSdJwt(compact); if (parsed.payload === null || typeof parsed.payload !== "object" || Array.isArray(parsed.payload) || parsed.header === null || typeof parsed.header !== "object" || Array.isArray(parsed.header)) throw new Refused("JWT header and payload must be objects");
+      const pc = a.key.provenance_class ?? null;   // r2: a list was sorted here; r5: out-of-enum passed as a strong class
+      if (pc !== null && !PROVENANCE_CLASSES.has(pc)) throw new Refused("artifact key.provenance_class must be one of " + [...PROVENANCE_CLASSES].sort().join(", "));
+      const parsed = parseSdJwt(compact); checkProvenance(pc, parsed, a.key);   // r5: header-derived classes are reconciled with the signed header if (parsed.payload === null || typeof parsed.payload !== "object" || Array.isArray(parsed.payload) || parsed.header === null || typeof parsed.header !== "object" || Array.isArray(parsed.header)) throw new Refused("JWT header and payload must be objects");
       const sigOk = es256Verify(parsed.signingInput, parsed.signature, a.key.jwk); const resolved = resolveDisclosures(parsed.payload, parsed.disclosures);
       const claimsOk = canon(resolved) === canon(a.resolved_claims ?? null); const kb = verifyKbJwt(parsed, resolved);
       artResults.push({ name: a.name, signature_ok: sigOk, claims_match: claimsOk, kb_jwt: kb, provenance_class: a.key?.provenance_class });
@@ -203,7 +230,7 @@ export function verifyEvidence(path, opts = {}) {
   const ts = ev.rfc3161_timestamp ?? {}; let rfc = { claimed: Boolean(ts.anchored), verified: null };   // `anchored` is a boolean by the shape check above
   if (ts.anchored && typeof ts.tsr_b64 === "string") rfc = { claimed: true, ...verifyRfc3161(ts.tsr_b64, recomputed), tsa_verified: null };   // BINDING only (status granted + messageImprint == digest, SPEC §3.2); TSA signature/chain: this verifier cannot (no openssl) -> tsa_verified null = incomplete under --tsa-cert
   else if (ts.anchored) rfc = { claimed: true, verified: false, note: "anchored claimed but tsr_b64 absent or not a string" };
-  const classes = [...new Set(artResults.map((r) => r.provenance_class).filter(Boolean))].sort();
+  const classes = [...new Set(artResults.map((r) => r.provenance_class).filter(Boolean))].sort(cmp);   // r5: by code point, as the reference (default sort is by UTF-16 code unit)
   let producer; const prod = ev.producer_signatures;
   if (prod) { const pv = verifyProducerBlock(prod, Buffer.from(recomputed, "ascii"), opts.trusted ?? null); producer = { present: true, scheme: prod.scheme, ok: pv.ok, incomplete: pv.incomplete, pq_protected: pv.pq_protected, trusted: pv.trusted, signatures: pv.results };
     if (!pv.ok) allOk = false; if ((opts.trusted ?? null) !== null && pv.trusted !== true) allOk = false; }

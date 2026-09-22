@@ -1,5 +1,5 @@
 {
- "description": "A real RFC 3161 token (local probe TSA, EC P-256, certificate shipped as anchor_probe_tsa.crt) whose messageImprint is the pack digest: status Granted, imprint matches -> rfc3161 verified True. Neither verifier validates the TSA certificate chain (declared): 'verified' means status + imprint.",
+ "description": "A real RFC 3161 token from a probe TSA (certificate shipped beside it): status granted and the TSTInfo messageImprint equals the digest, so 'verified' is true — that is BINDING (SPEC §3.2). TSA authenticity is a separate field: the reference proves it with --tsa-cert (openssl ts -verify, chain checked at the token's genTime); the JS verifier reports tsa_verified null and does not pass --require-anchor --tsa-cert (declared divergence).",
  "normative": {
   "bindings_ok": true,
   "digest_ok": true,

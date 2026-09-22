@@ -10,6 +10,7 @@ import json
 import glob
 import os
 import shutil
+import tempfile
 import sys
 import unittest
 
@@ -54,12 +55,47 @@ class TestAp2ConformanceVectors(unittest.TestCase):
         ok = os.path.join(d, "ok.json"); open(ok, "w", encoding="utf-8").write(json.dumps(rehash(dict(base, subject="café ≥ 1 😀")), ensure_ascii=False))
         self.assertTrue(ap2.verify_evidence(ok)["valid"])          # positive control: non-ASCII IS in profile
 
+    def test_provenance_class_is_reconciled_and_format_is_pinned(self):
+        # review r5: `provenance_class` is the field honest_scope sends the relying party to, and it was pure assertion —
+        # relabelling jwk_header as x5c_header made self_asserted_only False with no x5c anywhere; out-of-enum values passed.
+        # `evidence_format` and the §1 MUSTs were never read, so a "…/2.0" pack verified under the 1.0 rules.
+        import tempfile, copy
+        sys.path.insert(0, os.path.join(_HERE, "verifiers")); import differential_oracle as O
+        base = json.load(open(os.path.join(_HERE, "spec", "vectors", "ap2", "valid_signed.json"))); d = tempfile.mkdtemp()
+        def write(name, ev):
+            p = os.path.join(d, name + ".json"); json.dump(ev, open(p, "w")); return p
+        for name, v in (("x5c-without-x5c", "x5c_header"), ("out-of-enum", "qualified_eidas_certificate"), ("list", ["jwk_header"])):
+            e = copy.deepcopy(base)
+            for a in e["artifacts"]: a["key"]["provenance_class"] = v
+            r = ap2.verify_evidence(write(name, O.rehash(e)))
+            self.assertFalse(r["valid"], name); self.assertIn("provenance_class", r["artifacts"][0]["error"], name)
+        e = copy.deepcopy(base)   # positive control: the honest label verifies and keeps self_asserted_only true
+        r = ap2.verify_evidence(write("intact", O.rehash(e)))
+        self.assertTrue(r["valid"]); self.assertEqual(r["provenance_classes"], ["jwk_header"]); self.assertTrue(r["self_asserted_only"])
+        for name, mut, frag in (("format2", lambda e: e.__setitem__("evidence_format", "ap2-evidence-pack/2.0"), "evidence_format"),
+                                ("noformat", lambda e: e.pop("evidence_format", None), "evidence_format"),
+                                ("nosubject", lambda e: e.pop("subject", None), "subject"),
+                                ("nocreated", lambda e: e.pop("created_utc", None), "created_utc"),
+                                ("noscope", lambda e: e.pop("honest_scope", None), "honest_scope")):
+            e = copy.deepcopy(base); mut(e); r = ap2.verify_evidence(write(name, O.rehash(e)))
+            self.assertFalse(r["valid"], name); self.assertIn(frag, r["refused"], name)
+
+    def test_build_refuses_what_verify_refuses(self):
+        # review r5: `build` wrote a pack with an empty artifact name (exit 0, success receipt) that both verifiers then
+        # refused. The SD-JWT here is VALID, so the only thing that can make build refuse is the name — otherwise the
+        # test would pass for the wrong reason (an unparsable artifact raises anyway).
+        sys.path.insert(0, os.path.join(_HERE, "verifiers")); import differential_oracle as O
+        sk, n = O._fresh_key(); compact = O._sign_compact(sk, n, '{"iss":"x"}'); d = tempfile.mkdtemp()
+        ap2.build_evidence([{"name": "intent", "sd_jwt": compact}], os.path.join(d, "ok.json"))   # positive control: it builds
+        with self.assertRaises(ap2.Ap2EvidenceError):
+            ap2.build_evidence([{"name": "", "sd_jwt": compact}], os.path.join(d, "o.json"))
+
+    @unittest.skipUnless(shutil.which("node"), "node absent: the JS verifier is not measured, so 'one grammar' is not measurable")
     def test_cli_grammar_is_one_with_the_js_verifier(self):
         import subprocess
         V = os.path.join(_HERE, "spec", "vectors", "ap2", "valid_signed.json")
-        clis = [[sys.executable, os.path.join(_HERE, "ap2_evidence.py"), "verify"]]
-        if shutil.which("node"):
-            clis.append(["node", os.path.join(_HERE, "verifiers", "js", "ap2-verify.mjs")])
+        clis = [[sys.executable, os.path.join(_HERE, "ap2_evidence.py"), "verify"],
+                ["node", os.path.join(_HERE, "verifiers", "js", "ap2-verify.mjs")]]
         for extra in ([], [V, "--no-such"], [V, V], [""], ["--help"], ["-h"], ["--", V], [V, "--require-pq=1"], [V, "--trusted-producer-key", ""],
                       [V, "--trusted-producer-key"], [V, "--trusted-producer-key", "--require-pq"], [V, "--trusted-producer-key", "abc"], [V, "--trusted-producer-key", "", "--trusted-producer-key", "ed25519=AA=="], [V, "--tsa-cert", ""]):
             for cli in clis:
@@ -69,10 +105,11 @@ class TestAp2ConformanceVectors(unittest.TestCase):
             out = subprocess.run(cli + [V], capture_output=True, text=True)
             self.assertEqual(out.returncode, 0, cli[0]); self.assertTrue(json.loads(out.stdout)["valid"])
         # r3: the BARE invocation (no subcommand at all) — the reference printed its help on stdout with exit 2, the JS verifier usage on stderr
-        for cli in ([sys.executable, os.path.join(_HERE, "ap2_evidence.py")], clis[-1]):
+        for cli in ([sys.executable, os.path.join(_HERE, "ap2_evidence.py")], clis[1]):   # r5: clis[-1] was the Python entry when node was absent, so the JS bare case never ran
             out = subprocess.run(cli, capture_output=True, text=True)
             self.assertEqual(out.returncode, 2, cli[0]); self.assertEqual(out.stdout, "", cli[0]); self.assertNotEqual(out.stderr, "", cli[0])
 
+    @unittest.skipUnless(shutil.which("node"), "node absent: 'in both verifiers' is not measurable")
     def test_wrong_json_shapes_are_refusals_in_both_verifiers(self):
         # review r1: artifacts / key / jwk / rfc3161_timestamp / producer_signatures of the wrong type were TypeError /
         # AttributeError tracebacks in the reference; {} as a producer block was "absent" (valid True)
@@ -87,9 +124,8 @@ class TestAp2ConformanceVectors(unittest.TestCase):
         for name, mut in muts.items():
             e = copy.deepcopy(base); mut(e); p = os.path.join(d, name + ".json"); json.dump(e, open(p, "w"))
             r = ap2.verify_evidence(p); self.assertFalse(r["valid"], name)
-            if shutil.which("node"):
-                out = subprocess.run(["node", os.path.join(_HERE, "verifiers", "js", "ap2-verify.mjs"), p], capture_output=True, text=True)
-                self.assertFalse(json.loads(out.stdout)["valid"], name)
+            out = subprocess.run(["node", os.path.join(_HERE, "verifiers", "js", "ap2-verify.mjs"), p], capture_output=True, text=True)
+            self.assertFalse(json.loads(out.stdout)["valid"], name)
 
     @unittest.skipUnless(shutil.which("openssl"), "openssl absent: TSA verification not measured")
     def test_rfc3161_binding_vs_tsa_authenticity(self):

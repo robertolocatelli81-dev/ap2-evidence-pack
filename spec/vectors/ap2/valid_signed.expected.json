@@ -1,5 +1,5 @@
 {
- "description": "Hybrid-signed pack (ed25519 + ML-DSA-65), producer keys pinned, PQ and producer required. The one ACCEPT of the set — a verifier that rejects everything fails here.",
+ "description": "The intact positive control of the set (the other ACCEPT is anchor_valid): a verifier that rejects everything fails here.",
  "normative": {
   "bindings_ok": true,
   "digest_ok": true,

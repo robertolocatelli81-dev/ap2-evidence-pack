@@ -400,6 +400,34 @@ def verify_es256(signing_input: bytes, signature: bytes, jwk: Dict) -> bool:
         return False
 
 
+PROVENANCE_CLASSES = frozenset({"supplied", "x5c_header", "jwk_header", "jwks_fetched"})
+
+
+def _check_provenance(pc, parsed: Dict, key: Dict) -> None:
+    """1.1.0 r5: the provenance class is the field the honest_scope sends the relying party to, and it was the one field
+    entirely under the pack author's control — relabelling `jwk_header` as `x5c_header` flipped `self_asserted_only` to
+    False with no x5c anywhere. The two header-derived classes are now RECONCILED against the header the verifier just
+    parsed; `supplied` and `jwks_fetched` remain capture-time assertions that cannot be checked offline (SPEC §2)."""
+    if pc not in ("jwk_header", "x5c_header"):
+        return
+    header = parsed.get("header") if isinstance(parsed.get("header"), dict) else {}
+    jwk = key.get("jwk") or {}
+    if pc == "jwk_header":
+        hj = header.get("jwk")
+        if not isinstance(hj, dict) or any(hj.get(f) != jwk.get(f) for f in ("kty", "crv", "x", "y")):
+            raise Ap2EvidenceError("provenance_class jwk_header but the signed header carries no matching jwk")
+        return
+    x5c = header.get("x5c")
+    if not isinstance(x5c, list) or not x5c or not isinstance(x5c[0], str):
+        raise Ap2EvidenceError("provenance_class x5c_header but the signed header carries no x5c")
+    try:
+        leaf = _jwk_from_pubkey(_pubkey_from_x5c_leaf(x5c))
+    except Exception as e:  # noqa: BLE001
+        raise Ap2EvidenceError(f"provenance_class x5c_header but the x5c leaf is unusable: {type(e).__name__}") from e
+    if any(leaf.get(f) != jwk.get(f) for f in ("kty", "crv", "x", "y")):
+        raise Ap2EvidenceError("provenance_class x5c_header but the x5c leaf key differs from the snapshotted jwk")
+
+
 def _snapshot_key(parsed: Dict, supplied_jwk: Optional[Dict] = None,
                   jwks_url: Optional[str] = None, timeout: int = 20) -> Dict:
     """Choose the verification key and record WHERE it came from (provenance class).
@@ -503,11 +531,11 @@ def find_bindings(artifacts: List[Dict]) -> List[Dict]:
     """Cross-artifact hash commitments, recomputed from the PRIMARY quantity: sha-256 over
     each artifact's exact compact serialization (hex and b64url forms), matched against
     every string claim of the other artifacts. Deterministic; found-or-absent, never guessed."""
-    digests = {}
+    by_value = {}   # r5: inverse index (digest string -> name, encoding) — the per-leaf scan used to be O(artifacts), quadratic
     for a in artifacts:
         raw = a["compact"].encode("ascii")
-        digests[a["name"]] = {"hex": hashlib.sha256(raw).hexdigest(),
-                              "b64url": _sha256_b64url(raw)}
+        by_value.setdefault(hashlib.sha256(raw).hexdigest(), []).append((a["name"], "hex"))
+        by_value.setdefault(_sha256_b64url(raw), []).append((a["name"], "b64url"))
     found = []
 
     def scan(node, path, holder):
@@ -518,12 +546,10 @@ def find_bindings(artifacts: List[Dict]) -> List[Dict]:
             for i, v in enumerate(node):
                 scan(v, f"{path}[{i}]", holder)
         elif isinstance(node, str):
-            for other, d in digests.items():
+            for other, enc in by_value.get(node, ()):
                 if other == holder:
                     continue
-                if node == d["hex"] or node == d["b64url"]:
-                    found.append({"in": holder, "claim": path, "commits_to": other,
-                                  "encoding": "hex" if node == d["hex"] else "b64url"})
+                found.append({"in": holder, "claim": path, "commits_to": other, "encoding": enc})
 
     for a in artifacts:
         scan(a["resolved_claims"], "", a["name"])
@@ -701,6 +727,8 @@ def build_evidence(artifacts: List[Dict], out_path: str,
     dressed as evidence — fail-closed at the source)."""
     keys, jwks_urls = keys or {}, jwks_urls or {}
     names = [a["name"] for a in artifacts]
+    if any(not isinstance(n, str) or not n for n in names):   # r5: build wrote a pack with name "" that both verifiers then refused
+        raise Ap2EvidenceError("artifact name must be a non-empty string (SPEC §2)")
     if len(set(names)) != len(names):
         raise Ap2EvidenceError("duplicate artifact names (bindings would silently "
                                "overwrite each other — refused fail-closed)")
@@ -785,6 +813,11 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
     # 1.1.0 (review r1): the SHAPE of the top-level fields is checked before anything touches them — `artifacts` a list of
     # objects, `bindings` a list, `rfc3161_timestamp` an object or absent, `producer_signatures` an object or absent. A wrong
     # type used to be a TypeError/AttributeError traceback (the JS verifier answered); `producer_signatures: {}` was "absent".
+    if ev.get("evidence_format") != EVIDENCE_FORMAT:   # r5: version confusion — a "…/2.0" pack was verified under the 1.0 rules
+        return refusal(f"evidence_format must be {EVIDENCE_FORMAT!r}")
+    for f in ("subject", "created_utc", "honest_scope"):   # SPEC §1 MUSTs: present and a string, or the receipt is silently poorer
+        if not isinstance(ev.get(f), str):
+            return refusal(f"{f} must be a string (SPEC §1)")
     if not isinstance(ev.get("artifacts"), list) or any(not isinstance(a, dict) for a in ev["artifacts"]):
         return refusal("artifacts must be a list of objects")
     names = [a.get("name") for a in ev["artifacts"]]   # r3: the name keys the binding table — a non-string crashed the JS table, "__proto__" vanished from it
@@ -815,9 +848,11 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
             key = a["key"]
             if not isinstance(key, dict) or not isinstance(key.get("jwk"), dict):
                 raise Ap2EvidenceError("artifact key.jwk must be an object")
-            if key.get("provenance_class") is not None and not isinstance(key["provenance_class"], str):   # r2: a list was a TypeError in sorted()
-                raise Ap2EvidenceError("artifact key.provenance_class must be a string")
+            pc = key.get("provenance_class")
+            if pc is not None and (not isinstance(pc, str) or pc not in PROVENANCE_CLASSES):   # a list is unhashable: type first   # r2: a list was a TypeError in sorted(); r5: an out-of-enum value passed as a strong class
+                raise Ap2EvidenceError(f"artifact key.provenance_class must be one of {sorted(PROVENANCE_CLASSES)}")
             parsed = parse_sd_jwt(compact)
+            _check_provenance(pc, parsed, key)   # r5: jwk_header / x5c_header are RECONCILED with the signed header, not believed
             if not isinstance(parsed["payload"], dict) or not isinstance(parsed["header"], dict):
                 raise Ap2EvidenceError("JWT header and payload must be objects")
             sig_ok = verify_es256(parsed["signing_input"], parsed["signature"], key["jwk"])
@@ -942,19 +977,32 @@ def main(argv: Optional[List[str]] = None) -> int:
         i += 1
     a = p.parse_args(raw)
     if a.cmd == "build":
+        # r5: every name=path pair is validated as a pair, and a file that cannot be read is a usage error (exit 2),
+        # never the FileNotFoundError traceback `--key foo` / a missing artifact file used to produce
+        def _pair(flag, spec):
+            name, sep, path = spec.partition("=")
+            if not sep or not name or not path:
+                p.error(f"{flag} expects name=path (got {spec!r})")
+            return name, path
+
+        def _read(flag, path, as_json=False):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    return json.load(f) if as_json else f.read()
+            except OSError as e:
+                p.error(f"{flag}: cannot read {path!r} ({type(e).__name__})")
+            except ValueError as e:
+                p.error(f"{flag}: {path!r} is not valid JSON ({e})")
+
         arts = []
         for spec in a.artifacts:
-            name, _, path = spec.partition("=")
-            if not path:
-                p.error(f"artifact {spec!r}: expected name=path")
-            with open(path, encoding="utf-8") as f:
-                arts.append({"name": name, "sd_jwt": f.read()})
+            name, path = _pair("artifact", spec)
+            arts.append({"name": name, "sd_jwt": _read("artifact", path)})
         keys = {}
         for spec in a.key:
-            name, _, path = spec.partition("=")
-            with open(path, encoding="utf-8") as f:
-                keys[name] = json.load(f)
-        jwks = dict(s.partition("=")[::2] for s in a.jwks_url)
+            name, path = _pair("--key", spec)
+            keys[name] = _read("--key", path, as_json=True)
+        jwks = dict(_pair("--jwks-url", s) for s in a.jwks_url)
         try:
             print(json.dumps(build_evidence(arts, a.out, keys=keys, jwks_urls=jwks,
                                             tsa_url=a.tsa, subject=a.subject), indent=1))

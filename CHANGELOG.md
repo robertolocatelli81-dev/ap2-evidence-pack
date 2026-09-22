@@ -62,5 +62,22 @@ measured on the 1.0.2 verifier first (every case below was red there).
   the token's own `genTime` (`openssl ts -verify -attime`), both verifiers report `rfc3161.gen_time`; the stale
   `requires: ["openssl"]` is off the anchor vectors (the binding check needs no openssl). Oracle: 102 cases,
   0 disagreements, 1 declared; positive control 2 red on the round-3 state.
+- **Review round 5** (Opus/Sonnet/Haiku, 22/09/2026): `provenance_class` is RECONCILED with the signed header instead of
+  believed — relabelling `jwk_header` as `x5c_header` made `self_asserted_only` false with no `x5c` anywhere (the one
+  field the honest scope sends the auditor to), and out-of-enum values passed as strong classes; the enum is closed in
+  both verifiers. `evidence_format` and the §1 MUSTs (`subject`, `created_utc`, `honest_scope`) are checked: a
+  `ap2-evidence-pack/2.0` pack used to be verified under the 1.0 rules (version confusion) and a pack with no
+  `honest_scope` produced a receipt with `honest_scope: null`. The binding scan uses an inverse index instead of a
+  per-leaf loop over the artifacts — the cost was quadratic (measured: 0.70 s at 2 000 artifacts, 5.04 s at 4 000;
+  after: 0.009 s and 0.015 s, 0.071 s at 16 000); the set of bindings is unchanged. `build` refuses an empty artifact
+  name (it used to write a pack, exit 0, that both verifiers then refused) and its CLI validates `name=path` pairs and
+  reports unreadable files as usage (exit 2) instead of a `FileNotFoundError` traceback. The oracle now compares the
+  ELEVEN normative fields of SPEC §6 (it compared seven; `provenance_classes` really did diverge, sorted by code point
+  in the reference and by UTF-16 code unit in JS — the JS side now uses the same comparator) and runs 113 cases,
+  0 disagreements, 1 declared; the file-level ablation is applied at its use site (patching `loads_strict` also ablated
+  the JWT level, since `_loads_segment` delegates to it); two tests that claimed "in both verifiers" now skip instead of
+  passing when node is absent, and the bare-invocation loop really runs the JS CLI. Three vector descriptions realigned
+  with the code (they still said "neither verifier validates the TSA chain", "cryptographic token verification" and
+  "the one ACCEPT of the set").
 
 Verdicts unchanged on in-profile evidence produced by 1.0.x `build`.

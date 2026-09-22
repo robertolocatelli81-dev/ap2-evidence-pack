@@ -46,9 +46,18 @@ One UTF-8 JSON object. A strict parser MUST reject duplicate object keys
 | `kb_jwt` | KB-JWT verification record (§6, `kb_verified`) |
 | `verified_at_build` | build-time attestation (informative) |
 
-`provenance_class` is a DECLARED dimension, one of `x5c_header`, `jwk_header`,
-`supplied`, `jwks_fetched` — the format records how the key was captured instead
-of pretending all captures are equal. `jwk_header` is self-asserted.
+`provenance_class` is one of `x5c_header`, `jwk_header`, `supplied`, `jwks_fetched`
+— the format records how the key was captured instead of pretending all captures
+are equal. `jwk_header` is self-asserted. Any other value (or a non-string) is a
+refusal of that artifact. A verifier MUST RECONCILE the two header-derived classes
+with the header it just parsed: `jwk_header` requires the signed header to carry a
+`jwk` equal to the snapshotted one on `kty`/`crv`/`x`/`y`; `x5c_header` requires a
+signed `x5c` whose leaf public key equals it. `supplied` and `jwks_fetched` are
+capture-time assertions that cannot be checked offline — a verifier records them,
+and a relying party MUST NOT read them as proof of anything beyond the declaration.
+1.1.0 r5: before this rule `provenance_class` was believed, so relabelling
+`jwk_header` as `x5c_header` flipped `self_asserted_only` to false with no `x5c`
+anywhere in the pack — the one field the honest scope sends the auditor to.
 
 ## 3. Canonicalisation and digest (NORMATIVE)
 
@@ -88,7 +97,7 @@ present with `null` is NOT the same as an absent key: `_sd` absent or a list of 
 `_sd_alg` absent or exactly `"sha-256"`; an array placeholder `{"...": d}` with `d` a
 string; a disclosed claim name a string; `cnf` absent or an object, `cnf.jwk` absent or an
 object (an empty object is a holder key that fails to parse, not an unknown holder);
-JWK `x`/`y` exactly 32 bytes each (RFC 7518 §6.2.1); `key.provenance_class` a string;
+JWK `x`/`y` exactly 32 bytes each (RFC 7518 §6.2.1); `key.provenance_class` in the §2 enum;
 `rfc3161_timestamp.anchored` a boolean; `producer_signatures.signatures[].sig_alg` a
 string (any other type is a FAIL entry). A violation inside an artifact is that
 artifact's error (the pack is not `valid`); a violation of a top-level shape is a refusal.
@@ -164,7 +173,10 @@ only on a valid ML-DSA-65 signature whose key is pinned (or no pin set given).
 Inputs: the pack file, an optional pinned producer trust set, and three policy
 flags: `require_producer`, `require_pq`, `require_anchor`.
 
-1. Parse under the profile (§3.1; duplicate keys reject). Recompute the digest (§3) → `digest_ok`.
+1. Parse under the profile (§3.1; duplicate keys reject). Refuse unless `evidence_format` is
+   exactly `"ap2-evidence-pack/1.0"` and `subject`, `created_utc`, `honest_scope` are strings
+   (§1 MUSTs — 1.1.0 r5: a `…/2.0` pack used to be verified under the 1.0 rules, and a pack
+   with no `honest_scope` produced a receipt with `honest_scope: null`). Recompute the digest (§3) → `digest_ok`.
 2. For EVERY artifact: parse `sd_jwt_compact` (its JSON under the §3.1 profile); verify the ES256 signature with
    the snapshotted JWK over the JWS signing input; resolve disclosures
    fail-closed (unmatched, duplicate, or malformed disclosure → reject); the

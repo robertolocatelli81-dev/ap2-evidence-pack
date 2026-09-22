@@ -1,5 +1,5 @@
 {
- "description": "A real, well-formed RFC 3161 token (same probe TSA) issued for a DIFFERENT digest: Granted, imprint mismatch -> verified False, the pack rejects.",
+ "description": "A real, well-formed RFC 3161 token (same probe TSA) issued for a DIFFERENT digest: status granted, imprint mismatch -> verified false, the pack rejects.",
  "normative": {
   "bindings_ok": true,
   "digest_ok": true,

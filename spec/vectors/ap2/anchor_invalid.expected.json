@@ -1,5 +1,5 @@
 {
- "description": "A CLAIMED RFC 3161 anchor whose token is garbage: cryptographic token verification fails, so the pack rejects even without policy flags — a claimed-but-false anchor is tamper, never a soft warning.",
+ "description": "A claimed anchor whose tsr_b64 is garbage: the DER walk refuses it, so the binding check fails (verified false) and the pack rejects. No cryptographic verification is involved — 'verified' is status + imprint (SPEC §3.2).",
  "normative": {
   "bindings_ok": true,
   "digest_ok": true,

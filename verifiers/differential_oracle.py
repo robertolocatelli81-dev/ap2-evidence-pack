@@ -12,7 +12,11 @@ HERE = os.path.dirname(os.path.abspath(__file__)); ROOT = os.path.dirname(HERE)
 # positive control: point either verifier at an OLDER checkout (git worktree) — the cases must turn red there
 PY = [sys.executable, "-B", os.path.join(os.environ.get("AP2_ORACLE_PY_ROOT", ROOT), "ap2_evidence.py"), "verify"]
 JS = ["node", os.environ.get("AP2_ORACLE_JS", os.path.join(HERE, "js", "ap2-verify.mjs"))]
-KEYS = ("valid", "digest_ok", "bindings_ok", "producer_ok", "pq_protected", "rfc3161_verified", "policy_ok")
+# r5: the ELEVEN normative fields of SPEC §6, not the seven of 1.1.0 r1 — `producer_present`, `producer_trusted`,
+# `rfc3161_claimed` and `self_asserted_only` were never compared on the hostile files, and one of them (the sorted
+# `provenance_classes` behind self_asserted_only) really did diverge (code point vs UTF-16 code unit).
+KEYS = ("valid", "digest_ok", "bindings_ok", "producer_present", "producer_ok", "producer_trusted", "pq_protected",
+        "rfc3161_claimed", "rfc3161_verified", "policy_ok", "self_asserted_only", "provenance_classes")
 
 
 def canon(obj):
@@ -37,7 +41,9 @@ def _forged_tsr(digest, extra_tst=b""):
 
 # Declared divergence: TSA signature/chain verification needs openssl (Python only); the JS verifier reports tsa_verified null
 # and under --require-anchor --tsa-cert does NOT pass (policy_ok false) — the same verdict, one different field.
-DECLARED = {"vector-anchor_valid-tsa-cert": {"py": (True, True, True, True, True, True, True), "js": (False, True, True, True, True, True, False)}}   # only the REAL token differs: Python proves the TSA, JS cannot
+DECLARED = {"vector-anchor_valid-tsa-cert": {   # only the REAL token differs: Python proves the TSA (openssl), JS cannot -> policy_ok False
+    "py": (True, True, True, True, True, None, True, True, True, True, True, ("jwk_header",)),
+    "js": (False, True, True, True, True, None, True, True, True, False, True, ("jwk_header",))}}
 
 
 def flags_for(policy):
@@ -54,10 +60,11 @@ def flags_for(policy):
 def run(cmd, path, flags):
     try:
         out = subprocess.run(list(cmd) + [path] + flags, capture_output=True, text=True, timeout=120)
-        r = json.loads(out.stdout); prod = r.get("producer_signatures") or {}
-        return (r.get("valid"), r.get("digest_ok"), r.get("bindings_ok"), prod.get("ok"), r.get("pq_protected"), (r.get("rfc3161") or {}).get("verified"), r.get("policy_ok"))
+        r = json.loads(out.stdout); prod = r.get("producer_signatures") or {}; ts = r.get("rfc3161") or {}
+        return (r.get("valid"), r.get("digest_ok"), r.get("bindings_ok"), prod.get("present"), prod.get("ok"), prod.get("trusted"),
+                r.get("pq_protected"), ts.get("claimed"), ts.get("verified"), r.get("policy_ok"), r.get("self_asserted_only"), tuple(r.get("provenance_classes") or ()))
     except Exception:  # noqa: BLE001
-        return ("NONJSON/CRASH:" + os.path.basename(cmd[-1] if cmd[-1] != "verify" else cmd[-2]),) * 7   # distinct per verifier: two crashes never agree
+        return ("NONJSON/CRASH:" + os.path.basename(cmd[-1] if cmd[-1] != "verify" else cmd[-2]),) * len(KEYS)   # distinct per verifier: two crashes never agree
 
 
 def build_cases(d):
@@ -182,6 +189,19 @@ def build_cases(d):
     cases["bindings-artifact-named-0"] = (two("0", "cart", '{"iss":"x","h":"%s","g":"%s"}'), [])
     p = two("intent", "cart", '{"iss":"x","a":"%s","b":"%s"}'); ev2 = json.load(open(p)); ev2["bindings"] = list(reversed(ev2["bindings"])); cases["bindings-recorded-reversed-rehashed"] = (w("brev", json.dumps(rehash(ev2))), [])
     ev2 = json.load(open(p)); ev2["bindings"] = ev2["bindings"] + ev2["bindings"][:1]; cases["bindings-entry-duplicated-rehashed"] = (w("bdup", json.dumps(rehash(ev2))), [])
+    # ── review r5 (2026-09-22): the provenance class is reconciled with the signed header (relabelling jwk_header as x5c_header
+    # flipped self_asserted_only with no x5c anywhere), the enum is closed, `evidence_format` and the §1 MUSTs are checked
+    for nm, v in (("x5c_header-without-x5c", "x5c_header"), ("out-of-enum", "qualified_eidas_certificate"), ("supplied-unverifiable", "supplied"), ("list", ["jwk_header"])):
+        e = copy.deepcopy(base)
+        for a in e["artifacts"]: a["key"]["provenance_class"] = v
+        cases["provenance-" + nm] = (w("pcl" + nm, json.dumps(rehash(e))), [])
+    e = copy.deepcopy(base)
+    for a in e["artifacts"]: a["key"].pop("provenance_class", None)
+    cases["provenance-absent-rehashed"] = (w("pcnone", json.dumps(rehash(e))), [])
+    for nm, mut in (("format-2.0", lambda e: e.__setitem__("evidence_format", "ap2-evidence-pack/2.0")), ("format-absent", lambda e: e.pop("evidence_format", None)),
+                    ("subject-absent", lambda e: e.pop("subject", None)), ("subject-int", lambda e: e.__setitem__("subject", 1)),
+                    ("created_utc-absent", lambda e: e.pop("created_utc", None)), ("honest_scope-absent", lambda e: e.pop("honest_scope", None))):
+        e = copy.deepcopy(base); mut(e); cases["must-" + nm] = (w("must" + nm, json.dumps(rehash(e))), [])
     cases["jwk-x-33-bytes-rehashed"] = (w("jwk33", json.dumps(_fresh_pack(base, sk, n, H, '{"iss":"x"}', {"iss": "x"}, jwk_x_bytes=n.x.to_bytes(33, "big")))), [])
     return cases
 
@@ -213,10 +233,13 @@ def _fresh_pack(base, sk, n, header_txt, payload_txt, resolved, disclosures=(), 
     from cryptography.hazmat.primitives.asymmetric import ec
     from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
     b64u = lambda b: base64.urlsafe_b64encode(b).decode().rstrip("=")  # noqa: E731
+    jwk_pub = {"kty": "EC", "crv": "P-256", "x": b64u(jwk_x_bytes if jwk_x_bytes is not None else n.x.to_bytes(32, "big")), "y": b64u(n.y.to_bytes(32, "big"))}
+    if isinstance(header_txt, str) and '"jwk"' not in header_txt:   # r5: the snapshotted key is provenance_class jwk_header, so the signed header must carry the SAME jwk (reconciled at verify)
+        header_txt = header_txt.rstrip()[:-1] + ',"jwk":' + json.dumps(jwk_pub, separators=(",", ":")) + "}"
     ht = header_txt.encode() if isinstance(header_txt, str) else header_txt; pt = payload_txt.encode() if isinstance(payload_txt, str) else payload_txt
     si = b64u(ht) + "." + b64u(pt); r, s_ = decode_dss_signature(sk.sign(si.encode("ascii"), ec.ECDSA(hashes.SHA256())))
     compact = si + "." + b64u(r.to_bytes(32, "big") + s_.to_bytes(32, "big")) + "~" + "".join(x + "~" for x in disclosures) + (kb or "")
-    jwk = {"kty": "EC", "crv": "P-256", "x": b64u(jwk_x_bytes if jwk_x_bytes is not None else n.x.to_bytes(32, "big")), "y": b64u(n.y.to_bytes(32, "big"))}
+    jwk = jwk_pub
     ev = {"evidence_format": base["evidence_format"], "subject": "oracle r2", "created_utc": "2026-09-22T00:00:00Z",
           "artifacts": [{"name": "intent", "sd_jwt_compact": compact, "header": json.loads(ht) if isinstance(header_txt, str) else None, "key": {"jwk": jwk, "provenance_class": "jwk_header"},
                          "resolved_claims": resolved, "kb_jwt": {"present": False}, "verified_at_build": {"signature_ok": True, "disclosures_ok": True}}],

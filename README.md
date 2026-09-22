@@ -89,8 +89,9 @@ python3 spec/vectors/ap2/run_ap2_conformance.py   # exit 0 = conformant
 
 **Differential oracle** (`verifiers/differential_oracle.py`, 22/09/2026): the two verifiers must
 give the same `(valid, digest_ok, bindings_ok, producer_ok, pq_protected, rfc3161_verified,
-policy_ok)` on the 8 vectors under their declared policy (plus `anchor_valid` under
-`--require-anchor --tsa-cert`), 70 hostile files that carry the digest a lenient verifier would
+policy_ok, producer_present, producer_trusted, rfc3161_claimed, self_asserted_only, provenance_classes)`
+— the eleven normative fields of SPEC §6 — on the 8 vectors under their declared policy (plus `anchor_valid` under
+`--require-anchor --tsa-cert`), 86 hostile files that carry the digest a lenient verifier would
 recompute or a wrong JSON shape (`__proto__` key with the digest recomputed over it, non-UTF-8, float `1.0`, 2^53+1, 100000-deep,
 `NaN`, lone surrogate, duplicate key, BOM, non-object, `artifacts`/`key`/`jwk`/`rfc3161_timestamp`/
 `producer_signatures` of the wrong type, an empty producer block, base64url with a space /
@@ -106,10 +107,12 @@ disclosure whose name is a list, `cnf` `null` / a string, `cnf.jwk` `{}`, JWK `x
 bytes; an artifact `name` absent / an int / `"__proto__"` / empty / duplicate; a DER element with a
 4-byte length whose top bit is set inside the TSTInfo; and — built by the reference itself — packs whose
 bindings sit under array-index claim keys, whose recorded binding list is reversed, or which carry a
-duplicated binding entry) and 16 command-line grammar cases (usage exit 2,
+duplicated binding entry; `provenance_class` `x5c_header` with no `x5c` in the signed header, out of
+enum, a list or absent; `evidence_format` `…/2.0` or absent; `subject`/`created_utc`/`honest_scope`
+absent or the wrong type) and 16 command-line grammar cases (usage exit 2,
 nothing on stdout, in both — the bare invocation without a subcommand included), plus two positive
 controls (non-ASCII text in profile; a fresh-key pack that must be `valid` in both):
-**102 cases, 0 disagreements, of which 1 is a declared divergence** — the real token under `--tsa-cert`, where the
+**113 cases, 0 disagreements, of which 1 is a declared divergence** — the real token under `--tsa-cert`, where the
 reference proves the TSA with openssl and the JS verifier reports `tsa_verified: null` and does
 not pass the policy. A crash counts as a disagreement, and a declared divergence that stops
 appearing is reported. Positive controls (`AP2_ORACLE_PY_ROOT` / `AP2_ORACLE_JS` point the oracle
@@ -118,7 +121,11 @@ at another checkout), measured 22/09/2026: against the 1.0.2 reference the oracl
 signature or inside `tsr_b64` accepted; `producer_signatures: {}` and `producer_signatures: []`
 treated as absent, `valid: true`; tracebacks on non-UTF-8, 100000-deep, BOM, a missing path and
 on wrong-typed `artifacts`/`key`/`jwk`/`rfc3161_timestamp`; `--help` exit 0, `--` a verdict);
-against the state after review round 3 it is red on 2 (the binding-set cases above),
+against the state after review round 4 it is red on 0: the round-5 findings are defects the two
+verifiers SHARED (a differential oracle measures agreement, not correctness), and they are held instead
+by two unit tests that go red against the round-4 reference —
+`test_provenance_class_is_reconciled_and_format_is_pinned` and `test_build_refuses_what_verify_refuses`
+(measured 22/09/2026). Against the state after round 3 the oracle is red on 2 (the binding-set cases above),
 against the state after round 2 on 5 (the round-3 cases: an absent artifact `name`
 crashed the JS binding table, an int name was stringified by it and `"__proto__"` vanished from it; a
 4-byte DER length went negative in the JS `<<` and a token the reference refuses verified there; the bare
