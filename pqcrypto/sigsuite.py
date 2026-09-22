@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import base64
+import re
 import json
 import os
 from typing import Dict, List, Optional, Tuple
@@ -52,7 +53,14 @@ def _b64(b: bytes) -> str:
 
 
 def _unb64(s: str) -> bytes:
-    return base64.b64decode(s)
+    """RFC 4648 base64, strict (1.1.0): alphabet only, length a multiple of 4, canonical padding/trailing bits. The lenient
+    decoder skipped a space inside a signature and still verified, while the independent JS verifier refused it."""
+    if not isinstance(s, str) or not s or len(s) % 4 or not re.fullmatch(r"[A-Za-z0-9+/]*={0,2}", s):
+        raise ValueError("non-canonical base64")
+    raw = base64.b64decode(s, validate=True)
+    if base64.b64encode(raw).decode() != s:
+        raise ValueError("non-canonical base64")
+    return raw
 
 
 # --- keygen -------------------------------------------------------------------

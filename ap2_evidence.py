@@ -101,13 +101,121 @@ def _no_dup_pairs(pairs):
     return seen
 
 
+# ── acceptance profile of the evidence file (1.1.0; SPEC §3): what cannot be re-serialised byte for byte by every
+# JSON implementation is refused, so a third-party verifier computes the same canonical bytes or refuses the same file.
+MAX_JSON_DEPTH = 512
+MAX_EVIDENCE_BYTES = 64 << 20
+_SAFE_INT = (1 << 53) - 1
+
+
+def _no_float(text: str):
+    raise Ap2EvidenceError(f"float {text!r} in the evidence file (not portable: use a string)")
+
+
+def _bounded_int(text: str) -> int:
+    v = int(text)
+    if abs(v) > _SAFE_INT:
+        raise Ap2EvidenceError("integer outside the portable range +/-(2^53-1)")
+    return v
+
+
+def _no_constant(name: str):
+    raise Ap2EvidenceError(f"non-JSON constant {name}")
+
+
+def _nesting_depth(text: str) -> int:
+    depth = mx = 0; in_str = esc = False
+    for ch in text:
+        if in_str:
+            if esc: esc = False
+            elif ch == "\\": esc = True
+            elif ch == '"': in_str = False
+        elif ch == '"': in_str = True
+        elif ch in "[{":
+            depth += 1; mx = max(mx, depth)
+        elif ch in "]}": depth -= 1
+    return mx
+
+
+def _hex4(s: str, i: int):
+    h = s[i:i + 4]
+    return int(h, 16) if len(h) == 4 and all(c in "0123456789abcdefABCDEF" for c in h) else None
+
+
+def _has_lone_surrogate(text: str) -> bool:
+    i, n = 0, len(text)
+    while i < n:
+        if text[i] != "\\":
+            i += 1; continue
+        if i + 1 < n and text[i + 1] == "u" and i + 5 < n:
+            cp = _hex4(text, i + 2)
+            if cp is None:
+                i += 2; continue
+            if 0xD800 <= cp <= 0xDBFF:
+                if i + 7 >= n or text[i + 6] != "\\" or text[i + 7] != "u": return True
+                lo = _hex4(text, i + 8)
+                if lo is None or not (0xDC00 <= lo <= 0xDFFF): return True
+                i += 12; continue
+            if 0xDC00 <= cp <= 0xDFFF: return True
+            i += 6; continue
+        i += 2
+    return False
+
+
+def loads_strict(text: str):
+    """Strict JSON for the evidence file: no duplicate keys, no floats, integers within +/-(2^53-1), no NaN/Infinity,
+    nesting <= 512 by linear pre-scan, no lone UTF-16 surrogate escape. Raises Ap2EvidenceError."""
+    if _nesting_depth(text) > MAX_JSON_DEPTH:
+        raise Ap2EvidenceError(f"json_too_deep: nesting exceeds {MAX_JSON_DEPTH}")
+    if _has_lone_surrogate(text):
+        raise Ap2EvidenceError("lone_surrogate: unpaired UTF-16 surrogate escape")
+    try:
+        return json.loads(text, object_pairs_hook=_no_dup_pairs, parse_float=_no_float, parse_int=_bounded_int, parse_constant=_no_constant)
+    except RecursionError as e:
+        raise Ap2EvidenceError("json_too_deep") from e
+    except ValueError as e:
+        if isinstance(e, Ap2EvidenceError): raise
+        raise Ap2EvidenceError(f"not JSON: {str(e)[:80]}") from e
+
+
+def read_evidence_file(path: str):
+    """Read + decode + parse the evidence file under the profile. UTF-8 strict (a raw byte is a refusal, never U+FFFD),
+    a size bound before reading, an unreadable path is a refusal — all Ap2EvidenceError, never a traceback."""
+    try:
+        if os.path.getsize(path) > MAX_EVIDENCE_BYTES:
+            raise Ap2EvidenceError(f"evidence file exceeds {MAX_EVIDENCE_BYTES} bytes")
+        with open(path, "rb") as f:
+            raw = f.read()
+    except OSError as e:
+        raise Ap2EvidenceError(f"unreadable evidence file: {type(e).__name__}") from e
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise Ap2EvidenceError("evidence file is not valid UTF-8") from e
+    if text.startswith("\ufeff"):
+        raise Ap2EvidenceError("evidence file starts with a BOM")
+    ev = loads_strict(text)
+    if not isinstance(ev, dict):
+        raise Ap2EvidenceError("evidence file is not a JSON object")
+    return ev
+
+
+_B64URL = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
+
+
 def _b64url_decode(s: str) -> bytes:
-    s = s.strip()
+    """RFC 7515 base64url, strict: alphabet only, no padding, no whitespace, canonical trailing bits (1.1.0: whitespace was
+    stripped and padding added silently, so a segment could be spelled several ways for one meaning)."""
+    if not isinstance(s, str) or not s or any(c not in _B64URL for c in s) or len(s) % 4 == 1:
+        raise Ap2EvidenceError("invalid base64url segment")
     pad = -len(s) % 4
     try:
-        return base64.urlsafe_b64decode(s + "=" * pad)
+        raw = base64.urlsafe_b64decode(s + "=" * pad)
     except Exception as e:  # noqa: BLE001
         raise Ap2EvidenceError(f"invalid base64url segment: {type(e).__name__}") from e
+    if _b64url(raw) != s:
+        raise Ap2EvidenceError("non-canonical base64url segment (trailing bits)")
+    return raw
 
 
 def _b64url(b: bytes) -> str:
@@ -534,8 +642,7 @@ def sign_evidence(path, identity=None, classical_alg="ed25519"):
     exactly like the RFC 3161 timestamp. Honest scope: this protects THIS pack; it does not
     retro-protect the underlying ES256 mandate signature (still classical) - for that, the
     durable claim rests on the time anchor proving the mandate existed pre-quantum."""
-    with open(path, encoding="utf-8") as f:
-        ev = json.load(f, object_pairs_hook=_no_dup_pairs)
+    ev = read_evidence_file(path)
     digest = ev.get("evidence_digest_sha256")
     if not digest:
         raise Ap2EvidenceError("evidence pack has no digest to sign")
@@ -555,8 +662,12 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
     """OFFLINE re-verification from the evidence file alone: digest, every signature with
     the SNAPSHOTTED key, every disclosure, every binding, and the RFC 3161 token
     cryptographically (via openssl when present; honest None when absent). Fail-closed."""
-    with open(path, encoding="utf-8") as f:
-        ev = json.load(f, object_pairs_hook=_no_dup_pairs)
+    try:
+        ev = read_evidence_file(path)
+    except Ap2EvidenceError as e:   # 1.1.0: a hostile or unreadable file is a refusal receipt, never a traceback
+        return {"digest_ok": False, "artifacts": [], "producer_signatures": {"present": False, "pq_protected": False, "trusted": None},
+                "pq_protected": False, "bindings_ok": False, "rfc3161": {"claimed": False, "verified": None}, "provenance_classes": [],
+                "self_asserted_only": False, "policy_ok": False, "valid": False, "honest_scope": None, "refused": str(e)}
     e2 = {k: v for k, v in ev.items()
           if k not in ("evidence_digest_sha256", "rfc3161_timestamp", "producer_signatures")}
     recomputed_digest = hashlib.sha256(_canon(e2)).hexdigest()
@@ -641,11 +752,11 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
 # ────────────────────────────────────────────────────────── CLI
 
 def main(argv: Optional[List[str]] = None) -> int:
-    p = argparse.ArgumentParser(prog="ap2-evidence-pack",
+    p = argparse.ArgumentParser(prog="ap2-evidence-pack", allow_abbrev=False, add_help=False,
                                 description="Self-contained, offline-verifiable dispute "
                                             "evidence for agentic-payment SD-JWT mandates")
     sub = p.add_subparsers(dest="cmd")
-    b = sub.add_parser("build")
+    b = sub.add_parser("build", allow_abbrev=False, add_help=False)
     b.add_argument("out")
     b.add_argument("artifacts", nargs="+", metavar="name=path",
                    help="e.g. intent=intent.sdjwt cart=cart.sdjwt")
@@ -655,9 +766,32 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="fetch the key from a JWKS at build time (TLS witness)")
     b.add_argument("--tsa", help="RFC 3161 TSA URL (optional third-party time anchor)")
     b.add_argument("--subject", default="agentic-payment mandate evidence")
-    v = sub.add_parser("verify")
+    v = sub.add_parser("verify", allow_abbrev=False, add_help=False)
     v.add_argument("evidence")
-    a = p.parse_args(sys.argv[1:] if argv is None else argv)
+    v.add_argument("--trusted-producer-key", action="append", default=None, metavar="ALG=B64",
+                   help="pin a producer public key as <sig_alg>=<base64> (e.g. ed25519=…, ml-dsa-65=…); may repeat. With any pin, an unpinned producer is not authentic")
+    v.add_argument("--require-producer", action="store_true", help="policy: a valid producer signature is required")
+    v.add_argument("--require-pq", action="store_true", help="policy: a valid, PINNED post-quantum producer signature is required")
+    v.add_argument("--require-anchor", action="store_true", help="policy: the RFC 3161 anchor must VERIFY (not merely be claimed)")
+    raw = list(sys.argv[1:] if argv is None else argv)
+    # 1.1.0: one CLI grammar with the sibling verifiers — "" or a flag as a value, "--", -h/--help, a value on a boolean flag,
+    # an abbreviated flag = usage (exit 2, no verdict); the file path itself must not be "" or flag-like
+    if "--" in raw or any(x in ("-h", "--help") for x in raw) or any(x.split("=", 1)[0] in ("--require-producer", "--require-pq", "--require-anchor") and "=" in x for x in raw):
+        p.error("unexpected argument")
+    i = 0
+    while i < len(raw):
+        tok = raw[i]
+        if tok in ("--trusted-producer-key", "--key", "--jwks-url", "--tsa", "--subject"):
+            val = raw[i + 1] if i + 1 < len(raw) else None
+            if val is None or val == "" or val.startswith("-"):
+                p.error(f"{tok} needs a value (got {val!r})")
+            i += 2; continue
+        if tok.split("=", 1)[0] in ("--trusted-producer-key", "--key", "--jwks-url", "--tsa", "--subject") and "=" in tok:
+            val = tok.split("=", 1)[1]
+            if val == "" or val.startswith("-"):
+                p.error(f"{tok.split('=', 1)[0]} needs a value (got {val!r})")
+        i += 1
+    a = p.parse_args(raw)
     if a.cmd == "build":
         arts = []
         for spec in a.artifacts:
@@ -680,7 +814,18 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(json.dumps({"error": str(e)}), file=sys.stderr)
             return 1
     if a.cmd == "verify":
-        r = verify_evidence(a.evidence)
+        if a.evidence == "" or a.evidence.startswith("-"):
+            p.error(f"evidence path needs a value (got {a.evidence!r})")
+        trusted = None
+        if a.trusted_producer_key:
+            trusted = {}
+            for spec in a.trusted_producer_key:
+                alg, sep, key = spec.partition("=")
+                if not sep or not alg or not key:
+                    p.error(f"--trusted-producer-key expects ALG=B64 (got {spec!r})")
+                trusted.setdefault(alg, []).append(key)
+        r = verify_evidence(a.evidence, trusted_producer_keys=trusted, require_pq=a.require_pq,
+                            require_producer=a.require_producer, require_anchor=a.require_anchor)
         print(json.dumps(r, indent=1))
         return 0 if r["valid"] else 1
     p.print_help()

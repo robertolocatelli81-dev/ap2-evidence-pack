@@ -39,6 +39,8 @@ python3 ap2_evidence.py build evidence.json intent=intent.sdjwt cart=cart.sdjwt 
         [--key name=jwk.json] [--jwks-url name=https://...] [--tsa http://tsa.example]
 
 python3 ap2_evidence.py verify evidence.json     # offline, fail-closed; exit 0/1
+python3 ap2_evidence.py verify evidence.json --trusted-producer-key ed25519=<b64> --trusted-producer-key ml-dsa-65=<b64> --require-pq --require-anchor   # relying-party policy (1.1.0)
+node verifiers/js/ap2-verify.mjs evidence.json   # the independent verifier, same flags
 ```
 
 Or as a library: `build_evidence(...)` / `verify_evidence(...)`.
@@ -67,9 +69,11 @@ cases the elara-mesh verifier runs, so both stacks answer to one NIST oracle.
 ## Conformance (normative)
 
 The format is defined by `SPEC_AP2_EVIDENCE.md` plus the test vectors in
-`spec/vectors/ap2/` — one ACCEPT (`valid_signed`, the positive control) and five REJECTs
+`spec/vectors/ap2/` — two ACCEPTs (`valid_signed`, the positive control, and `anchor_valid`,
+a real RFC 3161 token from a probe TSA whose certificate ships beside it) and six REJECTs
 (stripped-signature downgrade, valid-but-unpinned producer key, digest mismatch, time
-anchor required-but-missing, time anchor claimed-but-invalid). An independent verifier
+anchor required-but-missing, time anchor claimed-but-invalid, a real token issued for
+another digest). An independent verifier
 claims conformance by reproducing each vector's `normative` block under its declared
 policy, from the spec text alone:
 
@@ -79,7 +83,22 @@ python3 spec/vectors/ap2/run_ap2_conformance.py   # exit 0 = conformant
 
 | Implementation | Runtime / deps | Status |
 |---|---|---|
-| `ap2_evidence.py` | Python 3 + `cryptography` | reference — conformant 6/6; ACVP ML-DSA-65 sigVer 9/9 |
+| `ap2_evidence.py` | Python 3 + `cryptography` | reference — conformant 8/8; ACVP ML-DSA-65 sigVer 9/9 |
+| `verifiers/js/ap2-verify.mjs` | Node ≥ 20, `node:crypto` only (ML-DSA-65 through the build's OpenSSL ≥ 3.5, else SKIP = incomplete, never a pass) | independent — 8/8; agrees with the reference on every oracle case |
+
+**Differential oracle** (`verifiers/differential_oracle.py`, 22/09/2026): the two verifiers must
+give the same `(valid, digest_ok, bindings_ok, producer_ok, pq_protected, rfc3161_verified,
+policy_ok)` on the 8 vectors under their declared policy, 20 hostile files that carry the
+digest a lenient verifier would recompute (`__proto__` key, non-UTF-8, float `1.0`, 2^53+1,
+100000-deep, `NaN`, lone surrogate, duplicate key, BOM, non-object, base64url with a
+space / padding / `+`, claims and bindings mismatch, producer base64 with a space, unknown
+producer algorithm, PQ signature stripped under `--require-pq`) and 14 command-line
+grammar cases (usage exit 2, no verdict, in both): **0 disagreements on 43 cases**. The
+same oracle against the 1.0.2 reference is red on 21 (measured 22/09/2026: the CLI had
+no policy flags, accepted float / 2^53+1 / lone surrogate / a space inside a producer
+signature with a recomputed digest, crashed on non-UTF-8, 100000-deep, BOM, a missing path,
+and answered `--help` with exit 0 and `--` with a verdict). Ablation: with the strict
+parser and base64 removed from the reference, `test_ap2_conformance.py` is red.
 
 Independent implementations (any language): open a PR to be listed here.
 
@@ -87,7 +106,8 @@ Independent implementations (any language): open a PR to be listed here.
 
 ```bash
 python3 test_ap2_evidence.py      # negative controls first — the bench can fail
-python3 test_ap2_conformance.py   # conformance vectors + ACVP ML-DSA-65 + signature suite
+python3 test_ap2_conformance.py   # conformance vectors + ACVP ML-DSA-65 + signature suite + acceptance profile + CLI grammar + JS agreement
+python3 verifiers/differential_oracle.py   # Python vs Node on every vector, hostile file and CLI case (needs node)
 ```
 
 

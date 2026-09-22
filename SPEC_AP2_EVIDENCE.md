@@ -64,6 +64,28 @@ is over the canonical form, not the file bytes.) The RFC 3161 token and the
 producer signatures are outside the digest so they can be attached after
 sealing without changing what they attest.
 
+### 3.1 Acceptance profile of the evidence file (NORMATIVE, 1.1.0)
+
+So that every implementation computes the same canonical bytes or refuses the same
+file, a verifier MUST refuse (a receipt with `valid: false`, never a crash) an evidence
+file that: is not valid UTF-8 or starts with a BOM; exceeds 64 MiB; is not a JSON object;
+contains a duplicate object key at any depth; contains a number with a fraction or an
+exponent (floats are not portable — use a string) or an integer outside ±(2^53−1);
+contains `NaN`/`Infinity`; nests deeper than 512; contains an unpaired UTF-16 surrogate
+escape (`\uD800`–`\uDFFF` not forming a pair). Non-ASCII text is in profile (the
+canonical form escapes it). base64url segments of the SD-JWTs (RFC 7515 §2) and base64
+values of the producer block (RFC 4648) are strict: alphabet only, no whitespace, no
+padding on base64url, canonical trailing bits; a segment spelled any other way is a
+verification failure of that artifact/signature, not a re-encoding.
+
+### 3.2 RFC 3161 token check (NORMATIVE when `anchored`)
+
+`rfc3161.verified` is `true` iff the token parses as a TimeStampResp, its status is
+granted (0 or 1) and the TSTInfo `messageImprint` equals the recomputed
+`evidence_digest_sha256`; `false` otherwise (a claimed-but-failing anchor rejects the
+pack). Neither the reference nor the JS verifier validates the TSA signature or
+certificate chain: `verified` states binding, not TSA authenticity (declared).
+
 ## 4. Bindings (NORMATIVE)
 
 A binding records that one artifact commits to another **by value**: artifact

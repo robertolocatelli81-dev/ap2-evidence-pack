@@ -37,3 +37,8 @@ jobs:
           if python ap2_evidence.py verify tampered.json > /dev/null; then
             echo "::error::the verifier accepted a tampered evidence pack"; exit 1; fi
           echo "tampered pack rejected (exit 1), intact pack accepted (exit 0)"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"   # OpenSSL >= 3.5: the JS verifier checks ML-DSA-65 too
+      - name: "Differential oracle: Python reference vs Node verifier on every vector, hostile file and CLI case"
+        run: python verifiers/differential_oracle.py

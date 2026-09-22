@@ -1,0 +1,21 @@
+{
+ "vector": "anchor_wrong_digest",
+ "description": "A real, well-formed RFC 3161 token (same probe TSA) issued for a DIFFERENT digest: Granted, imprint mismatch -> verified False, the pack rejects.",
+ "normative": {
+  "valid": false,
+  "digest_ok": true,
+  "bindings_ok": true,
+  "policy_ok": true,
+  "rfc3161_claimed": true,
+  "rfc3161_verified": false,
+  "producer_present": true,
+  "producer_ok": true,
+  "producer_trusted": null,
+  "pq_protected": true,
+  "self_asserted_only": true
+ },
+ "policy": {},
+ "requires": [
+  "openssl"
+ ]
+}

@@ -176,8 +176,8 @@ class TestProducerPinningAndPolicy(unittest.TestCase):
     def test_duplicate_json_key_rejected(self):
         p = os.path.join(self.tmp, "dup.json")
         open(p, "w").write('{"evidence_format":"x","subject":"A","subject":"B","artifacts":[]}')
-        with self.assertRaises(A.Ap2EvidenceError):
-            A.verify_evidence(p)
+        r = A.verify_evidence(p)          # 1.1.0: a refusal RECEIPT (valid False, digest_ok False, `refused`), never a traceback
+        self.assertFalse(r["valid"]); self.assertFalse(r["digest_ok"]); self.assertIn("duplicate JSON key", r["refused"])
 
 
 if __name__ == "__main__":
