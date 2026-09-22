@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.1 — 2026-09-22 — the dependency is declared
+
+`cryptography` was never listed in `[project].dependencies`, in any release: installing from the index produced a package
+whose first import failed with `ModuleNotFoundError: No module named 'cryptography'`. The README said to install it by
+hand, which is a documented workaround, not a working install — measured in a clean venv right after publishing 1.1.0,
+which is what the clean-install step of the release procedure is for. No change to the format, the verifiers, the vectors
+or the sealed scope: `ap2-evidence-pack/1.0` packs verify exactly as under 1.1.0.
+
 ## 1.1.0 — 2026-09-22 — acceptance profile, one CLI grammar, an independent verifier and a differential oracle
 
 Propagation of the verifier-hygiene classes found in the cra-evidence / omega-evidence / cryptovalid reviews (21/09/2026),

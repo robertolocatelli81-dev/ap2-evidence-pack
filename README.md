@@ -33,7 +33,7 @@ This tool turns a set of SD-JWT mandates into **one evidence file** that verifie
 ## Usage
 
 ```bash
-pip install cryptography    # the only dependency
+pip install ap2-evidence-pack   # cryptography comes with it (declared since 1.1.1)
 
 python3 examples/make_samples.py     # generates sample intent.sdjwt + cart.sdjwt
 python3 ap2_evidence.py build evidence.json intent=intent.sdjwt cart=cart.sdjwt \
