@@ -34,11 +34,13 @@ evidence file that verifies OFFLINE years later:
     and matching it against every string claim of the others — the primary quantity,
     not a proxy field;
   - seals everything into a canonical JSON evidence file with a SHA-256 digest and an
-    OPTIONAL RFC 3161 timestamp (inlined TSA client/verifier, openssl-based), so the
-    "key material existed and verified at time T" claim is anchored to a third party.
+    OPTIONAL RFC 3161 timestamp (inlined TSA client; re-check = binding, plus the TSA's
+    signature/chain with `--tsa-cert`), so the "key material existed and verified at
+    time T" claim can be anchored to a third party.
 
 HONEST SCOPE: proves that these exact artifacts, with this key material, verified at
-build time, and (if stamped) that all of it existed at the TSA's time — offline,
+build time, and (if stamped and the TSA verified against its certificate) that all of
+it existed at the TSA's time — offline,
 vendor-free, years later. It does NOT prove the issuer authorised the key (that is the
 provenance class's job to DECLARE), does NOT confer eIDAS art. 45j qualified-archive legal
 presumption (a QTSP service does), and does NOT validate x5c chains to a trust anchor.
@@ -527,51 +529,108 @@ def _rfc3161_stamp(digest_hex: str, tsa_url: str, timeout: int = 20) -> Dict:
         _sh.rmtree(d, ignore_errors=True)
 
 
-def _verify_rfc3161(tsr_b64: str, expected_digest_hex: str, timeout: int = 15) -> Dict:
-    """CRYPTOGRAPHIC check of the RFC 3161 token: status Granted AND message-imprint ==
-    the expected digest. Without openssl: verified=None (recorded but NOT verified —
-    honest), never a fake True."""
+def _der_tlv(buf: bytes, off: int) -> Tuple[int, int, int]:
+    """(tag, start, end) of the DER element at `off`; raises Ap2EvidenceError on malformation."""
+    if off + 2 > len(buf):
+        raise Ap2EvidenceError("der: truncated")
+    tag, ln, hl = buf[off], buf[off + 1], 2
+    if ln & 0x80:
+        n = ln & 0x7F
+        if n == 0 or n > 4 or off + 2 + n > len(buf):
+            raise Ap2EvidenceError("der: bad length")
+        ln = int.from_bytes(buf[off + 2:off + 2 + n], "big"); hl = 2 + n
+    if off + hl + ln > len(buf):
+        raise Ap2EvidenceError("der: overrun")
+    return tag, off + hl, off + hl + ln
+
+
+def _der_children(buf: bytes, start: int, end: int) -> List[Tuple[int, int, int]]:
+    out, o = [], start
+    while o < end:
+        t = _der_tlv(buf, o); out.append(t); o = t[2]
+    return out
+
+
+def parse_timestamp_resp(tsr: bytes) -> Dict:
+    """Minimal DER walk of an RFC 3161 TimeStampResp: PKIStatus and the TSTInfo messageImprint hash (hex). No signature
+    or certificate processing — the same two facts the JS verifier reads (SPEC §3.2)."""
+    tag, st, en = _der_tlv(tsr, 0)
+    if tag != 0x30:
+        raise Ap2EvidenceError("not a TimeStampResp")
+    kids = _der_children(tsr, st, en)
+    if not kids:
+        raise Ap2EvidenceError("empty TimeStampResp")
+    stag, sst, sen = kids[0]
+    sk = _der_children(tsr, sst, sen)
+    if not sk or sk[0][0] != 0x02:
+        raise Ap2EvidenceError("no PKIStatus")
+    status_bytes = tsr[sk[0][1]:sk[0][2]]
+    granted = len(status_bytes) == 1 and status_bytes[0] in (0, 1)
+    if len(kids) < 2:
+        return {"granted": granted, "imprint": None}
+    ci = _der_children(tsr, kids[1][1], kids[1][2])           # ContentInfo: OID, [0] SignedData
+    if len(ci) < 2:
+        raise Ap2EvidenceError("no SignedData")
+    sd = _der_children(tsr, ci[1][1], ci[1][2])[0]
+    sdc = _der_children(tsr, sd[1], sd[2])                    # version, digestAlgorithms, encapContentInfo, ...
+    if len(sdc) < 3:
+        raise Ap2EvidenceError("SignedData too short")
+    eci = _der_children(tsr, sdc[2][1], sdc[2][2])
+    if len(eci) < 2:
+        raise Ap2EvidenceError("no eContent")
+    wrap = _der_children(tsr, eci[1][1], eci[1][2])[0]
+    if wrap[0] != 0x04:
+        raise Ap2EvidenceError("eContent is not an OCTET STRING")
+    tst = _der_tlv(tsr, wrap[1])
+    tstc = _der_children(tsr, tst[1], tst[2])                 # version, policy, messageImprint, serial, genTime, ...
+    if len(tstc) < 3:
+        raise Ap2EvidenceError("TSTInfo too short")
+    mic = _der_children(tsr, tstc[2][1], tstc[2][2])
+    if len(mic) < 2 or mic[1][0] != 0x04:
+        raise Ap2EvidenceError("no messageImprint hash")
+    return {"granted": granted, "imprint": tsr[mic[1][1]:mic[1][2]].hex()}
+
+
+def _verify_rfc3161(tsr_b64: str, expected_digest_hex: str, timeout: int = 15, tsa_cert: Optional[str] = None) -> Dict:
+    """RFC 3161 token check (SPEC §3.2). `verified` = the token parses, its status is granted and the TSTInfo
+    messageImprint equals the recomputed pack digest — BINDING, not TSA authenticity: the TSA signature and certificate
+    chain are validated only when the relying party supplies the TSA certificate (`tsa_cert`, PEM), through
+    `openssl ts -verify -CAfile`; then `tsa_verified` is True/False (None when not requested or openssl is absent).
+    1.1.0 r1: a self-forged TimeStampResp with status 0 and the right imprint used to pass the JS verifier and to
+    fail this one only because `openssl ts -reply -text` refused the minimal DER — neither was a check of the TSA."""
     import shutil
     import subprocess
     import tempfile
+    try:
+        tsr = _sigsuite._unb64(tsr_b64)                       # strict base64 (a space inside the token used to be skipped)
+    except (ValueError, TypeError):
+        return {"verified": False, "note": "tsr_b64 is not canonical base64"}
+    try:
+        info = parse_timestamp_resp(tsr)
+    except Ap2EvidenceError as e:
+        return {"verified": False, "note": f"token not parseable: {e}"}
+    imprint_ok = info["imprint"] == expected_digest_hex.lower()
+    out = {"verified": bool(info["granted"] and imprint_ok), "granted": info["granted"], "imprint_ok": imprint_ok, "tsa_verified": None}
+    if tsa_cert is None:
+        return out
     exe = shutil.which("openssl")
     if not exe:
-        return {"verified": None, "note": "openssl absent — token recorded but NOT verified"}
+        out["tsa_note"] = "openssl absent — TSA signature/chain NOT verified"; return out
     d = tempfile.mkdtemp()
     try:
-        tsr = os.path.join(d, "t.tsr")
-        with open(tsr, "wb") as f:
-            f.write(base64.b64decode(tsr_b64))
-        r = subprocess.run([exe, "ts", "-reply", "-in", tsr, "-text"],
+        path = os.path.join(d, "t.tsr")
+        with open(path, "wb") as f:
+            f.write(tsr)
+        r = subprocess.run([exe, "ts", "-verify", "-digest", expected_digest_hex, "-sha256", "-in", path, "-CAfile", tsa_cert],
                            capture_output=True, text=True, timeout=timeout)
-        text = r.stdout or ""
-        granted = "Status: Granted" in text or "Granted." in text
-        # extract the BYTES of the 'Message data' section from the openssl dump
-        grab, hexbytes = False, []
-        for ln in text.splitlines():
-            if "Message data:" in ln:
-                grab = True
-                continue
-            if grab:
-                if ln.strip() and ln[0] not in " \t":
-                    break
-                if " - " not in ln:
-                    continue
-                hexpart = ln.split(" - ", 1)[1].split("   ")[0]
-                for tok in hexpart.replace("-", " ").split():
-                    if len(tok) == 2 and all(c in "0123456789abcdefABCDEF" for c in tok):
-                        hexbytes.append(tok.lower())
-        imprint = "".join(hexbytes)
-        imprint_ok = imprint == expected_digest_hex.lower()
-        return {"verified": bool(granted and imprint_ok),
-                "granted": granted, "imprint_ok": imprint_ok}
+        out["tsa_verified"] = r.returncode == 0 and "Verification: OK" in (r.stdout or "")
+        if not out["tsa_verified"]:   # `verified` keeps its §3.2 meaning (binding); the TSA outcome is its own field, in both verifiers
+            out["tsa_note"] = (r.stderr or r.stdout).strip()[-160:]
     except Exception as e:  # noqa: BLE001
-        return {"verified": False, "note": f"{type(e).__name__}: {str(e)[:80]}"}
+        out["tsa_verified"] = False; out["tsa_note"] = f"{type(e).__name__}: {str(e)[:80]}"
     finally:
         shutil.rmtree(d, ignore_errors=True)
-
-
-# ────────────────────────────────────────────────────────── build / verify
+    return out
 
 def _verify_one(parsed: Dict, key: Dict) -> Dict:
     sig_ok = verify_es256(parsed["signing_input"], parsed["signature"], key["jwk"])
@@ -658,16 +717,31 @@ def sign_evidence(path, identity=None, classical_alg="ed25519"):
 
 
 def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = False,
-                    require_producer: bool = False, require_anchor: bool = False) -> Dict:
+                    require_producer: bool = False, require_anchor: bool = False, tsa_cert: Optional[str] = None) -> Dict:
     """OFFLINE re-verification from the evidence file alone: digest, every signature with
-    the SNAPSHOTTED key, every disclosure, every binding, and the RFC 3161 token
-    cryptographically (via openssl when present; honest None when absent). Fail-closed."""
+    the SNAPSHOTTED key, every disclosure, every binding, and the RFC 3161 token's binding
+    (status + imprint; the TSA itself only with `tsa_cert`, via openssl). Fail-closed."""
     try:
         ev = read_evidence_file(path)
     except Ap2EvidenceError as e:   # 1.1.0: a hostile or unreadable file is a refusal receipt, never a traceback
         return {"digest_ok": False, "artifacts": [], "producer_signatures": {"present": False, "pq_protected": False, "trusted": None},
                 "pq_protected": False, "bindings_ok": False, "rfc3161": {"claimed": False, "verified": None}, "provenance_classes": [],
                 "self_asserted_only": False, "policy_ok": False, "valid": False, "honest_scope": None, "refused": str(e)}
+    def refusal(msg):
+        return {"digest_ok": False, "artifacts": [], "producer_signatures": {"present": False, "pq_protected": False, "trusted": None},
+                "pq_protected": False, "bindings_ok": False, "rfc3161": {"claimed": False, "verified": None}, "provenance_classes": [],
+                "self_asserted_only": False, "policy_ok": False, "valid": False, "honest_scope": None, "refused": msg}
+    # 1.1.0 (review r1): the SHAPE of the top-level fields is checked before anything touches them — `artifacts` a list of
+    # objects, `bindings` a list, `rfc3161_timestamp` an object or absent, `producer_signatures` an object or absent. A wrong
+    # type used to be a TypeError/AttributeError traceback (the JS verifier answered); `producer_signatures: {}` was "absent".
+    if not isinstance(ev.get("artifacts"), list) or any(not isinstance(a, dict) for a in ev["artifacts"]):
+        return refusal("artifacts must be a list of objects")
+    if not isinstance(ev.get("bindings", []), list):
+        return refusal("bindings must be a list")
+    if "rfc3161_timestamp" in ev and not isinstance(ev["rfc3161_timestamp"], dict):
+        return refusal("rfc3161_timestamp must be an object")
+    if "producer_signatures" in ev and not isinstance(ev["producer_signatures"], dict):
+        return refusal("producer_signatures must be an object")
     e2 = {k: v for k, v in ev.items()
           if k not in ("evidence_digest_sha256", "rfc3161_timestamp", "producer_signatures")}
     recomputed_digest = hashlib.sha256(_canon(e2)).hexdigest()
@@ -675,32 +749,43 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
 
     art_results, all_ok = [], True
     for_bindings = []
-    for a in ev.get("artifacts", []):
+    for a in ev["artifacts"]:
         try:
-            parsed = parse_sd_jwt(a["sd_jwt_compact"])
-            sig_ok = verify_es256(parsed["signing_input"], parsed["signature"],
-                                  a["key"]["jwk"])
+            compact = a["sd_jwt_compact"]
+            if not isinstance(compact, str) or compact != compact.strip() or not compact.isascii():
+                raise Ap2EvidenceError("sd_jwt_compact must be the exact ASCII compact serialization (no surrounding whitespace)")
+            key = a["key"]
+            if not isinstance(key, dict) or not isinstance(key.get("jwk"), dict):
+                raise Ap2EvidenceError("artifact key.jwk must be an object")
+            parsed = parse_sd_jwt(compact)
+            if not isinstance(parsed["payload"], dict) or not isinstance(parsed["header"], dict):
+                raise Ap2EvidenceError("JWT header and payload must be objects")
+            sig_ok = verify_es256(parsed["signing_input"], parsed["signature"], key["jwk"])
             resolved = resolve_disclosures(parsed["payload"], parsed["disclosures"])
             claims_ok = _canon(resolved) == _canon(a.get("resolved_claims"))
             kb = verify_kb_jwt(parsed, resolved)
-            art_results.append({"name": a["name"], "signature_ok": sig_ok,
+            art_results.append({"name": a.get("name"), "signature_ok": sig_ok,
                                 "claims_match": claims_ok, "kb_jwt": kb,
-                                "provenance_class": a["key"].get("provenance_class")})
+                                "provenance_class": key.get("provenance_class")})
             all_ok = (all_ok and sig_ok and claims_ok
                       and kb.get("verified") is not False)
-            for_bindings.append({"name": a["name"], "compact": a["sd_jwt_compact"],
+            for_bindings.append({"name": a.get("name"), "compact": parsed["compact"],
                                  "resolved_claims": resolved})
-        except (Ap2EvidenceError, KeyError, ValueError) as e:
-            art_results.append({"name": a.get("name"), "error": str(e)})
+        except Exception as e:  # noqa: BLE001 — any malformation of an artifact is that artifact's error, never a traceback
+            art_results.append({"name": a.get("name") if isinstance(a, dict) else None, "error": f"{type(e).__name__}: {str(e)[:120]}"})
             all_ok = False
 
-    bindings_ok = find_bindings(for_bindings) == ev.get("bindings", []) if all_ok else False
+    try:
+        bindings_ok = find_bindings(for_bindings) == ev.get("bindings", []) if all_ok else False
+    except Exception:  # noqa: BLE001
+        bindings_ok = False
 
-    ts = ev.get("rfc3161_timestamp", {})
-    rfc = {"claimed": ts.get("anchored", False), "verified": None}
-    if ts.get("anchored") and ts.get("tsr_b64"):
-        rfc = {"claimed": True, **_verify_rfc3161(
-            ts["tsr_b64"], recomputed_digest)}
+    ts = ev.get("rfc3161_timestamp") or {}
+    rfc = {"claimed": bool(ts.get("anchored", False)), "verified": None}
+    if ts.get("anchored") and isinstance(ts.get("tsr_b64"), str):
+        rfc = {"claimed": True, **_verify_rfc3161(ts["tsr_b64"], recomputed_digest, tsa_cert=tsa_cert)}
+    elif ts.get("anchored"):
+        rfc = {"claimed": True, "verified": False, "note": "anchored claimed but tsr_b64 absent or not a string"}
 
     classes = sorted({r.get("provenance_class") for r in art_results
                       if r.get("provenance_class")})
@@ -708,7 +793,7 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
     # OMEGA producer signature(s) over the digest: crypto-agile, hybrid (classical + ML-DSA-65).
     # A claimed-but-invalid signature is tamper -> fail-closed. pq_protected only on a valid PQ sig.
     prod = ev.get("producer_signatures")
-    if prod:
+    if prod is not None:   # 1.1.0 r1: an EMPTY block is present with zero passing signatures -> not ok (SPEC §5), like the JS verifier
         pv = _sigsuite.verify_producer_block(
             prod, recomputed_digest.encode("ascii"),
             trusted=trusted_producer_keys)
@@ -734,6 +819,8 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
     # anchor, an unverifiable one (no openssl -> verified None), or a failing token all
     # reject — fail-closed, "claimed" never upgrades to "proven".
     if require_anchor and rfc.get("verified") is not True:
+        policy_ok = False
+    if require_anchor and tsa_cert is not None and rfc.get("tsa_verified") is not True:
         policy_ok = False
 
     return {"digest_ok": digest_ok, "artifacts": art_results,
@@ -772,7 +859,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="pin a producer public key as <sig_alg>=<base64> (e.g. ed25519=…, ml-dsa-65=…); may repeat. With any pin, an unpinned producer is not authentic")
     v.add_argument("--require-producer", action="store_true", help="policy: a valid producer signature is required")
     v.add_argument("--require-pq", action="store_true", help="policy: a valid, PINNED post-quantum producer signature is required")
-    v.add_argument("--require-anchor", action="store_true", help="policy: the RFC 3161 anchor must VERIFY (not merely be claimed)")
+    v.add_argument("--require-anchor", action="store_true", help="policy: the RFC 3161 anchor must be present and BOUND to this pack (status granted, messageImprint = digest); with --tsa-cert also TSA-verified")
+    v.add_argument("--tsa-cert", help="PEM certificate (or chain) of the TSA: verify the token's signature and chain with openssl ts -verify (without it, the TSA is NOT verified — declared)")
     raw = list(sys.argv[1:] if argv is None else argv)
     # 1.1.0: one CLI grammar with the sibling verifiers — "" or a flag as a value, "--", -h/--help, a value on a boolean flag,
     # an abbreviated flag = usage (exit 2, no verdict); the file path itself must not be "" or flag-like
@@ -781,12 +869,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     i = 0
     while i < len(raw):
         tok = raw[i]
-        if tok in ("--trusted-producer-key", "--key", "--jwks-url", "--tsa", "--subject"):
+        if tok in ("--trusted-producer-key", "--key", "--jwks-url", "--tsa", "--subject", "--tsa-cert"):
             val = raw[i + 1] if i + 1 < len(raw) else None
             if val is None or val == "" or val.startswith("-"):
                 p.error(f"{tok} needs a value (got {val!r})")
             i += 2; continue
-        if tok.split("=", 1)[0] in ("--trusted-producer-key", "--key", "--jwks-url", "--tsa", "--subject") and "=" in tok:
+        if tok.split("=", 1)[0] in ("--trusted-producer-key", "--key", "--jwks-url", "--tsa", "--subject", "--tsa-cert") and "=" in tok:
             val = tok.split("=", 1)[1]
             if val == "" or val.startswith("-"):
                 p.error(f"{tok.split('=', 1)[0]} needs a value (got {val!r})")
@@ -825,7 +913,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     p.error(f"--trusted-producer-key expects ALG=B64 (got {spec!r})")
                 trusted.setdefault(alg, []).append(key)
         r = verify_evidence(a.evidence, trusted_producer_keys=trusted, require_pq=a.require_pq,
-                            require_producer=a.require_producer, require_anchor=a.require_anchor)
+                            require_producer=a.require_producer, require_anchor=a.require_anchor, tsa_cert=a.tsa_cert)
         print(json.dumps(r, indent=1))
         return 0 if r["valid"] else 1
     p.print_help()

@@ -241,10 +241,13 @@ def verify_producer_block(block: Dict, message: bytes, trusted: Optional[Dict[st
     results, pq = [], False
     all_keys_pinned = trusted is not None
     n_pass = n_fail = n_skip = 0
-    for s in block.get("signatures", []):
+    sigs = block.get("signatures", []) if isinstance(block, dict) else []
+    for s in (sigs if isinstance(sigs, list) else []):
+        if not isinstance(s, dict):   # 1.1.0 r1: a non-object entry is a FAIL entry, never a traceback
+            n_fail += 1; results.append({"sig_alg": None, "status": "FAIL", "post_quantum": False, "key_trusted": None}); all_keys_pinned = False; continue
         alg = s.get("sig_alg")
         pub = s.get("public_key_b64", "")
-        v = verify(alg, pub, s.get("signature_b64", ""), message)
+        v = verify(alg, pub if isinstance(pub, str) else "", s.get("signature_b64", "") if isinstance(s.get("signature_b64"), str) else "", message)
         status = "PASS" if v is True else ("SKIP" if v is None else "FAIL")
         if v is True:
             n_pass += 1

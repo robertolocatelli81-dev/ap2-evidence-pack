@@ -11,8 +11,9 @@ implementation: `ap2_evidence.py` (informative, not normative).
 
 Scope (what a valid pack proves): these exact SD-JWT artifacts, with the
 snapshotted key material, verified when the pack was built; the pack was not
-altered afterwards; and — only when an RFC 3161 token verifies — all of it
-existed by the TSA's time. It does NOT prove the issuer authorised a key beyond
+altered afterwards; and — only when an RFC 3161 token is bound to the pack AND the
+relying party has verified the TSA's signature with the TSA's certificate (§3.2) — all
+of it existed by that TSA's time. It does NOT prove the issuer authorised a key beyond
 the declared provenance class, and never proves the truth of the recorded
 transaction.
 
@@ -83,8 +84,13 @@ verification failure of that artifact/signature, not a re-encoding.
 `rfc3161.verified` is `true` iff the token parses as a TimeStampResp, its status is
 granted (0 or 1) and the TSTInfo `messageImprint` equals the recomputed
 `evidence_digest_sha256`; `false` otherwise (a claimed-but-failing anchor rejects the
-pack). Neither the reference nor the JS verifier validates the TSA signature or
-certificate chain: `verified` states binding, not TSA authenticity (declared).
+pack). `verified` states BINDING, not TSA authenticity: a self-forged TimeStampResp
+with the right imprint satisfies it. TSA authenticity is `rfc3161.tsa_verified`: the
+reference verifies the token's signature and chain with `openssl ts -verify -CAfile`
+when the relying party passes `--tsa-cert <PEM>`; the JS verifier cannot (no openssl)
+and reports `null`. Under `--require-anchor --tsa-cert`, `tsa_verified` must be `true`
+for `policy_ok` — so the JS verifier never passes that policy (declared divergence).
+`tsr_b64` is strict base64 (RFC 4648) like the producer block.
 
 ## 4. Bindings (NORMATIVE)
 
@@ -141,10 +147,11 @@ flags: `require_producer`, `require_pq`, `require_anchor`.
    KB-JWT is recorded as unverifiable, never treated as verified-green, and
    never fails the pack by itself — but a KB-JWT that verifies FALSE does).
 3. Recompute bindings (§4), compare → `bindings_ok`.
-4. If `rfc3161_timestamp.anchored`: cryptographically verify the token — status
-   granted AND message imprint == the **recomputed** digest → `rfc3161_verified`
-   true/false; a claimed token that cannot be checked (no tooling) is `null`
-   ("recorded but NOT verified"), never true. A claimed-but-failing token fails
+4. If `rfc3161_timestamp.anchored`: check the token's binding (§3.2) — status
+   granted AND messageImprint == the **recomputed** digest → `rfc3161_verified`
+   true/false (this needs no tooling: a DER walk). The TSA's signature and chain are
+   verified only against a relying-party-supplied TSA certificate (`tsa_verified`
+   true/false; `null` = not requested or no tooling, never a pass). A claimed-but-failing token fails
    the pack (tamper, not a warning).
 5. Verify the producer block per §5 → `producer_ok`, `producer_trusted`,
    `pq_protected`.
@@ -169,8 +176,9 @@ true/false/null).
 Run every `spec/vectors/ap2/<name>.json` under the policy in
 `<name>.expected.json` and reproduce the `normative` block exactly
 (`run_ap2_conformance.py` does this for the reference; exit 0 = conformant).
-The set contains exactly one ACCEPT (`valid_signed`) — positive control — and
-five REJECTs (stripped-signature downgrade, valid-but-unpinned producer, digest
-mismatch, anchor required-but-missing, anchor claimed-but-invalid). A vector
+The set contains two ACCEPTs (`valid_signed` — positive control — and `anchor_valid`,
+a real RFC 3161 token from a probe TSA whose certificate ships beside it) and six
+REJECTs (stripped-signature downgrade, valid-but-unpinned producer, digest mismatch,
+anchor required-but-missing, anchor claimed-but-invalid, a real token for another digest). A vector
 whose `requires` tooling is absent is reported SKIP, honestly unverified.
 Independent implementations: open a PR to be listed in the README conformance table.

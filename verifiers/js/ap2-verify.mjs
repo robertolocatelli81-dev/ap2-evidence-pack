@@ -5,7 +5,7 @@
 // ml-dsa-65 through the Node build's OpenSSL >= 3.5, else SKIP = incomplete, never a pass), policy flags, valid.
 // Acceptance profile of the file (SPEC §3.1): strict UTF-8, no BOM, no duplicate keys, no floats, integers within
 // +/-(2^53-1), nesting <= 512, no lone surrogate escape, 64 MiB bound. A refused file is a receipt with valid=false.
-// Usage: ap2-verify.mjs <evidence.json> [--trusted-producer-key ALG=B64]... [--require-producer] [--require-pq] [--require-anchor]
+// Usage: ap2-verify.mjs <evidence.json> [--trusted-producer-key ALG=B64]... [--require-producer] [--require-pq] [--require-anchor] [--tsa-cert PEM]
 import { readFileSync, statSync } from "node:fs";
 import { createHash, createPublicKey, verify as cryptoVerify } from "node:crypto";
 
@@ -87,9 +87,11 @@ function resolveDisclosures(payload, disclosures) {
   return resolved;
 }
 function es256Verify(signingInput, signature, jwk) {
-  if (!jwk || jwk.kty !== "EC" || jwk.crv !== "P-256" || typeof jwk.x !== "string" || typeof jwk.y !== "string") throw new Refused("jwk is not EC P-256");
+  if (!jwk || typeof jwk !== "object" || Array.isArray(jwk) || jwk.kty !== "EC" || jwk.crv !== "P-256" || typeof jwk.x !== "string" || typeof jwk.y !== "string") throw new Refused("jwk is not EC P-256");
+  const x = b64uDecode(jwk.x), y = b64uDecode(jwk.y);   // r1: Node's JWK import decodes leniently (padding, +/); the reference is strict — decode strictly first
+  if (x.length !== 32 || y.length !== 32) throw new Refused("jwk coordinates must be 32 bytes");
   if (signature.length !== 64) throw new Refused("ES256 signature must be 64 bytes");
-  const key = createPublicKey({ key: { kty: "EC", crv: "P-256", x: jwk.x, y: jwk.y }, format: "jwk" });
+  const key = createPublicKey({ key: { kty: "EC", crv: "P-256", x: b64u(x), y: b64u(y) }, format: "jwk" });
   try { return cryptoVerify("sha256", signingInput, { key, dsaEncoding: "ieee-p1363" }, signature); } catch { return false; }
 }
 function verifyKbJwt(parsed, resolved) {
@@ -164,19 +166,28 @@ export function verifyEvidence(path, opts = {}) {
   const refuse = (m) => ({ digest_ok: false, artifacts: [], producer_signatures: { present: false, pq_protected: false, trusted: null }, pq_protected: false, bindings_ok: false, rfc3161: { claimed: false, verified: null }, provenance_classes: [], self_asserted_only: false, policy_ok: false, valid: false, honest_scope: null, refused: m });
   let ev; try { if (statSync(path).size > MAX_BYTES) return refuse("evidence file exceeds bound"); const raw = readFileSync(path); const text = UTF8.decode(raw); if (text.startsWith("﻿")) return refuse("BOM"); ev = parseStrict(text); } catch (e) { return refuse(String(e.message ?? e)); }
   if (ev === null || typeof ev !== "object" || Array.isArray(ev)) return refuse("not a JSON object");
+  // shape of the top-level fields (SPEC §1), the same refusals as the reference
+  if (!Array.isArray(ev.artifacts) || ev.artifacts.some((a) => a === null || typeof a !== "object" || Array.isArray(a))) return refuse("artifacts must be a list of objects");
+  if ("bindings" in ev && !Array.isArray(ev.bindings)) return refuse("bindings must be a list");
+  if ("rfc3161_timestamp" in ev && (ev.rfc3161_timestamp === null || typeof ev.rfc3161_timestamp !== "object" || Array.isArray(ev.rfc3161_timestamp))) return refuse("rfc3161_timestamp must be an object");
+  if ("producer_signatures" in ev && (ev.producer_signatures === null || typeof ev.producer_signatures !== "object" || Array.isArray(ev.producer_signatures))) return refuse("producer_signatures must be an object");
   const e2 = Object.create(null); for (const k of Object.keys(ev)) if (!["evidence_digest_sha256", "rfc3161_timestamp", "producer_signatures"].includes(k)) e2[k] = ev[k];
   const recomputed = sha256(Buffer.from(canon(e2), "utf-8")).toString("hex"); const digestOk = recomputed === ev.evidence_digest_sha256;
   const artResults = []; let allOk = true; const forBindings = [];
-  for (const a of Array.isArray(ev.artifacts) ? ev.artifacts : []) {
-    try { const parsed = parseSdJwt(a.sd_jwt_compact); const sigOk = es256Verify(parsed.signingInput, parsed.signature, a.key?.jwk); const resolved = resolveDisclosures(parsed.payload, parsed.disclosures);
+  for (const a of ev.artifacts) {
+    try { const compact = a.sd_jwt_compact; if (typeof compact !== "string" || compact !== compact.trim() || !/^[\x00-\x7f]*$/.test(compact)) throw new Refused("sd_jwt_compact must be the exact ASCII compact serialization");
+      if (!a.key || typeof a.key !== "object" || Array.isArray(a.key)) throw new Refused("artifact key.jwk must be an object");
+      const parsed = parseSdJwt(compact); if (parsed.payload === null || typeof parsed.payload !== "object" || Array.isArray(parsed.payload) || parsed.header === null || typeof parsed.header !== "object" || Array.isArray(parsed.header)) throw new Refused("JWT header and payload must be objects");
+      const sigOk = es256Verify(parsed.signingInput, parsed.signature, a.key.jwk); const resolved = resolveDisclosures(parsed.payload, parsed.disclosures);
       const claimsOk = canon(resolved) === canon(a.resolved_claims ?? null); const kb = verifyKbJwt(parsed, resolved);
       artResults.push({ name: a.name, signature_ok: sigOk, claims_match: claimsOk, kb_jwt: kb, provenance_class: a.key?.provenance_class });
-      allOk = allOk && sigOk && claimsOk && kb.verified !== false; forBindings.push({ name: a.name, compact: a.sd_jwt_compact, resolved });
+      allOk = allOk && sigOk && claimsOk && kb.verified !== false; forBindings.push({ name: a.name, compact: parsed.compact, resolved });
     } catch (e) { artResults.push({ name: a?.name, error: String(e.message ?? e) }); allOk = false; }
   }
-  const bindingsOk = allOk ? canon(findBindings(forBindings)) === canon(ev.bindings ?? []) : false;
+  const bindingsOk = allOk ? canon(findBindings(forBindings)) === canon(ev.bindings ?? []) : false;   // `bindings` absent = [] in both; null is refused above
   const ts = ev.rfc3161_timestamp ?? {}; let rfc = { claimed: Boolean(ts.anchored), verified: null };
-  if (ts.anchored && ts.tsr_b64) rfc = { claimed: true, ...verifyRfc3161(ts.tsr_b64, recomputed) };   // status Granted + messageImprint == digest, as the reference does; the TSA chain is validated by neither
+  if (ts.anchored && typeof ts.tsr_b64 === "string") rfc = { claimed: true, ...verifyRfc3161(ts.tsr_b64, recomputed), tsa_verified: null };   // BINDING only (status granted + messageImprint == digest, SPEC §3.2); TSA signature/chain: this verifier cannot (no openssl) -> tsa_verified null = incomplete under --tsa-cert
+  else if (ts.anchored) rfc = { claimed: true, verified: false, note: "anchored claimed but tsr_b64 absent or not a string" };
   const classes = [...new Set(artResults.map((r) => r.provenance_class).filter(Boolean))].sort();
   let producer; const prod = ev.producer_signatures;
   if (prod) { const pv = verifyProducerBlock(prod, Buffer.from(recomputed, "ascii"), opts.trusted ?? null); producer = { present: true, scheme: prod.scheme, ok: pv.ok, incomplete: pv.incomplete, pq_protected: pv.pq_protected, trusted: pv.trusted, signatures: pv.results };
@@ -185,16 +196,18 @@ export function verifyEvidence(path, opts = {}) {
   let policyOk = true; if (opts.requireProducer && !(producer.present && producer.ok)) policyOk = false;
   if (opts.requirePq && !(producer.pq_protected && producer.trusted === true)) policyOk = false;
   if (opts.requireAnchor && rfc.verified !== true) policyOk = false;
+  if (opts.requireAnchor && opts.tsaCert && rfc.tsa_verified !== true) policyOk = false;   // TSA verification requested: this verifier cannot perform it -> not a pass (declared)
   return { digest_ok: digestOk, artifacts: artResults, producer_signatures: producer, pq_protected: producer.pq_protected ?? false, bindings_ok: bindingsOk, rfc3161: rfc, provenance_classes: classes,
     self_asserted_only: classes.length > 0 && classes.every((c) => c === "jwk_header"), policy_ok: policyOk,
     valid: Boolean(artResults.length && digestOk && allOk && bindingsOk && rfc.verified !== false && policyOk), honest_scope: ev.honest_scope ?? null, mldsa_backend: HAVE_MLDSA };
 }
 function main(argv) {
-  const usage = () => { console.error("usage: ap2-verify.mjs <evidence.json> [--trusted-producer-key ALG=B64]... [--require-producer] [--require-pq] [--require-anchor]"); process.exit(2); };
+  const usage = () => { console.error("usage: ap2-verify.mjs <evidence.json> [--trusted-producer-key ALG=B64]... [--require-producer] [--require-pq] [--require-anchor] [--tsa-cert PEM]"); process.exit(2); };
   const a = argv.slice(2); const opts = { trusted: null }; let path = null;
   for (let i = 0; i < a.length; i++) { let tok = a[i], eqv = null; const eq = tok.indexOf("="); if (eq > 0 && tok.startsWith("--")) { eqv = tok.slice(eq + 1); tok = tok.slice(0, eq); }
     const nx = () => { const v = eqv !== null ? eqv : a[++i]; if (v === undefined || v === "" || v.startsWith("-")) usage(); return v; };
     if (tok === "--trusted-producer-key") { const v = nx(); const k = v.indexOf("="); if (k <= 0 || k === v.length - 1) usage(); opts.trusted = opts.trusted ?? {}; (opts.trusted[v.slice(0, k)] ??= []).push(v.slice(k + 1)); }
+    else if (tok === "--tsa-cert") opts.tsaCert = nx();
     else if (tok === "--require-producer" && eqv === null) opts.requireProducer = true; else if (tok === "--require-pq" && eqv === null) opts.requirePq = true; else if (tok === "--require-anchor" && eqv === null) opts.requireAnchor = true;
     else if (tok.startsWith("-") || path !== null) usage(); else path = tok; }
   if (!path) usage();

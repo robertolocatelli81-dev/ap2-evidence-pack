@@ -20,11 +20,16 @@ measured on the 1.0.2 verifier first (every case below was red there).
 - **Independent verifier** `verifiers/js/ap2-verify.mjs` (Node, `node:crypto` only): ES256, SD-JWT disclosures, KB-JWT,
   bindings, producer Ed25519 / ECDSA P-256 / ML-DSA-65 (OpenSSL ≥ 3.5, else SKIP = incomplete), RFC 3161 status +
   messageImprint (SPEC §3.2), the same profile and CLI grammar.
-- **Differential oracle** `verifiers/differential_oracle.py`: 8 vectors + 20 hostile files + 14 CLI cases, 0 disagreements;
-  21 red against 1.0.2. Two new vectors with a **real RFC 3161 token** from a probe TSA (certificate shipped):
+- **Differential oracle** `verifiers/differential_oracle.py`: 8 vectors (+1 under `--tsa-cert`) + 39 hostile files + 15 CLI cases
+  + 1 positive control = 64, 0 disagreements, 1 declared (TSA proof is openssl-only); 43 red against 1.0.2; a crash counts as
+  a disagreement. Review round 1 (Opus/Sonnet/Haiku) added the wrong-JSON-shape class (tracebacks in the reference), the
+  empty producer block, lenient `tsr_b64` and JWK coordinates, the binder-side base64url mutations and the forged TimeStampResp. Two new vectors with a **real RFC 3161 token** from a probe TSA (certificate shipped):
   `anchor_valid` (ACCEPT) and `anchor_wrong_digest` (a real token for another digest: REJECT) — before, the only anchor
   vector was garbage bytes, so a verifier that never parsed the token passed it.
-- RFC 3161: `verified` = status granted + messageImprint equals the digest, in both verifiers; the TSA signature/chain is
-  validated by neither (SPEC §3.2, declared).
+- RFC 3161: `verified` = status granted + messageImprint equals the digest (BINDING), in both verifiers by a DER walk — a
+  self-forged TimeStampResp with the right imprint satisfies it, so it never meant TSA authenticity (1.0.x said
+  "cryptographically verify": it ran `openssl ts -reply -text`, which verifies nothing). New `--tsa-cert <PEM>`: the
+  reference verifies the token's signature and chain with `openssl ts -verify -CAfile` (`tsa_verified`), required by
+  `--require-anchor --tsa-cert`; the JS verifier cannot and does not pass that policy (declared).
 
 Verdicts unchanged on in-profile evidence produced by 1.0.x `build`.

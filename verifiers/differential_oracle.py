@@ -22,6 +22,22 @@ def rehash(ev, canon_fn=canon):
     ev = dict(ev); ev["evidence_digest_sha256"] = hashlib.sha256(canon_fn(e2)).hexdigest(); ev.pop("producer_signatures", None); return ev
 
 
+def _der(tag, body):
+    n = len(body); lb = bytes([n]) if n < 128 else bytes([0x82, n >> 8, n & 0xFF]); return bytes([tag]) + lb + body
+
+
+def _forged_tsr(digest):
+    tst = _der(0x30, _der(0x02, b"\x01") + _der(0x06, bytes.fromhex("2a03")) + _der(0x30, _der(0x30, _der(0x06, bytes.fromhex("608648016503040201"))) + _der(0x04, digest)) + _der(0x02, b"\x01") + _der(0x18, b"20260922100000Z"))
+    eci = _der(0x30, _der(0x06, bytes.fromhex("2a864886f70d010904")) + _der(0xA0, _der(0x04, tst)))
+    sd = _der(0x30, _der(0x02, b"\x03") + _der(0x31, b"") + eci + _der(0x31, b""))
+    return _der(0x30, _der(0x30, _der(0x02, b"\x00")) + _der(0x30, _der(0x06, bytes.fromhex("2a864886f70d010702")) + _der(0xA0, sd)))
+
+
+# Declared divergence: TSA signature/chain verification needs openssl (Python only); the JS verifier reports tsa_verified null
+# and under --require-anchor --tsa-cert does NOT pass (policy_ok false) — the same verdict, one different field.
+DECLARED = {"vector-anchor_valid-tsa-cert": {"py": (True, True, True, True, True, True, True), "js": (False, True, True, True, True, True, False)}}   # only the REAL token differs: Python proves the TSA, JS cannot
+
+
 def flags_for(policy):
     fl = []
     for alg, keys in (policy.get("trusted_producer_keys") or {}).items():
@@ -39,7 +55,7 @@ def run(cmd, path, flags):
         r = json.loads(out.stdout); prod = r.get("producer_signatures") or {}
         return (r.get("valid"), r.get("digest_ok"), r.get("bindings_ok"), prod.get("ok"), r.get("pq_protected"), (r.get("rfc3161") or {}).get("verified"), r.get("policy_ok"))
     except Exception:  # noqa: BLE001
-        return ("NONJSON/CRASH",) * 7
+        return ("NONJSON/CRASH:" + os.path.basename(cmd[-1] if cmd[-1] != "verify" else cmd[-2]),) * 7   # distinct per verifier: two crashes never agree
 
 
 def build_cases(d):
@@ -67,10 +83,33 @@ def build_cases(d):
     cases["artifacts-empty"] = (w("empty", json.dumps(rehash(dict(base, artifacts=[], bindings=[])))), [])
     cases["bom-prefixed"] = (w("bom", "﻿" + base_text), [])
     cases["not-an-object"] = (w("list", "[1]"), [])
-    # SD-JWT segment shapes (digest recomputed so only the artifact layer decides)
-    ev = copy.deepcopy(base); c = ev["artifacts"][0]["sd_jwt_compact"]; parts = c.split("~"); h, p_, s_ = parts[0].split(".")
+    # SD-JWT segment shapes on the BINDER artifact (`cart`, index 1 — mutating the bound `intent` would flip bindings_ok for
+    # every verifier and hide the base64url rule, review r1); digest recomputed so only the artifact layer decides
+    binder = next(i for i, a in enumerate(base["artifacts"]) if a["name"] == "cart")
+    c = base["artifacts"][binder]["sd_jwt_compact"]; parts = c.split("~"); h, p_, s_ = parts[0].split(".")
     for nm, sig in (("sig-b64url-space", s_[:10] + " " + s_[10:]), ("sig-b64url-padded", s_ + "=="), ("sig-b64url-plus", s_.replace("-", "+", 1) if "-" in s_ else s_[:-1] + "+")):
-        e = copy.deepcopy(base); pp = parts[:]; pp[0] = ".".join([h, p_, sig]); e["artifacts"][0]["sd_jwt_compact"] = "~".join(pp); cases[nm] = (w(nm, json.dumps(rehash(e))), [])
+        e = copy.deepcopy(base); pp = parts[:]; pp[0] = ".".join([h, p_, sig]); e["artifacts"][binder]["sd_jwt_compact"] = "~".join(pp); cases[nm] = (w(nm, json.dumps(rehash(e))), [])
+    # review r1: top-level field SHAPES (Python raised TypeError/AttributeError; JS answered), empty producer block, lenient
+    # tsr_b64 / JWK coordinates, deep JWT header, non-object payload, trailing NBSP on the compact serialization
+    for nm, mut in (("artifacts-null", lambda e: e.__setitem__("artifacts", None)), ("artifacts-string", lambda e: e.__setitem__("artifacts", "x")),
+                    ("artifacts-list-of-null", lambda e: e.__setitem__("artifacts", [None])), ("key-null", lambda e: e["artifacts"][0].__setitem__("key", None)),
+                    ("jwk-list", lambda e: e["artifacts"][0]["key"].__setitem__("jwk", [1])), ("rfc3161-null", lambda e: e.__setitem__("rfc3161_timestamp", None)),
+                    ("rfc3161-string", lambda e: e.__setitem__("rfc3161_timestamp", "x")), ("producer-string", lambda e: e.__setitem__("producer_signatures", "x")),
+                    ("producer-empty-object", lambda e: e.__setitem__("producer_signatures", {})), ("producer-list", lambda e: e.__setitem__("producer_signatures", [])),
+                    ("producer-signatures-list-of-null", lambda e: e.__setitem__("producer_signatures", {"signatures": [None]}))):
+        e = copy.deepcopy(base); mut(e); cases[nm] = (w(nm, json.dumps(e)), [])
+    e = copy.deepcopy(base); e["bindings"] = None; cases["bindings-null-rehashed"] = (w("bnull", json.dumps(rehash(e))), [])
+    e = copy.deepcopy(base); pp = parts[:]; pp[0] = ".".join([h, "W10", s_]); e["artifacts"][binder]["sd_jwt_compact"] = "~".join(pp); cases["payload-list-rehashed"] = (w("plist", json.dumps(rehash(e))), [])
+    deep = base64.urlsafe_b64encode(("[" * 100000).encode()).decode().rstrip("="); e = copy.deepcopy(base); pp = parts[:]; pp[0] = ".".join([deep, p_, s_]); e["artifacts"][binder]["sd_jwt_compact"] = "~".join(pp); cases["header-deep-rehashed"] = (w("hdeep", json.dumps(rehash(e))), [])
+    e = copy.deepcopy(base); e["artifacts"][binder]["sd_jwt_compact"] = c + "\u00a0"; cases["compact-trailing-nbsp-rehashed"] = (w("nbsp", json.dumps(rehash(e))), [])
+    e = copy.deepcopy(base); e["artifacts"][binder]["key"]["jwk"]["x"] = e["artifacts"][binder]["key"]["jwk"]["x"] + "="; cases["jwk-x-padded-rehashed"] = (w("jwkpad", json.dumps(rehash(e))), [])
+    av = json.load(open(os.path.join(vdir, "anchor_valid.json"))); e = copy.deepcopy(av); t = e["rfc3161_timestamp"]["tsr_b64"]; e["rfc3161_timestamp"]["tsr_b64"] = t[:10] + " " + t[10:]; cases["tsr-b64-space"] = (w("tsrsp", json.dumps(e)), [])
+    # a self-forged TimeStampResp (status 0, imprint = digest, no signer): binding holds, TSA does not — declared divergence under --tsa-cert
+    forged = _forged_tsr(bytes.fromhex(base["evidence_digest_sha256"]))
+    e = dict(base); e["rfc3161_timestamp"] = {"anchored": True, "tsa_url": "forged", "tsr_b64": base64.b64encode(forged).decode()}
+    cases["tsr-self-forged-binding-only"] = (w("forged", json.dumps(e)), ["--require-anchor"])
+    cases["tsr-self-forged-tsa-cert"] = (w("forged2", json.dumps(e)), ["--require-anchor", "--tsa-cert", os.path.join(vdir, "anchor_probe_tsa.crt")])
+    cases["vector-anchor_valid-tsa-cert"] = (os.path.join(vdir, "anchor_valid.json"), ["--require-anchor", "--tsa-cert", os.path.join(vdir, "anchor_probe_tsa.crt")])
     e = copy.deepcopy(base); e["artifacts"][0]["resolved_claims"]["extra"] = "x"; cases["claims-mismatch-rehashed"] = (w("claims", json.dumps(rehash(e))), [])
     e = copy.deepcopy(base); e["bindings"] = []; cases["bindings-dropped-rehashed"] = (w("bind", json.dumps(rehash(e))), [])
     # producer block shapes
@@ -82,7 +121,7 @@ def build_cases(d):
 
 CLI = {"cli-no-path": [], "cli-unknown-flag": ["V", "--no-such"], "cli-two-positionals": ["V", "V"], "cli-empty-path": [""], "cli-help": ["--help"], "cli-h": ["-h"],
        "cli-double-dash": ["--", "V"], "cli-bool-with-value": ["V", "--require-pq=1"], "cli-key-empty": ["V", "--trusted-producer-key", ""], "cli-key-missing-value": ["V", "--trusted-producer-key"],
-       "cli-key-flag-as-value": ["V", "--trusted-producer-key", "--require-pq"], "cli-key-no-alg": ["V", "--trusted-producer-key", "abc"], "cli-repeated-key-empty-first": ["V", "--trusted-producer-key", "", "--trusted-producer-key", "ed25519=AA=="],
+       "cli-key-flag-as-value": ["V", "--trusted-producer-key", "--require-pq"], "cli-key-no-alg": ["V", "--trusted-producer-key", "abc"], "cli-tsa-cert-empty": ["V", "--tsa-cert", ""], "cli-repeated-key-empty-first": ["V", "--trusted-producer-key", "", "--trusted-producer-key", "ed25519=AA=="],
        "cli-eq-form-verdict": ["V", "--trusted-producer-key=ed25519=AA=="]}
 
 
@@ -92,8 +131,11 @@ def main():
     tmp = tempfile.mkdtemp(); diffs = 0; n = 0
     try:
         cases = build_cases(tmp)
+        declared = 0
         for name, (path, flags) in cases.items():
             py, js = run(PY, path, flags), run(JS, path, flags); n += 1
+            if name in DECLARED and (py, js) == (DECLARED[name]["py"], DECLARED[name]["js"]):
+                declared += 1; print(f"  [DECL] {name:34} py={py} js={js}  <- declared: TSA verification is openssl-only"); continue
             ok = py == js; diffs += 0 if ok else 1
             print(f"  [{'OK ' if ok else 'DIFF'}] {name:34} py={py} js={js}")
         valid = os.path.join(ROOT, "spec", "vectors", "ap2", "valid_signed.json")
@@ -111,7 +153,7 @@ def main():
             print(f"  [{'OK ' if ok else 'DIFF'}] {name:34} expect {want}: {row}")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    print(f"disagreements: {diffs}/{n}"); return 1 if diffs else 0
+    print(f"disagreements: {diffs}/{n} (declared: {declared})"); return 1 if diffs else 0
 
 
 if __name__ == "__main__":

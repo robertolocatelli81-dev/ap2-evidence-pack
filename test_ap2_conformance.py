@@ -57,28 +57,73 @@ class TestAp2ConformanceVectors(unittest.TestCase):
     def test_cli_grammar_is_one_with_the_js_verifier(self):
         import subprocess
         V = os.path.join(_HERE, "spec", "vectors", "ap2", "valid_signed.json")
+        clis = [[sys.executable, os.path.join(_HERE, "ap2_evidence.py"), "verify"]]
+        if shutil.which("node"):
+            clis.append(["node", os.path.join(_HERE, "verifiers", "js", "ap2-verify.mjs")])
         for extra in ([], [V, "--no-such"], [V, V], [""], ["--help"], ["-h"], ["--", V], [V, "--require-pq=1"], [V, "--trusted-producer-key", ""],
-                      [V, "--trusted-producer-key"], [V, "--trusted-producer-key", "--require-pq"], [V, "--trusted-producer-key", "abc"], [V, "--trusted-producer-key", "", "--trusted-producer-key", "ed25519=AA=="]):
-            out = subprocess.run([sys.executable, os.path.join(_HERE, "ap2_evidence.py"), "verify"] + extra, capture_output=True, text=True)
-            self.assertEqual(out.returncode, 2, (extra, out.stdout[:80], out.stderr[-120:])); self.assertEqual(out.stdout, "")
-        out = subprocess.run([sys.executable, os.path.join(_HERE, "ap2_evidence.py"), "verify", V], capture_output=True, text=True)
-        self.assertEqual(out.returncode, 0); self.assertTrue(json.loads(out.stdout)["valid"])
+                      [V, "--trusted-producer-key"], [V, "--trusted-producer-key", "--require-pq"], [V, "--trusted-producer-key", "abc"], [V, "--trusted-producer-key", "", "--trusted-producer-key", "ed25519=AA=="], [V, "--tsa-cert", ""]):
+            for cli in clis:
+                out = subprocess.run(cli + extra, capture_output=True, text=True)
+                self.assertEqual(out.returncode, 2, (cli[0], extra, out.stdout[:80], out.stderr[-120:])); self.assertEqual(out.stdout, "")
+        for cli in clis:
+            out = subprocess.run(cli + [V], capture_output=True, text=True)
+            self.assertEqual(out.returncode, 0, cli[0]); self.assertTrue(json.loads(out.stdout)["valid"])
+
+    def test_wrong_json_shapes_are_refusals_in_both_verifiers(self):
+        # review r1: artifacts / key / jwk / rfc3161_timestamp / producer_signatures of the wrong type were TypeError /
+        # AttributeError tracebacks in the reference; {} as a producer block was "absent" (valid True)
+        import copy, subprocess, tempfile
+        base = json.load(open(os.path.join(_HERE, "spec", "vectors", "ap2", "valid_signed.json"))); d = tempfile.mkdtemp()
+        muts = {"artifacts-null": lambda e: e.__setitem__("artifacts", None), "artifacts-string": lambda e: e.__setitem__("artifacts", "x"),
+                "artifacts-list-of-null": lambda e: e.__setitem__("artifacts", [None]), "key-null": lambda e: e["artifacts"][0].__setitem__("key", None),
+                "jwk-list": lambda e: e["artifacts"][0]["key"].__setitem__("jwk", [1]), "rfc3161-null": lambda e: e.__setitem__("rfc3161_timestamp", None),
+                "rfc3161-string": lambda e: e.__setitem__("rfc3161_timestamp", "x"), "producer-string": lambda e: e.__setitem__("producer_signatures", "x"),
+                "producer-empty": lambda e: e.__setitem__("producer_signatures", {}), "producer-list": lambda e: e.__setitem__("producer_signatures", []),
+                "producer-sigs-null-entry": lambda e: e.__setitem__("producer_signatures", {"signatures": [None]})}
+        for name, mut in muts.items():
+            e = copy.deepcopy(base); mut(e); p = os.path.join(d, name + ".json"); json.dump(e, open(p, "w"))
+            r = ap2.verify_evidence(p); self.assertFalse(r["valid"], name)
+            if shutil.which("node"):
+                out = subprocess.run(["node", os.path.join(_HERE, "verifiers", "js", "ap2-verify.mjs"), p], capture_output=True, text=True)
+                self.assertFalse(json.loads(out.stdout)["valid"], name)
+
+    @unittest.skipUnless(shutil.which("openssl"), "openssl absent: TSA verification not measured")
+    def test_rfc3161_binding_vs_tsa_authenticity(self):
+        # a self-forged TimeStampResp (status 0, imprint = digest, no signer) satisfies BINDING (SPEC §3.2) but not the TSA
+        # check; the real probe token passes both with its certificate; the real token for another digest fails binding
+        import base64, tempfile
+        vdir = os.path.join(_HERE, "spec", "vectors", "ap2"); cert = os.path.join(vdir, "anchor_probe_tsa.crt")
+        r = ap2.verify_evidence(os.path.join(vdir, "anchor_valid.json"), require_anchor=True, tsa_cert=cert)
+        self.assertTrue(r["valid"]); self.assertTrue(r["rfc3161"]["verified"]); self.assertTrue(r["rfc3161"]["tsa_verified"])
+        r = ap2.verify_evidence(os.path.join(vdir, "anchor_wrong_digest.json"), require_anchor=True, tsa_cert=cert)
+        self.assertFalse(r["valid"]); self.assertFalse(r["rfc3161"]["verified"])
+        base = json.load(open(os.path.join(vdir, "valid_signed.json")))
+        def der(tag, body):
+            n = len(body); lb = bytes([n]) if n < 128 else bytes([0x82, n >> 8, n & 0xFF]); return bytes([tag]) + lb + body
+        dg = bytes.fromhex(base["evidence_digest_sha256"])
+        tst = der(0x30, der(0x02, b"\x01") + der(0x06, bytes.fromhex("2a03")) + der(0x30, der(0x30, der(0x06, bytes.fromhex("608648016503040201"))) + der(0x04, dg)) + der(0x02, b"\x01") + der(0x18, b"20260922100000Z"))
+        eci = der(0x30, der(0x06, bytes.fromhex("2a864886f70d010904")) + der(0xA0, der(0x04, tst))); sd = der(0x30, der(0x02, b"\x03") + der(0x31, b"") + eci + der(0x31, b""))
+        resp = der(0x30, der(0x30, der(0x02, b"\x00")) + der(0x30, der(0x06, bytes.fromhex("2a864886f70d010702")) + der(0xA0, sd)))
+        e = dict(base); e["rfc3161_timestamp"] = {"anchored": True, "tsa_url": "forged", "tsr_b64": base64.b64encode(resp).decode()}
+        p = os.path.join(tempfile.mkdtemp(), "forged.json"); json.dump(e, open(p, "w"))
+        r = ap2.verify_evidence(p, require_anchor=True); self.assertTrue(r["rfc3161"]["verified"]); self.assertTrue(r["valid"])       # binding only: passes (declared)
+        r = ap2.verify_evidence(p, require_anchor=True, tsa_cert=cert); self.assertFalse(r["rfc3161"]["tsa_verified"]); self.assertFalse(r["valid"])
 
     @unittest.skipUnless(shutil.which("node"), "node absent: the JS verifier is not measured")
-    def test_js_verifier_agrees_on_every_vector(self):
-        import subprocess
-        for exp_path in sorted(glob.glob(os.path.join(_HERE, "spec", "vectors", "ap2", "*.expected.json"))):
-            exp = json.load(open(exp_path)); name = exp["vector"]; pol = exp.get("policy", {})
-            if any(not shutil.which(t) for t in exp.get("requires", [])): continue
+    def test_js_verifier_is_conformant_on_all_normative_fields(self):
+        # the JS verifier through the SAME conformance runner as the reference: every normative field of every vector
+        import subprocess, run_ap2_conformance as rc
+        def js_verify(path, trusted_producer_keys=None, require_pq=False, require_producer=False, require_anchor=False, **_):
             flags = []
-            for alg, keys in (pol.get("trusted_producer_keys") or {}).items():
+            for alg, keys in (trusted_producer_keys or {}).items():
                 for k in ([keys] if isinstance(keys, str) else keys): flags += ["--trusted-producer-key", f"{alg}={k}"]
-            for f in ("require_producer", "require_pq", "require_anchor"):
-                if pol.get(f): flags.append("--" + f.replace("_", "-"))
-            out = subprocess.run(["node", os.path.join(_HERE, "verifiers", "js", "ap2-verify.mjs"), os.path.join(_HERE, "spec", "vectors", "ap2", name + ".json")] + flags, capture_output=True, text=True)
-            got = json.loads(out.stdout); norm = exp["normative"]
-            self.assertEqual(got["valid"], norm["valid"], name); self.assertEqual(got["digest_ok"], norm["digest_ok"], name)
-            self.assertEqual((got.get("rfc3161") or {}).get("verified"), norm["rfc3161_verified"], name); self.assertEqual(got["pq_protected"], norm["pq_protected"], name)
+            for flag, on in (("--require-producer", require_producer), ("--require-pq", require_pq), ("--require-anchor", require_anchor)):
+                if on: flags.append(flag)
+            out = subprocess.run(["node", os.path.join(_HERE, "verifiers", "js", "ap2-verify.mjs"), path] + flags, capture_output=True, text=True)
+            return json.loads(out.stdout)
+        r = rc.run(verify_fn=js_verify)
+        self.assertTrue(r["conformant"], r)
+        self.assertEqual(len(r["results"]), 8)
 
 
 def load_tests(loader, tests, pattern):

@@ -27,7 +27,8 @@ This tool turns a set of SD-JWT mandates into **one evidence file** that verifie
   (hex and base64url SHA-256);
 - seals everything under a canonical SHA-256 digest with an **optional RFC 3161
   timestamp**, so "this key material existed and verified at time T" is attested by a
-  third-party clock — and verifies that token cryptographically on re-check.
+  third-party clock — re-checked offline for binding (status + imprint) by both verifiers,
+  and for TSA authenticity by the reference when the TSA certificate is supplied (`--tsa-cert`).
 
 ## Usage
 
@@ -84,21 +85,28 @@ python3 spec/vectors/ap2/run_ap2_conformance.py   # exit 0 = conformant
 | Implementation | Runtime / deps | Status |
 |---|---|---|
 | `ap2_evidence.py` | Python 3 + `cryptography` | reference — conformant 8/8; ACVP ML-DSA-65 sigVer 9/9 |
-| `verifiers/js/ap2-verify.mjs` | Node ≥ 20, `node:crypto` only (ML-DSA-65 through the build's OpenSSL ≥ 3.5, else SKIP = incomplete, never a pass) | independent — 8/8; agrees with the reference on every oracle case |
+| `verifiers/js/ap2-verify.mjs` | Node ≥ 20, `node:crypto` only (ML-DSA-65 through the build's OpenSSL ≥ 3.5, else SKIP = incomplete, never a pass; no TSA signature check — `tsa_verified` null) | independent — conformant 8/8 on every normative field through `run_ap2_conformance.run(verify_fn=…)` (`test_ap2_conformance.py`) |
 
 **Differential oracle** (`verifiers/differential_oracle.py`, 22/09/2026): the two verifiers must
 give the same `(valid, digest_ok, bindings_ok, producer_ok, pq_protected, rfc3161_verified,
-policy_ok)` on the 8 vectors under their declared policy, 20 hostile files that carry the
-digest a lenient verifier would recompute (`__proto__` key, non-UTF-8, float `1.0`, 2^53+1,
-100000-deep, `NaN`, lone surrogate, duplicate key, BOM, non-object, base64url with a
-space / padding / `+`, claims and bindings mismatch, producer base64 with a space, unknown
-producer algorithm, PQ signature stripped under `--require-pq`) and 14 command-line
-grammar cases (usage exit 2, no verdict, in both): **0 disagreements on 43 cases**. The
-same oracle against the 1.0.2 reference is red on 21 (measured 22/09/2026: the CLI had
-no policy flags, accepted float / 2^53+1 / lone surrogate / a space inside a producer
-signature with a recomputed digest, crashed on non-UTF-8, 100000-deep, BOM, a missing path,
-and answered `--help` with exit 0 and `--` with a verdict). Ablation: with the strict
-parser and base64 removed from the reference, `test_ap2_conformance.py` is red.
+policy_ok)` on the 8 vectors under their declared policy (plus `anchor_valid` under
+`--require-anchor --tsa-cert`), 39 hostile files that carry the digest a lenient verifier would
+recompute or a wrong JSON shape (`__proto__` key, non-UTF-8, float `1.0`, 2^53+1, 100000-deep,
+`NaN`, lone surrogate, duplicate key, BOM, non-object, `artifacts`/`key`/`jwk`/`rfc3161_timestamp`/
+`producer_signatures` of the wrong type, an empty producer block, base64url with a space /
+padding / `+` on the binding artifact, a padded JWK coordinate, a deep JWT header, a non-object
+payload, a trailing NBSP on the compact serialization, a space inside `tsr_b64`, claims and
+bindings mismatch, producer base64 with a space, unknown producer algorithm, PQ signature
+stripped under `--require-pq`, a self-forged TimeStampResp with the right imprint) and 15
+command-line grammar cases (usage exit 2, no verdict, in both), plus one positive control
+(non-ASCII text, in profile): **0 disagreements on 64 cases, 1 declared** — the real token under
+`--tsa-cert`, where the reference proves the TSA with openssl and the JS verifier reports
+`tsa_verified: null` and does not pass the policy. A crash counts as a disagreement. The same
+oracle against the 1.0.2 reference is red on 43 (measured 22/09/2026: the CLI had no policy
+flags; float / 2^53+1 / lone surrogate / a space inside a producer signature or inside `tsr_b64`
+accepted; `producer_signatures: {}` treated as absent; tracebacks on non-UTF-8, 100000-deep,
+BOM, a missing path and on every wrong-typed field; `--help` exit 0, `--` a verdict). Ablation:
+with the strict parser and base64 removed from the reference, `test_ap2_conformance.py` is red.
 
 Independent implementations (any language): open a PR to be listed here.
 
