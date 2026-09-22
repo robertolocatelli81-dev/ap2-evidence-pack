@@ -184,7 +184,11 @@ the policy flags.
   both verifiers: a KB-JWT whose signature segment is non-canonical base64url verified with `valid: true`, because the
   branch for an unknown holder key returns before the signature is ever decoded, so the §3.1 profile never reached it.
   Both verifiers now apply the profile to all three KB-JWT segments; measured on the previous commit, that pack was
-  `valid: true` in both. The oracle carries the seven KB-JWT branches as cases: 137 cases, 0 disagreements, 4 declared.
+  `valid: true` in both. The same measurement was then redone counting the subprocesses the oracle spawns (85%, not 79%:
+  the first figure missed every case the oracle runs out of process — a measuring instrument reading the wrong quantity,
+  which is the class this release kept finding). The next largest uncovered region, the seven `resolve_disclosures`
+  branches, was probed the same way and found CONCORDANT and correct in both verifiers — no defect there. Both sets are
+  oracle cases now: 144 cases, 0 disagreements, 4 declared.
 
 **Breaking: 1.1.0 refuses every pack built by 1.0.x.** The scope statement is sealed and pinned by SHA-256 (SPEC §1/§8),
 and it was corrected during the review rounds, so a 1.0.x pack is refused with `honest_scope does not match the canonical

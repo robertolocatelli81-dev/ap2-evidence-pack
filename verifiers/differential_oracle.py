@@ -226,6 +226,20 @@ def build_cases(d):
     P("kb-cnf-string-rehashed", '{"iss":"x","cnf":"k"}', {"iss": "x", "cnf": "k"}, kb=kb)
     P("kb-cnf-jwk-empty-rehashed", '{"iss":"x","cnf":{"jwk":{}}}', {"iss": "x", "cnf": {"jwk": {}}}, kb=kb)
     P("fresh-pack-control-valid", '{"iss":"x","_sd":[],"_sd_alg":"sha-256"}', {"iss": "x"})   # positive control of the fresh-key builder: both must say valid
+    # coverage probe before the release, part 2: the seven `resolve_disclosures` branches were the largest uncovered
+    # region of the verify path. Probed and found concordant — these cases keep them that way.
+    dg = lambda s: base64.urlsafe_b64encode(hashlib.sha256(s.encode()).digest()).decode().rstrip("=")  # noqa: E731
+    _d1 = base64.urlsafe_b64encode(b'["salt","k","v"]').decode().rstrip("=")
+    _d2 = base64.urlsafe_b64encode(b'["s2","k","v2"]').decode().rstrip("=")
+    for nm, discs, pay, res in (
+            ("disclosure-not-base64url", ["!!!"], '{"iss":"x","_sd":["%s"]}' % dg("!!!"), {"iss": "x"}),
+            ("disclosure-not-json", [base64.urlsafe_b64encode(b"nope").decode().rstrip("=")], '{"iss":"x","_sd":["%s"]}' % dg(base64.urlsafe_b64encode(b"nope").decode().rstrip("=")), {"iss": "x"}),
+            ("disclosure-is-object", [base64.urlsafe_b64encode(b'{"a":1}').decode().rstrip("=")], '{"iss":"x","_sd":["%s"]}' % dg(base64.urlsafe_b64encode(b'{"a":1}').decode().rstrip("=")), {"iss": "x"}),
+            ("disclosure-four-elements", [base64.urlsafe_b64encode(b'["s","k","v","x"]').decode().rstrip("=")], '{"iss":"x","_sd":["%s"]}' % dg(base64.urlsafe_b64encode(b'["s","k","v","x"]').decode().rstrip("=")), {"iss": "x"}),
+            ("disclosure-duplicate-digest", [_d1, _d1], '{"iss":"x","_sd":["%s"]}' % dg(_d1), {"iss": "x", "k": "v"}),
+            ("disclosure-unused", [_d1], '{"iss":"x"}', {"iss": "x"}),
+            ("disclosure-name-collides", [_d1, _d2], '{"iss":"x","_sd":["%s","%s"]}' % (dg(_d1), dg(_d2)), {"iss": "x", "k": "v"})):
+        cases[nm] = (w(nm, json.dumps(_fresh_pack(base, sk, n, '{"alg":"ES256","typ":"ap2-mandate+sd-jwt"}', pay, res, disclosures=discs))), [])
     # coverage probe before the release: the six KB-JWT branches were never exercised by tests or oracle, and one of them
     # accepted a non-canonical base64url signature segment (the branch returns before the signature is decoded)
     kh = base64.urlsafe_b64encode(b'{"alg":"ES256","typ":"kb+jwt"}').decode().rstrip("=")

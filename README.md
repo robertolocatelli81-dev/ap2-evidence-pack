@@ -102,7 +102,7 @@ policy_ok, producer_present, producer_trusted, rfc3161_claimed/granted/imprint_o
 self_asserted_only, provenance_classes, and the `x5c_leaf` identity of every artifact)`
 — the eleven normative fields of SPEC §6 plus `rfc3161.granted`, `rfc3161.imprint_ok`, `rfc3161.gen_time`,
 `chain_verified`, `provenance_classes` and the `x5c_leaf` identity — on the 8 vectors under their declared policy (plus `anchor_valid` under
-`--require-anchor --tsa-cert`, and the CA-issued `x5c` leaf under `--trust-anchor`), 106 hostile files that carry the digest a lenient verifier would
+`--require-anchor --tsa-cert`, and the CA-issued `x5c` leaf under `--trust-anchor`), 113 hostile files that carry the digest a lenient verifier would
 recompute or a wrong JSON shape (`__proto__` key with the digest recomputed over it, non-UTF-8, float `1.0`, 2^53+1, 100000-deep,
 `NaN`, lone surrogate, duplicate key, BOM, non-object, `artifacts`/`key`/`jwk`/`rfc3161_timestamp`/
 `producer_signatures` of the wrong type, an empty producer block, base64url with a space /
@@ -131,7 +131,7 @@ nothing on stdout, in both — the bare invocation without a subcommand included
 controls (non-ASCII text in profile; a fresh-key pack that must be `valid` in both; the CA-issued `x5c`
 leaf under `--trust-anchor`, the only case in the suite where `self_asserted_only` is false — and its
 negative control, the self-signed leaf against the same anchor, where it stays true):
-**137 cases, 0 disagreements, of which 4 are declared divergences** (the run prints its own
+**144 cases, 0 disagreements, of which 4 are declared divergences** (the run prints its own
 decomposition — `9 vector runs + 99 hostile files + 3 positive controls + 19 CLI cases = 130` — so these
 numbers are copied from a measurement rather than counted by hand, which is how three of them went stale
 during the review rounds) — the real token under `--tsa-cert`, where the
