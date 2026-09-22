@@ -58,8 +58,8 @@ DECLARED = {
     # passes a policy on their strength. NB the gen_time below is the probe TSA token's own genTime: regenerating the
     # anchor vectors changes it and this declaration must be updated with them (the run then reports the mismatch).
     "vector-anchor_valid-tsa-cert": {
-        "py": (True, True, True, True, True, None, True, True, True, True, True, "20260922165547Z", True, True, None, ("jwk_header",), ()),
-        "js": (False, True, True, True, True, None, True, True, True, True, True, "20260922165547Z", False, True, None, ("jwk_header",), ())},
+        "py": (True, True, True, True, True, None, True, True, True, True, True, "20260922172820Z", True, True, None, ("jwk_header",), ()),
+        "js": (False, True, True, True, True, None, True, True, True, True, True, "20260922172820Z", False, True, None, ("jwk_header",), ())},
     "x5c-ca-issued-with-trust-anchor": {
         "py": (True, True, True, False, None, None, False, False, None, None, None, None, True, False, True, ("x5c_header",), _LEAF_CA),
         "js": (True, True, True, False, None, None, False, False, None, None, None, None, True, True, None, ("x5c_header",), _LEAF_CA)},
@@ -386,7 +386,7 @@ def main():
         for name, (path, flags) in cases.items():
             py, js = run(PY, path, flags), run(JS, path, flags); n += 1
             if name in DECLARED and _matches_declared(name, py, js):
-                declared += 1; print(f"  [DECL] {name:34} py={py} js={js}  <- declared: TSA verification is openssl-only"); continue
+                declared += 1; print(f"  [DECL] {name:34} py={py} js={js}  <- declared: " + ("TSA verification" if "tsa-cert" in name else "chain validation") + " is openssl-only"); continue
             ok = py == js; diffs += 0 if ok else 1
             print(f"  [{'OK ' if ok else 'DIFF'}] {name:34} py={py} js={js}")
         valid = os.path.join(ROOT, "spec", "vectors", "ap2", "valid_signed.json")

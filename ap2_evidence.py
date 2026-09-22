@@ -74,12 +74,14 @@ EVIDENCE_FORMAT = "ap2-evidence-pack/1.0"
 
 HONEST_SCOPE = (
     "Proves: these exact SD-JWT artifacts, with the snapshotted key material (see each "
-    "key's provenance_class), verified at build time; the RFC 3161 token (if present) "
-    "anchors their existence to the TSA's clock. Does NOT prove the issuer authorised "
+    "key's provenance_class), verified at build time; the RFC 3161 token (if present) binds this digest to a "
+    "TimeStampResp, and attests the TSA's clock only once the relying party has verified the TSA's signature "
+    "(--tsa-cert): a self-issued token satisfies the binding alone. Does NOT prove the issuer authorised "
     "the key beyond what the provenance class states, does NOT confer eIDAS qualified-"
     "archive legal presumption, and does NOT by itself validate x5c chains to a trust anchor "
     "— that is an act of the relying party at verification time, with `--trust-anchor`, reported in "
-    "`chain_verified` and in each artifact's `x5c_leaf` (SPEC §6.7); nothing about a chain is sealed in this file — and "
+    "`chain_verified` and in each artifact's `x5c_leaf` (SPEC §6.7): the x5c bytes are sealed inside the signed header, the "
+    "validation RESULT never is — and "
     "never proves the truth of the recorded transaction itself. When a producer signature is present, it protects THIS pack integrity, and authenticity ONLY for a relying party that has PINNED the producer public key out of band (an embedded key alone proves consistency, not authenticity), across the retention window (hybrid: a classical signature + FIPS-204 ML-DSA-65, surviving the quantum transition per NIST IR 8547); it does NOT retro-protect the underlying ES256 mandate signature - for the existed-before-a-quantum-adversary claim you still need a trusted time anchor (RFC 3161 / RFC 4998 renewal). 'valid' means each "
     "artifact verifies and the file is intact — NOT that the mandates form a bound "
     "chain (read `bindings`) nor that self-asserted keys prove issuer identity (read "
@@ -1059,7 +1061,7 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
             # artifact must not clear it for the others — measured: a pack whose mandate was `jwk_header` and whose second
             # artifact chained to the anchor reported `self_asserted_only: false`, i.e. "no self-asserted key here", while
             # the mandate-signing key had never been reconciled at all. A label ("supplied", "jwks_fetched") never clears it.
-            "self_asserted_only": bool(art_results) and any(r.get("self_asserted", True) for r in art_results),
+            "self_asserted_only": (not art_results) or any(r.get("self_asserted", True) for r in art_results),   # final check: zero artifacts is not "no self-asserted key", it is nothing measured
             # r8: what the verifier DID about chains — None when no anchor was supplied (so the flag above is fail-closed true)
             # r9: True only if every chain really validated; None when openssl could not measure it. r11: only artifacts that
             # ATTEMPTED a chain count — before, one `jwk_header` artifact anywhere collapsed the field to None even when every

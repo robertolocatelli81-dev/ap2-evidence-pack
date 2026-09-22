@@ -6,8 +6,8 @@
     "jwk": {
      "crv": "P-256",
      "kty": "EC",
-     "x": "3ds04n59oZFzcB0O0Df-ofI0RkrcP-Fdsth7BekcLZU",
-     "y": "c2PqJl8l3v--CzY60fEKbfsM17oVB3USSpNF8-C-MHk"
+     "x": "NFnoZFj13YtdYdP-Cboe0QNAtqq-z8tUpAmQj3wh7_o",
+     "y": "1q_YmE7OI6sK1EcxeGMsuvqlH6lZp1og9EIl1B_kfwo"
     },
     "typ": "ap2-mandate+sd-jwt"
    },
@@ -18,8 +18,8 @@
     "jwk": {
      "crv": "P-256",
      "kty": "EC",
-     "x": "3ds04n59oZFzcB0O0Df-ofI0RkrcP-Fdsth7BekcLZU",
-     "y": "c2PqJl8l3v--CzY60fEKbfsM17oVB3USSpNF8-C-MHk"
+     "x": "NFnoZFj13YtdYdP-Cboe0QNAtqq-z8tUpAmQj3wh7_o",
+     "y": "1q_YmE7OI6sK1EcxeGMsuvqlH6lZp1og9EIl1B_kfwo"
     },
     "note": "key embedded in the protected header (self-asserted)",
     "provenance_class": "jwk_header"
@@ -31,7 +31,7 @@
     "max_amount": "150.00 EUR",
     "merchant_scope": "books"
    },
-   "sd_jwt_compact": "eyJhbGciOiAiRVMyNTYiLCAidHlwIjogImFwMi1tYW5kYXRlK3NkLWp3dCIsICJqd2siOiB7Imt0eSI6ICJFQyIsICJjcnYiOiAiUC0yNTYiLCAieCI6ICIzZHMwNG41OW9aRnpjQjBPMERmLW9mSTBSa3JjUC1GZHN0aDdCZWtjTFpVIiwgInkiOiAiYzJQcUpsOGwzdi0tQ3pZNjBmRUtiZnNNMTdvVkIzVVNTcE5GOC1DLU1IayJ9fQ.eyJpc3MiOiAidXNlci13YWxsZXQiLCAibWFuZGF0ZV90eXBlIjogImludGVudCIsICJfc2QiOiBbIlpXT05hT1R4QklSaVlXZnQweUV3YXplNzBKZVprS0pkcEFkY1hzZVotZ3ciLCAiZ1dPb3hSRVNVUURnVEU3RTVZVHRYNmtHTndua3pvbFdqaU1NRzQ5djRvMCJdLCAiX3NkX2FsZyI6ICJzaGEtMjU2In0.9d5-d-FUMFD7kpbzXbQDb5ETtG_t5BWUJEmf1tX7KVJyvKRMAQ_yTV9B9uysuz_vJCCw2gzJ6Wsm8KNTxllPdg~WyJzYWx0MCIsICJtYXhfYW1vdW50IiwgIjE1MC4wMCBFVVIiXQ~WyJzYWx0MSIsICJtZXJjaGFudF9zY29wZSIsICJib29rcyJd~",
+   "sd_jwt_compact": "eyJhbGciOiAiRVMyNTYiLCAidHlwIjogImFwMi1tYW5kYXRlK3NkLWp3dCIsICJqd2siOiB7Imt0eSI6ICJFQyIsICJjcnYiOiAiUC0yNTYiLCAieCI6ICJORm5vWkZqMTNZdGRZZFAtQ2JvZTBRTkF0cXEtejh0VXBBbVFqM3doN19vIiwgInkiOiAiMXFfWW1FN09JNnNLMUVjeGVHTXN1dnFsSDZsWnAxb2c5RUlsMUJfa2Z3byJ9fQ.eyJpc3MiOiAidXNlci13YWxsZXQiLCAibWFuZGF0ZV90eXBlIjogImludGVudCIsICJfc2QiOiBbIlpXT05hT1R4QklSaVlXZnQweUV3YXplNzBKZVprS0pkcEFkY1hzZVotZ3ciLCAiZ1dPb3hSRVNVUURnVEU3RTVZVHRYNmtHTndua3pvbFdqaU1NRzQ5djRvMCJdLCAiX3NkX2FsZyI6ICJzaGEtMjU2In0.li2r50oZKlk1lTV2nBaoxblbx41VsX-du-CmS8SbfqnbXzj94iDwWvxzOTgd84CR0RzyDh-umu-G5TVN-JrLAw~WyJzYWx0MCIsICJtYXhfYW1vdW50IiwgIjE1MC4wMCBFVVIiXQ~WyJzYWx0MSIsICJtZXJjaGFudF9zY29wZSIsICJib29rcyJd~",
    "verified_at_build": {
     "disclosures_ok": true,
     "signature_ok": true
@@ -43,8 +43,8 @@
     "jwk": {
      "crv": "P-256",
      "kty": "EC",
-     "x": "3ds04n59oZFzcB0O0Df-ofI0RkrcP-Fdsth7BekcLZU",
-     "y": "c2PqJl8l3v--CzY60fEKbfsM17oVB3USSpNF8-C-MHk"
+     "x": "NFnoZFj13YtdYdP-Cboe0QNAtqq-z8tUpAmQj3wh7_o",
+     "y": "1q_YmE7OI6sK1EcxeGMsuvqlH6lZp1og9EIl1B_kfwo"
     },
     "typ": "ap2-mandate+sd-jwt"
    },
@@ -55,22 +55,22 @@
     "jwk": {
      "crv": "P-256",
      "kty": "EC",
-     "x": "3ds04n59oZFzcB0O0Df-ofI0RkrcP-Fdsth7BekcLZU",
-     "y": "c2PqJl8l3v--CzY60fEKbfsM17oVB3USSpNF8-C-MHk"
+     "x": "NFnoZFj13YtdYdP-Cboe0QNAtqq-z8tUpAmQj3wh7_o",
+     "y": "1q_YmE7OI6sK1EcxeGMsuvqlH6lZp1og9EIl1B_kfwo"
     },
     "note": "key embedded in the protected header (self-asserted)",
     "provenance_class": "jwk_header"
    },
    "name": "cart",
    "resolved_claims": {
-    "intent_mandate_hash": "fdf6ba26d115eb2581da3ac9b3961c3574df463260c075f2b61206a5cf23642d",
+    "intent_mandate_hash": "55ed02e2ab2845356aef014b52439902acbf61aa5c1e4838ac01e0136d5995cf",
     "iss": "shopping-agent",
     "items": [
      "book-123"
     ],
     "mandate_type": "cart"
    },
-   "sd_jwt_compact": "eyJhbGciOiAiRVMyNTYiLCAidHlwIjogImFwMi1tYW5kYXRlK3NkLWp3dCIsICJqd2siOiB7Imt0eSI6ICJFQyIsICJjcnYiOiAiUC0yNTYiLCAieCI6ICIzZHMwNG41OW9aRnpjQjBPMERmLW9mSTBSa3JjUC1GZHN0aDdCZWtjTFpVIiwgInkiOiAiYzJQcUpsOGwzdi0tQ3pZNjBmRUtiZnNNMTdvVkIzVVNTcE5GOC1DLU1IayJ9fQ.eyJpc3MiOiAic2hvcHBpbmctYWdlbnQiLCAibWFuZGF0ZV90eXBlIjogImNhcnQiLCAiaW50ZW50X21hbmRhdGVfaGFzaCI6ICJmZGY2YmEyNmQxMTVlYjI1ODFkYTNhYzliMzk2MWMzNTc0ZGY0NjMyNjBjMDc1ZjJiNjEyMDZhNWNmMjM2NDJkIiwgIl9zZCI6IFsiTWtEdWRhLTVHTHNDQUx3clRNazlaS2JBcndnZnVtNUp2d1F5bWY2SzByUSJdLCAiX3NkX2FsZyI6ICJzaGEtMjU2In0.0a0p-8D7vKv4Ux8gta5HoGJkrq-dJszwmvg5JTM6AgT0fq6uaY-RKpNgV-y4Ux4umga8omzVerOrSTUreGPuFw~WyJzYWx0MCIsICJpdGVtcyIsIFsiYm9vay0xMjMiXV0~",
+   "sd_jwt_compact": "eyJhbGciOiAiRVMyNTYiLCAidHlwIjogImFwMi1tYW5kYXRlK3NkLWp3dCIsICJqd2siOiB7Imt0eSI6ICJFQyIsICJjcnYiOiAiUC0yNTYiLCAieCI6ICJORm5vWkZqMTNZdGRZZFAtQ2JvZTBRTkF0cXEtejh0VXBBbVFqM3doN19vIiwgInkiOiAiMXFfWW1FN09JNnNLMUVjeGVHTXN1dnFsSDZsWnAxb2c5RUlsMUJfa2Z3byJ9fQ.eyJpc3MiOiAic2hvcHBpbmctYWdlbnQiLCAibWFuZGF0ZV90eXBlIjogImNhcnQiLCAiaW50ZW50X21hbmRhdGVfaGFzaCI6ICI1NWVkMDJlMmFiMjg0NTM1NmFlZjAxNGI1MjQzOTkwMmFjYmY2MWFhNWMxZTQ4MzhhYzAxZTAxMzZkNTk5NWNmIiwgIl9zZCI6IFsiTWtEdWRhLTVHTHNDQUx3clRNazlaS2JBcndnZnVtNUp2d1F5bWY2SzByUSJdLCAiX3NkX2FsZyI6ICJzaGEtMjU2In0.dbZ8yHlE_5ldB-0sh6ihcFlVhh-tg1sv6UsGHXiajV7ia9o9c5hO669Fu7ODgWA6jWHPzsLP4CqLDYqaaFUvUQ~WyJzYWx0MCIsICJpdGVtcyIsIFsiYm9vay0xMjMiXV0~",
    "verified_at_build": {
     "disclosures_ok": true,
     "signature_ok": true
@@ -85,10 +85,10 @@
    "in": "cart"
   }
  ],
- "created_utc": "2026-09-22T16:55:11Z",
- "evidence_digest_sha256": "988ef0fc28bec9040f61fb4a66d6a654d87b3fecbbb1dbafebf09124b45fac81",
+ "created_utc": "2026-09-22T17:28:20Z",
+ "evidence_digest_sha256": "68d738552a8ea03afc5f6040d1e67495cd8cfd5052ed7226166903be1545bae4",
  "evidence_format": "ap2-evidence-pack/1.0",
- "honest_scope": "Proves: these exact SD-JWT artifacts, with the snapshotted key material (see each key's provenance_class), verified at build time; the RFC 3161 token (if present) anchors their existence to the TSA's clock. Does NOT prove the issuer authorised the key beyond what the provenance class states, does NOT confer eIDAS qualified-archive legal presumption, and does NOT by itself validate x5c chains to a trust anchor — that is an act of the relying party at verification time, with `--trust-anchor`, reported in `chain_verified` and in each artifact's `x5c_leaf` (SPEC §6.7); nothing about a chain is sealed in this file — and never proves the truth of the recorded transaction itself. When a producer signature is present, it protects THIS pack integrity, and authenticity ONLY for a relying party that has PINNED the producer public key out of band (an embedded key alone proves consistency, not authenticity), across the retention window (hybrid: a classical signature + FIPS-204 ML-DSA-65, surviving the quantum transition per NIST IR 8547); it does NOT retro-protect the underlying ES256 mandate signature - for the existed-before-a-quantum-adversary claim you still need a trusted time anchor (RFC 3161 / RFC 4998 renewal). 'valid' means each artifact verifies and the file is intact — NOT that the mandates form a bound chain (read `bindings`) nor that self-asserted keys prove issuer identity (read `provenance_classes`/`self_asserted_only`). KB-JWT holder binding is verified when the issuer payload carries cnf.jwk; without cnf.jwk it is recorded as present-but-unverifiable, never painted green. KB-JWT aud/nonce/iat are RECORDED for the auditor, not validated — their expected values are transaction context this tool cannot know offline.",
+ "honest_scope": "Proves: these exact SD-JWT artifacts, with the snapshotted key material (see each key's provenance_class), verified at build time; the RFC 3161 token (if present) binds this digest to a TimeStampResp, and attests the TSA's clock only once the relying party has verified the TSA's signature (--tsa-cert): a self-issued token satisfies the binding alone. Does NOT prove the issuer authorised the key beyond what the provenance class states, does NOT confer eIDAS qualified-archive legal presumption, and does NOT by itself validate x5c chains to a trust anchor — that is an act of the relying party at verification time, with `--trust-anchor`, reported in `chain_verified` and in each artifact's `x5c_leaf` (SPEC §6.7): the x5c bytes are sealed inside the signed header, the validation RESULT never is — and never proves the truth of the recorded transaction itself. When a producer signature is present, it protects THIS pack integrity, and authenticity ONLY for a relying party that has PINNED the producer public key out of band (an embedded key alone proves consistency, not authenticity), across the retention window (hybrid: a classical signature + FIPS-204 ML-DSA-65, surviving the quantum transition per NIST IR 8547); it does NOT retro-protect the underlying ES256 mandate signature - for the existed-before-a-quantum-adversary claim you still need a trusted time anchor (RFC 3161 / RFC 4998 renewal). 'valid' means each artifact verifies and the file is intact — NOT that the mandates form a bound chain (read `bindings`) nor that self-asserted keys prove issuer identity (read `provenance_classes`/`self_asserted_only`). KB-JWT holder binding is verified when the issuer payload carries cnf.jwk; without cnf.jwk it is recorded as present-but-unverifiable, never painted green. KB-JWT aud/nonce/iat are RECORDED for the auditor, not validated — their expected values are transaction context this tool cannot know offline.",
  "rfc3161_timestamp": {
   "anchored": false,
   "note": "no TSA provided"

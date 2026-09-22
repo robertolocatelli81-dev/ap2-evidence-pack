@@ -73,7 +73,8 @@ fail-closed; authenticity requires the relying party to **pin** the producer pub
 out of band (an embedded key proves consistency, never authenticity). Policy flags on
 `verify_evidence`: `require_producer`, `require_pq`, `require_anchor`. The ML-DSA-65
 path is checked against a NIST ACVP sigVer subset (`pqcrypto/vectors/`) — the same nine
-cases the elara-mesh verifier runs, so both stacks answer to one NIST oracle.
+cases the elara-mesh verifier runs, so both stacks answer to one set of NIST-published ACVP vectors — a local check
+against public test data, not a NIST validation.
 
 ## Conformance (normative)
 
@@ -122,7 +123,7 @@ enum, a list or absent; `evidence_format` `…/2.0` or absent; `subject`/`create
 absent or the wrong type, `created_utc` not ISO-8601; a SIGNED payload that is an array or a string,
 a signed 100000-deep header; a real self-signed `x5c` leaf — canonical, with a space, with a newline,
 one whose key differs from the snapshotted JWK, and one issued by a CA rather than self-signed;
-`provenance_class` `supplied`, `jwks_fetched`, `null` or absent; a rewritten `honest_scope`; a pack whose mandate is
+`provenance_class` `supplied`, out of enum, a list or absent; `honest_scope` absent; a pack whose mandate is
 self-asserted while a second artifact chains to the anchor) and 19 command-line grammar cases
 (18 usage exit 2,
 nothing on stdout, in both — the bare invocation without a subcommand included — and one
@@ -135,16 +136,20 @@ decomposition — `9 vector runs + 99 hostile files + 3 positive controls + 19 C
 numbers are copied from a measurement rather than counted by hand, which is how three of them went stale
 during the review rounds) — the real token under `--tsa-cert`, where the
 reference proves the TSA with openssl and the JS verifier reports `tsa_verified: null` and does
-not pass the policy; and the two `x5c` chains under `--trust-anchor`, which the reference validates with
-`openssl verify` (clearing `self_asserted_only` for the CA-issued one) and the JS verifier cannot (`chain_verified: null`). A crash counts as a disagreement, and a declared divergence that stops
+not pass the policy; and the three packs under `--trust-anchor` — the CA-issued leaf, the self-signed leaf and the mixed
+mandate-plus-chained pack — whose chains the reference validates with `openssl verify` (clearing `self_asserted_only` for
+the CA-issued one) while the JS verifier cannot and reports `chain_verified: null`. A crash counts as a disagreement, and a declared divergence that stops
 appearing is reported. Positive controls (`AP2_ORACLE_PY_ROOT` / `AP2_ORACLE_JS` point the oracle
 at another checkout), measured 22/09/2026 with the 124-case oracle: against the 1.0.2 reference it is red on 97
 (the CLI had no policy flags; float / 2^53+1 / lone surrogate / a space inside a producer
 signature or inside `tsr_b64` accepted; `producer_signatures: {}` and `producer_signatures: []`
 treated as absent, `valid: true`; tracebacks on non-UTF-8, 100000-deep, BOM, a missing path and
 on wrong-typed `artifacts`/`key`/`jwk`/`rfc3161_timestamp`; `--help` exit 0, `--` a verdict);
-against the state after review round 9 it is red on 10 (the round-10 cases and the fields the oracle did not
-compare before), against the state after round 7 on 3 — the two `--trust-anchor` cases, which that reference
+against the states after rounds 10 and 11 it is red on **0**, and that is not a clean bill: pointing the oracle at an older
+checkout makes BOTH verifiers old, so they agree with each other and the run only reports that the declared divergences no
+longer appear. The defects the last two rounds fixed were shared by the two verifiers, which is exactly what a differential
+oracle cannot see — they are held by unit tests measured red against those commits instead. Against round 9 the oracle was
+red on 10 with that round's 130-case set, against the state after round 7 on 3 — the two `--trust-anchor` cases, which that reference
 does not know (it exits 2 on the flag), plus the declared divergence that stops appearing there and is reported as
 a disagreement — against the state after round 6 on 0 — the round-7
 findings were defects the two verifiers SHARED, held instead by two unit tests measured red against the round-6 code
@@ -170,8 +175,8 @@ cases: `bindings` is a SET (SPEC §4) in both, because JavaScript enumerates arr
 first — an ordered comparison split the verdict on a pack the reference itself had built.
 Ablation (`verifiers/lax_python_ablation.sh`, measured 22/09/2026): each strict layer of the reference
 removed **alone** from a copy — file-level strict JSON, JWT-level strict JSON, strict base64url, the JWK
-coordinate length — must turn `test_ap2_conformance.py` red by itself, and each does (2 errors + 1
-failure, then 1 failure each). Measured on 22/09 before that split: ablating base64url alone left the
+coordinate length — must turn `test_ap2_conformance.py` red by itself, and each does (1 error + 1
+failure for the file-level layer, then 1 failure each). Measured on 22/09 before that split: ablating base64url alone left the
 suite green, so that layer was not measured by the unit suite; three unit cases were added for it.
 
 Independent implementations (any language): open a PR to be listed here.

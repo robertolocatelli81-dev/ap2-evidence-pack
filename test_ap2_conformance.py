@@ -116,6 +116,22 @@ class TestAp2ConformanceVectors(unittest.TestCase):
         with self.assertRaises(ap2.Ap2EvidenceError):
             ap2.build_evidence([{"name": "", "sd_jwt": compact}], os.path.join(d, "o.json"))
 
+    def test_honesty_flag_and_scope_are_fail_closed(self):
+        # final check before release: `any()` over zero artifacts printed the GREEN value — an empty pack reported
+        # "no self-asserted key here" — and the sealed scope must be the format's, not the pack's (SPEC §1/§8).
+        import tempfile, copy
+        sys.path.insert(0, os.path.join(_HERE, "verifiers")); import differential_oracle as O
+        base = json.load(open(os.path.join(_HERE, "spec", "vectors", "ap2", "valid_signed.json"))); d = tempfile.mkdtemp()
+        e = copy.deepcopy(base); e["artifacts"] = []; e["bindings"] = []
+        p = os.path.join(d, "empty.json"); json.dump(O.rehash(e), open(p, "w"))
+        r = ap2.verify_evidence(p)
+        self.assertFalse(r["valid"]); self.assertTrue(r["self_asserted_only"], "an empty pack is not 'no self-asserted key'")
+        e = copy.deepcopy(base); e["honest_scope"] = base["honest_scope"].replace("Proves:", "Proves everything:")
+        p = os.path.join(d, "scope.json"); json.dump(O.rehash(e), open(p, "w"))
+        r = ap2.verify_evidence(p)
+        self.assertFalse(r["valid"]); self.assertIn("honest_scope", r["refused"])
+        self.assertTrue(r["self_asserted_only"])   # a refusal receipt never prints the green value either
+
     @unittest.skipUnless(shutil.which("node"), "node absent: the JS receipt is not measured")
     def test_both_receipts_carry_the_same_field_names(self):
         # r10 lesson, measured twice in one day: a trailing `//` comment silently swallowed the rest of its line — first a

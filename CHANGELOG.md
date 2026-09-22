@@ -3,7 +3,9 @@
 ## 1.1.0 — 2026-09-22 — acceptance profile, one CLI grammar, an independent verifier and a differential oracle
 
 Propagation of the verifier-hygiene classes found in the cra-evidence / omega-evidence / cryptovalid reviews (21/09/2026),
-measured on the 1.0.2 verifier first (every case below was red there).
+the hygiene classes of the first four bullets were measured on the 1.0.2 verifier first: that day's oracle was red on 97
+of its 124 cases there. Later rounds found defects 1.0.2 could not exhibit at all, having neither a second verifier nor
+the policy flags.
 
 - **Acceptance profile of the evidence file** (SPEC §3.1): non-UTF-8, BOM, >64 MiB, non-object, duplicate keys, floats,
   integers beyond ±(2^53−1), `NaN`/`Infinity`, nesting >512, lone surrogate escapes are refused with a receipt
@@ -160,4 +162,20 @@ measured on the 1.0.2 verifier first (every case below was red there).
   producing a six-field receipt on one side and a seven-field one on the other. Oracle: 130 cases, 0 disagreements,
   4 declared.
 
-Verdicts unchanged on in-profile evidence produced by 1.0.x `build`.
+- **Final check before the tag** (Fable 5.1, 22/09/2026): three public sentences were false of the measurements and one
+  rule the verifiers enforce was missing from the SPEC. `self_asserted_only` printed its GREEN value on a pack with zero
+  artifacts (`any()` over an empty list) — the honesty flag is fail-closed there too now, in both verifiers, held by
+  `test_honesty_flag_and_scope_are_fail_closed` measured red against the previous commit. Both verifiers refused a
+  rewritten `honest_scope` citing "SPEC §1", but the SPEC carried neither the canonical text nor its hash: §1 now pins it
+  by SHA-256 and §8 reproduces it verbatim, so an independent implementation can enforce the rule from the text alone.
+  The sealed scope itself said "nothing about a chain is sealed in this file" (the x5c bytes are sealed; the validation
+  RESULT is not) and that an RFC 3161 token attests the TSA's clock without adding that this holds only once the relying
+  party verifies the TSA signature — both corrected, which changed the pinned hash a second time and regenerated the
+  vectors again. Stale numbers fixed: the ablation is 1 error + 1 failure on the first layer, the declared divergences are
+  three `--trust-anchor` packs plus the `--tsa-cert` one, and the hostile-file list named three cases that do not exist.
+
+**Breaking: 1.1.0 refuses every pack built by 1.0.x.** The scope statement is sealed and pinned by SHA-256 (SPEC §1/§8),
+and it was corrected during the review rounds, so a 1.0.x pack is refused with `honest_scope does not match the canonical
+scope of this evidence_format` — measured on a pack built with the `v1.0.2` tree and verified with this one, in both
+verifiers. Re-build with 1.1.0. Verdicts on packs built by 1.1.0 are unchanged by the review rounds except where a round
+names the change.

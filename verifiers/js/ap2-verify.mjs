@@ -55,7 +55,7 @@ function canon(v) { if (v === null) return "null"; if (v === true) return "true"
 const sha256 = (b) => createHash("sha256").update(b).digest();
 const b64u = (b) => Buffer.from(b).toString("base64url");
 const EVIDENCE_FORMAT = "ap2-evidence-pack/1.0";
-const HONEST_SCOPE_SHA256 = "7c93945f162da282cd695ef59270f455a97ff112ee61c03394f88bf8fa792de8";   // SPEC §1: sha256 of the canonical honest scope of this format version
+const HONEST_SCOPE_SHA256 = "c2007dab4b72e88499c06d34611e0635e45dcf64394e2849c4c201020fb6842c";   // SPEC §1: sha256 of the canonical honest scope of this format version
 const B64URL = /^[A-Za-z0-9_-]+$/;
 function b64uDecode(s) { if (typeof s !== "string" || !s || !B64URL.test(s) || s.length % 4 === 1) throw new Refused("invalid base64url segment"); const raw = Buffer.from(s, "base64url"); if (b64u(raw) !== s) throw new Refused("non-canonical base64url"); return raw; }
 const b64Strict = (s) => { if (typeof s !== "string" || !s || s.length % 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(s)) return null; const raw = Buffer.from(s, "base64"); return raw.toString("base64") === s ? raw : null; };
@@ -267,7 +267,7 @@ export function verifyEvidence(path, opts = {}) {
   return { digest_ok: digestOk, artifacts: artResults, producer_signatures: producer, pq_protected: producer.pq_protected ?? false, bindings_ok: bindingsOk, rfc3161: rfc, provenance_classes: classes,
     // r10: ANY — one reconciled artifact must not clear the flag for the others; r7: a label alone never clears it,
     // a missing class is a refusal; r8: this verifier cannot validate x5c chains, so chain_verified is always null (declared)
-    self_asserted_only: artResults.length > 0 && artResults.some((r) => r.self_asserted !== false), chain_verified: null, policy_ok: policyOk,
+    self_asserted_only: artResults.length === 0 || artResults.some((r) => r.self_asserted !== false), chain_verified: null, policy_ok: policyOk,
     valid: Boolean(artResults.length && digestOk && allOk && bindingsOk && rfc.verified !== false && policyOk), honest_scope: ev.honest_scope ?? null, mldsa_backend: HAVE_MLDSA };
 }
 function main(argv) {
