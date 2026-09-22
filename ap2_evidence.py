@@ -205,6 +205,20 @@ def read_evidence_file(path: str):
 _B64URL = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
 
 
+def _loads_segment(raw: bytes, what: str):
+    """JWT-level JSON (header, payload, disclosure, KB-JWT) under the SAME profile as the evidence file (SPEC §3.1): strict
+    UTF-8, no BOM, no duplicate keys, no floats/NaN, bounded integers, bounded depth. 1.1.0 r2: the reference used
+    `json.loads` here (last duplicate key wins, BOM skipped) while the JS verifier was strict — a signed payload
+    `{"amount":"1","amount":"999"}` certified "999" in one verifier and was refused in the other."""
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise Ap2EvidenceError(f"{what} is not valid UTF-8") from e
+    if text.startswith("\ufeff"):
+        raise Ap2EvidenceError(f"{what} starts with a BOM")
+    return loads_strict(text)
+
+
 def _b64url_decode(s: str) -> bytes:
     """RFC 7515 base64url, strict: alphabet only, no padding, no whitespace, canonical trailing bits (1.1.0: whitespace was
     stripped and padding added silently, so a segment could be spelled several ways for one meaning)."""
@@ -251,8 +265,8 @@ def parse_sd_jwt(compact: str) -> Dict:
     if len(seg) != 3:
         raise Ap2EvidenceError("issuer JWT must have 3 dot-separated segments")
     try:
-        header = json.loads(_b64url_decode(seg[0]))
-        payload = json.loads(_b64url_decode(seg[1]))
+        header = _loads_segment(_b64url_decode(seg[0]), "JWT header")
+        payload = _loads_segment(_b64url_decode(seg[1]), "JWT payload")
     except (ValueError, Ap2EvidenceError) as e:
         raise Ap2EvidenceError(f"JWT header/payload not valid JSON/base64url: {e}") from e
     return {"compact": compact, "jwt": jwt, "header": header, "payload": payload,
@@ -270,13 +284,14 @@ def resolve_disclosures(payload: Dict, disclosures: List[str]) -> Dict:
     """Replace _sd digests / '...' array placeholders with the disclosed claims.
     Fail-closed: duplicate digests, malformed disclosures, or disclosures that match
     nothing are ERRORS (per SD-JWT processing rules), never silently ignored."""
-    alg = payload.get("_sd_alg", "sha-256")
-    if alg != "sha-256":
-        raise Ap2EvidenceError(f"_sd_alg {alg!r} unsupported (sha-256 only, declared)")
+    # 1.1.0 r2: the SHAPE of the SD-JWT fields is imposed (present-with-null is not absent — `dict.get(k, default)` and
+    # JS `??` disagreed): `_sd_alg` absent or exactly "sha-256"; `_sd` absent or a list of strings; `{"...": x}` with x a string
+    if "_sd_alg" in payload and payload["_sd_alg"] != "sha-256":
+        raise Ap2EvidenceError(f"_sd_alg {payload['_sd_alg']!r} unsupported (sha-256 only, declared)")
     by_digest: Dict[str, Tuple[str, list]] = {}
     for d in disclosures:
         try:
-            arr = json.loads(_b64url_decode(d))
+            arr = _loads_segment(_b64url_decode(d), "disclosure")
         except (ValueError, Ap2EvidenceError) as e:
             raise Ap2EvidenceError(f"malformed disclosure: {e}") from e
         if not isinstance(arr, list) or len(arr) not in (2, 3):
@@ -294,11 +309,16 @@ def resolve_disclosures(payload: Dict, disclosures: List[str]) -> Dict:
                 if k in ("_sd", "_sd_alg"):
                     continue
                 out[k] = walk(v)
-            for dig in node.get("_sd", []):
+            sd = node.get("_sd", [])
+            if not isinstance(sd, list) or any(not isinstance(x, str) for x in sd):
+                raise Ap2EvidenceError("_sd must be a list of digest strings")
+            for dig in sd:
                 if dig in by_digest:
                     d, arr = by_digest[dig]
                     if len(arr) != 3:
                         raise Ap2EvidenceError("object disclosure must be [salt,name,value]")
+                    if not isinstance(arr[1], str):
+                        raise Ap2EvidenceError("disclosed claim name must be a string")
                     if arr[1] in out:
                         raise Ap2EvidenceError(f"disclosed claim {arr[1]!r} collides")
                     out[arr[1]] = walk(arr[2])
@@ -309,6 +329,8 @@ def resolve_disclosures(payload: Dict, disclosures: List[str]) -> Dict:
             for item in node:
                 if isinstance(item, dict) and set(item.keys()) == {"..."}:
                     dig = item["..."]
+                    if not isinstance(dig, str):
+                        raise Ap2EvidenceError("array disclosure placeholder must be a digest string")
                     if dig in by_digest:
                         d, arr = by_digest[dig]
                         if len(arr) != 2:
@@ -335,8 +357,11 @@ def _pubkey_from_jwk(jwk: Dict):
     from cryptography.hazmat.primitives.asymmetric import ec
     if jwk.get("kty") != "EC" or jwk.get("crv") != "P-256":
         raise Ap2EvidenceError("only EC/P-256 JWKs are supported (ES256, declared)")
-    x = int.from_bytes(_b64url_decode(jwk["x"]), "big")
-    y = int.from_bytes(_b64url_decode(jwk["y"]), "big")
+    xb, yb = _b64url_decode(jwk.get("x")), _b64url_decode(jwk.get("y"))
+    if len(xb) != 32 or len(yb) != 32:   # RFC 7518 §6.2.1.2-3: the full octet length of the coordinate (r2: 31/33 bytes verified here, refused by JS)
+        raise Ap2EvidenceError("JWK x/y must be exactly 32 bytes")
+    x = int.from_bytes(xb, "big")
+    y = int.from_bytes(yb, "big")
     return ec.EllipticCurvePublicNumbers(x, y, ec.SECP256R1()).public_key()
 
 
@@ -440,16 +465,26 @@ def verify_kb_jwt(parsed: Dict, resolved_claims: Dict) -> Dict:
     if len(seg) != 3:
         raise Ap2EvidenceError("kb-jwt must have 3 dot-separated segments")
     try:
-        header = json.loads(_b64url_decode(seg[0]))
-        payload = json.loads(_b64url_decode(seg[1]))
+        header = _loads_segment(_b64url_decode(seg[0]), "kb-jwt header")
+        payload = _loads_segment(_b64url_decode(seg[1]), "kb-jwt payload")
     except (ValueError, Ap2EvidenceError) as e:
         raise Ap2EvidenceError(f"kb-jwt header/payload invalid: {e}") from e
+    if not isinstance(header, dict) or not isinstance(payload, dict):
+        raise Ap2EvidenceError("kb-jwt header and payload must be objects")
     if header.get("alg") != "ES256":
         raise Ap2EvidenceError(f"kb-jwt alg {header.get('alg')!r} unsupported (ES256 only)")
-    jwk = (resolved_claims or {}).get("cnf", {}).get("jwk")
-    if not jwk:
+    # 1.1.0 r2: `cnf` absent or an object, `cnf.jwk` absent or an object (an empty object is a holder key that fails to
+    # parse, not "unknown"): present-with-null used to be an AttributeError here and "absent" in JS
+    rc = resolved_claims if isinstance(resolved_claims, dict) else {}
+    if "cnf" in rc and not isinstance(rc["cnf"], dict):
+        raise Ap2EvidenceError("cnf must be an object")
+    cnf = rc.get("cnf", {})
+    if "jwk" not in cnf:
         return {"present": True, "verified": None,
                 "note": "no cnf.jwk in issuer payload — holder key unknown (declared)"}
+    jwk = cnf["jwk"]
+    if not isinstance(jwk, dict):
+        raise Ap2EvidenceError("cnf.jwk must be an object")
     sig_ok = verify_es256(f"{seg[0]}.{seg[1]}".encode("ascii"),
                           _b64url_decode(seg[2]), jwk)
     presentation = parsed["compact"].rsplit("~", 1)[0] + "~"
@@ -571,14 +606,20 @@ def parse_timestamp_resp(tsr: bytes) -> Dict:
     ci = _der_children(tsr, kids[1][1], kids[1][2])           # ContentInfo: OID, [0] SignedData
     if len(ci) < 2:
         raise Ap2EvidenceError("no SignedData")
-    sd = _der_children(tsr, ci[1][1], ci[1][2])[0]
+    sdl = _der_children(tsr, ci[1][1], ci[1][2])
+    if not sdl:
+        raise Ap2EvidenceError("empty SignedData")
+    sd = sdl[0]
     sdc = _der_children(tsr, sd[1], sd[2])                    # version, digestAlgorithms, encapContentInfo, ...
     if len(sdc) < 3:
         raise Ap2EvidenceError("SignedData too short")
     eci = _der_children(tsr, sdc[2][1], sdc[2][2])
     if len(eci) < 2:
         raise Ap2EvidenceError("no eContent")
-    wrap = _der_children(tsr, eci[1][1], eci[1][2])[0]
+    wl = _der_children(tsr, eci[1][1], eci[1][2])
+    if not wl:
+        raise Ap2EvidenceError("empty eContent")
+    wrap = wl[0]
     if wrap[0] != 0x04:
         raise Ap2EvidenceError("eContent is not an OCTET STRING")
     tst = _der_tlv(tsr, wrap[1])
@@ -607,8 +648,8 @@ def _verify_rfc3161(tsr_b64: str, expected_digest_hex: str, timeout: int = 15, t
         return {"verified": False, "note": "tsr_b64 is not canonical base64"}
     try:
         info = parse_timestamp_resp(tsr)
-    except Ap2EvidenceError as e:
-        return {"verified": False, "note": f"token not parseable: {e}"}
+    except Exception as e:  # noqa: BLE001 — any malformed DER is "not parseable" (r2: an empty EXPLICIT [0] was an IndexError traceback)
+        return {"verified": False, "note": f"token not parseable: {type(e).__name__}: {str(e)[:80]}"}
     imprint_ok = info["imprint"] == expected_digest_hex.lower()
     out = {"verified": bool(info["granted"] and imprint_ok), "granted": info["granted"], "imprint_ok": imprint_ok, "tsa_verified": None}
     if tsa_cert is None:
@@ -740,6 +781,8 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
         return refusal("bindings must be a list")
     if "rfc3161_timestamp" in ev and not isinstance(ev["rfc3161_timestamp"], dict):
         return refusal("rfc3161_timestamp must be an object")
+    if "rfc3161_timestamp" in ev and not isinstance(ev["rfc3161_timestamp"].get("anchored"), bool):   # r2: [] / {} were "not anchored" here and "anchored, unverified" in JS
+        return refusal("rfc3161_timestamp.anchored must be a boolean")
     if "producer_signatures" in ev and not isinstance(ev["producer_signatures"], dict):
         return refusal("producer_signatures must be an object")
     e2 = {k: v for k, v in ev.items()
@@ -757,6 +800,8 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
             key = a["key"]
             if not isinstance(key, dict) or not isinstance(key.get("jwk"), dict):
                 raise Ap2EvidenceError("artifact key.jwk must be an object")
+            if key.get("provenance_class") is not None and not isinstance(key["provenance_class"], str):   # r2: a list was a TypeError in sorted()
+                raise Ap2EvidenceError("artifact key.provenance_class must be a string")
             parsed = parse_sd_jwt(compact)
             if not isinstance(parsed["payload"], dict) or not isinstance(parsed["header"], dict):
                 raise Ap2EvidenceError("JWT header and payload must be objects")

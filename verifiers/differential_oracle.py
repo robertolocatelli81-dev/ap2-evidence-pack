@@ -6,10 +6,12 @@ hostile files that a lenient verifier would accept (every one carries a digest r
 and a CLI-grammar table (usage exit 2, no verdict, in both). Exit 1 on any disagreement. 1.1.0 (2026-09-22): the cases
 were measured red on the 1.0.2 reference first (see README)."""
 import base64, copy, glob, hashlib, json, os, shutil, subprocess, sys, tempfile
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 HERE = os.path.dirname(os.path.abspath(__file__)); ROOT = os.path.dirname(HERE)
-PY = [sys.executable, "-B", os.path.join(ROOT, "ap2_evidence.py"), "verify"]
-JS = ["node", os.path.join(HERE, "js", "ap2-verify.mjs")]
+# positive control: point either verifier at an OLDER checkout (git worktree) — the cases must turn red there
+PY = [sys.executable, "-B", os.path.join(os.environ.get("AP2_ORACLE_PY_ROOT", ROOT), "ap2_evidence.py"), "verify"]
+JS = ["node", os.environ.get("AP2_ORACLE_JS", os.path.join(HERE, "js", "ap2-verify.mjs"))]
 KEYS = ("valid", "digest_ok", "bindings_ok", "producer_ok", "pq_protected", "rfc3161_verified", "policy_ok")
 
 
@@ -68,7 +70,9 @@ def build_cases(d):
     def w(name, data):
         p = os.path.join(d, name + ".json"); open(p, "wb").write(data if isinstance(data, bytes) else data.encode("utf-8")); return p
     # 1.1.0 profile cases: each hostile file carries the digest a lenient verifier would recompute, so the profile rule decides
-    cases["proto-key-digest-untouched"] = (w("proto", '{"__proto__": {"evil": 1}, ' + base_text.lstrip()[1:]), [])
+    # r2: `__proto__` as an ORDINARY key, digest recomputed with it — a verifier whose parser drops or pollutes it recomputes a
+    # different digest (the 1.1.0 r1 case kept the old digest, so every verifier answered digest_ok False and the case could not fail)
+    e = {"__proto__": {"evil": 1}}; e.update(base); cases["proto-key-rehashed"] = (w("proto", json.dumps(rehash(e))), [])
     ev = rehash(dict(base, subject="x�")); cases["raw-byte-hashed-as-fffd"] = (w("fffd", json.dumps(ev, ensure_ascii=False).encode("utf-8").replace("�".encode("utf-8"), b"\xff", 1)), [])
     cases["non-ascii-subject-rehashed"] = (w("nonascii", json.dumps(rehash(dict(base, subject="café ≥ 1 😀")), ensure_ascii=False)), [])   # in profile: PASS both
     cases["float-1.0-rehashed"] = (w("float", json.dumps(rehash(dict(base, extra=1.0)))), [])
@@ -116,7 +120,70 @@ def build_cases(d):
     e = copy.deepcopy(base); e["producer_signatures"]["signatures"][0]["signature_b64"] = e["producer_signatures"]["signatures"][0]["signature_b64"][:8] + " " + e["producer_signatures"]["signatures"][0]["signature_b64"][8:]; cases["producer-sig-b64-space"] = (w("psp", json.dumps(e)), [])
     e = copy.deepcopy(base); e["producer_signatures"]["signatures"].append({"sig_alg": "rsa-pss", "public_key_b64": "AA==", "signature_b64": "AA==", "post_quantum": False}); cases["producer-unknown-alg"] = (w("punk", json.dumps(e)), [])
     e = copy.deepcopy(base); e["producer_signatures"]["signatures"] = e["producer_signatures"]["signatures"][:1]; cases["producer-pq-stripped-required"] = (w("pstr", json.dumps(e)), ["--require-pq", "--trusted-producer-key", "ed25519=" + e["producer_signatures"]["signatures"][0]["public_key_b64"]])
+    # ── review r2 (2026-09-22): shapes INSIDE the signed JWT (present-with-null, non-string digests/names, cnf), JWK coordinate
+    # length, sig_alg prototype keys under pins, empty EXPLICIT [0] in the token, provenance_class type, `anchored` type.
+    # Each signed case is a fresh single-artifact pack signed by a key generated here: the reference's `dict.get(k, default)`
+    # and the JS `??` disagreed on present-with-null, and the reference's `json.loads` on the JWT payload took a duplicate key
+    # (last wins) and a BOM that the JS parser refused.
+    pin = ["--trusted-producer-key", "ed25519=" + base["producer_signatures"]["signatures"][0]["public_key_b64"]]
+    for nm, alg in (("constructor", "constructor"), ("__proto__", "__proto__"), ("list", ["ed25519"]), ("dict", {})):
+        e = copy.deepcopy(base); e["producer_signatures"]["signatures"].append({"sig_alg": alg, "public_key_b64": "AA==", "signature_b64": "AA==", "post_quantum": False}); cases[f"producer-sig_alg-{nm}-pinned"] = (w("psa" + nm, json.dumps(e)), pin)
+    t1 = _der(0x30, _der(0x30, _der(0x02, b"\x00")) + _der(0x30, _der(0x06, bytes.fromhex("2a864886f70d010702")) + _der(0xA0, b"")))
+    sd_e = _der(0x30, _der(0x02, b"\x03") + _der(0x31, b"") + _der(0x30, _der(0x06, bytes.fromhex("2a864886f70d010904")) + _der(0xA0, b"")) + _der(0x31, b""))
+    t2 = _der(0x30, _der(0x30, _der(0x02, b"\x00")) + _der(0x30, _der(0x06, bytes.fromhex("2a864886f70d010702")) + _der(0xA0, sd_e)))
+    for nm, t in (("empty-signeddata", t1), ("empty-econtent", t2)):
+        e = dict(base); e["rfc3161_timestamp"] = {"anchored": True, "tsa_url": "forged", "tsr_b64": base64.b64encode(t).decode()}; cases["tsr-" + nm] = (w("tsr" + nm, json.dumps(e)), [])
+    for nm, v in (("list", ["x"]), ("int", 5)):
+        e = copy.deepcopy(base); e["artifacts"][0]["key"]["provenance_class"] = v; cases[f"provenance-class-{nm}-rehashed"] = (w("prov" + nm, json.dumps(rehash(e))), [])
+    for nm, v in (("list", []), ("dict", {}), ("int-0", 0), ("string", "false")):
+        e = dict(base); e["rfc3161_timestamp"] = {"anchored": v}; cases[f"anchored-{nm}"] = (w("anch" + nm, json.dumps(e)), [])
+    sk, n = _fresh_key(); H = '{"alg":"ES256","typ":"ap2-mandate+sd-jwt"}'
+    def P(name, payload_txt, resolved, **kw):
+        cases[name] = (w(name, json.dumps(_fresh_pack(base, sk, n, H, payload_txt, resolved, **kw))), [])
+    P("jwt-payload-dup-key-rehashed", '{"iss":"x","amount":"1","amount":"999"}', {"iss": "x", "amount": "999"})
+    P("jwt-payload-bom-rehashed", b'\xef\xbb\xbf{"iss":"x"}', {"iss": "x"})
+    P("sd-null-rehashed", '{"iss":"x","_sd":null}', {"iss": "x"})
+    P("sd-object-rehashed", '{"iss":"x","_sd":{}}', {"iss": "x"})
+    P("sd-list-of-int-rehashed", '{"iss":"x","_sd":[1]}', {"iss": "x"})
+    P("sd_alg-null-rehashed", '{"iss":"x","_sd_alg":null}', {"iss": "x"})
+    P("array-dots-list-rehashed", '{"iss":"x","a":[{"...":[1]}]}', {"iss": "x", "a": []})
+    disc = base64.urlsafe_b64encode(b'["salt",[1],"v"]').decode().rstrip("="); dig = base64.urlsafe_b64encode(hashlib.sha256(disc.encode()).digest()).decode().rstrip("=")
+    P("disclosure-name-list-rehashed", '{"iss":"x","_sd":["%s"]}' % dig, {"iss": "x"}, disclosures=[disc])
+    kb = ".".join(base64.urlsafe_b64encode(x).decode().rstrip("=") for x in (b'{"alg":"ES256","typ":"kb+jwt"}', b'{"aud":"a","nonce":"n","iat":1,"sd_hash":"x"}', b"\x00" * 64))
+    P("kb-cnf-null-rehashed", '{"iss":"x","cnf":null}', {"iss": "x", "cnf": None}, kb=kb)
+    P("kb-cnf-string-rehashed", '{"iss":"x","cnf":"k"}', {"iss": "x", "cnf": "k"}, kb=kb)
+    P("kb-cnf-jwk-empty-rehashed", '{"iss":"x","cnf":{"jwk":{}}}', {"iss": "x", "cnf": {"jwk": {}}}, kb=kb)
+    P("fresh-pack-control-valid", '{"iss":"x","_sd":[],"_sd_alg":"sha-256"}', {"iss": "x"})   # positive control of the fresh-key builder: both must say valid
+    sk0, n0 = _fresh_key(top_zero=True)
+    cases["jwk-x-31-bytes-rehashed"] = (w("jwk31", json.dumps(_fresh_pack(base, sk0, n0, H, '{"iss":"x"}', {"iss": "x"}, jwk_x_bytes=n0.x.to_bytes(31, "big")))), [])
+    cases["jwk-x-33-bytes-rehashed"] = (w("jwk33", json.dumps(_fresh_pack(base, sk, n, H, '{"iss":"x"}', {"iss": "x"}, jwk_x_bytes=n.x.to_bytes(33, "big")))), [])
     return cases
+
+
+def _fresh_key(top_zero=False):
+    from cryptography.hazmat.primitives.asymmetric import ec
+    while True:
+        sk = ec.generate_private_key(ec.SECP256R1()); n = sk.public_key().public_numbers()
+        if not top_zero or n.x >> 248 == 0:   # a coordinate whose leading byte is zero (about 1 key in 256): the 31-byte spelling
+            return sk, n
+
+
+def _fresh_pack(base, sk, n, header_txt, payload_txt, resolved, disclosures=(), kb=None, jwk_x_bytes=None):
+    """One-artifact pack signed by `sk` over the RAW header/payload text (so duplicate keys, BOM, floats reach the verifiers
+    inside a valid ES256 signature), digest recomputed. `resolved` is what a lenient verifier resolves."""
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+    b64u = lambda b: base64.urlsafe_b64encode(b).decode().rstrip("=")  # noqa: E731
+    ht = header_txt.encode() if isinstance(header_txt, str) else header_txt; pt = payload_txt.encode() if isinstance(payload_txt, str) else payload_txt
+    si = b64u(ht) + "." + b64u(pt); r, s_ = decode_dss_signature(sk.sign(si.encode("ascii"), ec.ECDSA(hashes.SHA256())))
+    compact = si + "." + b64u(r.to_bytes(32, "big") + s_.to_bytes(32, "big")) + "~" + "".join(x + "~" for x in disclosures) + (kb or "")
+    jwk = {"kty": "EC", "crv": "P-256", "x": b64u(jwk_x_bytes if jwk_x_bytes is not None else n.x.to_bytes(32, "big")), "y": b64u(n.y.to_bytes(32, "big"))}
+    ev = {"evidence_format": base["evidence_format"], "subject": "oracle r2", "created_utc": "2026-09-22T00:00:00Z",
+          "artifacts": [{"name": "intent", "sd_jwt_compact": compact, "header": json.loads(ht) if isinstance(header_txt, str) else None, "key": {"jwk": jwk, "provenance_class": "jwk_header"},
+                         "resolved_claims": resolved, "kb_jwt": {"present": False}, "verified_at_build": {"signature_ok": True, "disclosures_ok": True}}],
+          "bindings": [], "honest_scope": base["honest_scope"]}
+    return rehash(ev)
 
 
 CLI = {"cli-no-path": [], "cli-unknown-flag": ["V", "--no-such"], "cli-two-positionals": ["V", "V"], "cli-empty-path": [""], "cli-help": ["--help"], "cli-h": ["-h"],
@@ -153,6 +220,8 @@ def main():
             print(f"  [{'OK ' if ok else 'DIFF'}] {name:34} expect {want}: {row}")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+    if declared != len(DECLARED):   # r2: a declared divergence that stops appearing (e.g. openssl absent) is reported, not silently counted OK
+        print(f"  [WARN] declared divergences observed: {declared}/{len(DECLARED)} — the declaration no longer matches this machine"); diffs += 1
     print(f"disagreements: {diffs}/{n} (declared: {declared})"); return 1 if diffs else 0
 
 

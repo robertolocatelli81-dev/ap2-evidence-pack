@@ -69,7 +69,9 @@ function parseSdJwt(compact) {
   return { compact, jwt, header, payload, signature: b64uDecode(seg[2]), signingInput: Buffer.from(seg[0] + "." + seg[1], "ascii"), disclosures: middle.filter((d) => d), kbJwt: kb };
 }
 function resolveDisclosures(payload, disclosures) {
-  const alg = payload._sd_alg ?? "sha-256"; if (alg !== "sha-256") throw new Refused("_sd_alg unsupported");
+  // r2: SHAPES imposed, present-with-null is not absent (`??` said it was; the reference's dict.get did not): _sd_alg absent or "sha-256",
+  // _sd absent or a list of strings, {"...": x} with x a string, a disclosed claim name a string
+  if ("_sd_alg" in payload && payload._sd_alg !== "sha-256") throw new Refused("_sd_alg unsupported");
   const byDigest = new Map();
   for (const d of disclosures) { let arr; try { arr = jsonOf(b64uDecode(d)); } catch (e) { throw new Refused("malformed disclosure: " + e.message); }
     if (!Array.isArray(arr) || ![2, 3].includes(arr.length)) throw new Refused("disclosure must be [salt,name,value] or [salt,value]");
@@ -78,9 +80,10 @@ function resolveDisclosures(payload, disclosures) {
   function walk(node) {
     if (node !== null && typeof node === "object" && !Array.isArray(node)) { const out = Object.create(null);
       for (const k of Object.keys(node)) { if (k === "_sd" || k === "_sd_alg") continue; out[k] = walk(node[k]); }
-      for (const dig of node._sd ?? []) { if (byDigest.has(dig)) { const arr = byDigest.get(dig); if (arr.length !== 3) throw new Refused("object disclosure must be [salt,name,value]"); if (arr[1] in out) throw new Refused("disclosed claim collides"); out[arr[1]] = walk(arr[2]); used.add(dig); } }
+      const sd = "_sd" in node ? node._sd : []; if (!Array.isArray(sd) || sd.some((x) => typeof x !== "string")) throw new Refused("_sd must be a list of digest strings");
+      for (const dig of sd) { if (byDigest.has(dig)) { const arr = byDigest.get(dig); if (arr.length !== 3) throw new Refused("object disclosure must be [salt,name,value]"); if (typeof arr[1] !== "string") throw new Refused("disclosed claim name must be a string"); if (arr[1] in out) throw new Refused("disclosed claim collides"); out[arr[1]] = walk(arr[2]); used.add(dig); } }
       return out; }
-    if (Array.isArray(node)) { const out = []; for (const item of node) { if (item !== null && typeof item === "object" && !Array.isArray(item) && Object.keys(item).length === 1 && "..." in item) { const dig = item["..."]; if (byDigest.has(dig)) { const arr = byDigest.get(dig); if (arr.length !== 2) throw new Refused("array disclosure must be [salt,value]"); out.push(walk(arr[1])); used.add(dig); } } else out.push(walk(item)); } return out; }
+    if (Array.isArray(node)) { const out = []; for (const item of node) { if (item !== null && typeof item === "object" && !Array.isArray(item) && Object.keys(item).length === 1 && "..." in item) { const dig = item["..."]; if (typeof dig !== "string") throw new Refused("array disclosure placeholder must be a digest string"); if (byDigest.has(dig)) { const arr = byDigest.get(dig); if (arr.length !== 2) throw new Refused("array disclosure must be [salt,value]"); out.push(walk(arr[1])); used.add(dig); } } else out.push(walk(item)); } return out; }
     return node;
   }
   const resolved = walk(payload); for (const dig of byDigest.keys()) if (!used.has(dig)) throw new Refused("disclosure(s) match no digest");
@@ -99,7 +102,11 @@ function verifyKbJwt(parsed, resolved) {
   const seg = kb.split("."); if (seg.length !== 3) throw new Refused("kb-jwt must have 3 dot-separated segments");
   let header, payload; try { header = jsonOf(b64uDecode(seg[0])); payload = jsonOf(b64uDecode(seg[1])); } catch (e) { throw new Refused("kb-jwt header/payload invalid"); }
   if (header.alg !== "ES256") throw new Refused("kb-jwt alg unsupported");
-  const jwk = resolved?.cnf?.jwk; if (!jwk) return { present: true, verified: null };
+  if (typeof header !== "object" || header === null || Array.isArray(header) || typeof payload !== "object" || payload === null || Array.isArray(payload)) throw new Refused("kb-jwt header and payload must be objects");
+  const cnf = resolved !== null && typeof resolved === "object" && "cnf" in resolved ? resolved.cnf : undefined;   // r2: cnf absent or object; cnf.jwk absent or object
+  if (cnf !== undefined && (cnf === null || typeof cnf !== "object" || Array.isArray(cnf))) throw new Refused("cnf must be an object");
+  const jwk = cnf !== undefined && "jwk" in cnf ? cnf.jwk : undefined; if (jwk === undefined) return { present: true, verified: null };
+  if (jwk === null || typeof jwk !== "object" || Array.isArray(jwk)) throw new Refused("cnf.jwk must be an object");
   const sigOk = es256Verify(Buffer.from(seg[0] + "." + seg[1], "ascii"), b64uDecode(seg[2]), jwk);
   const presentation = parsed.compact.slice(0, parsed.compact.lastIndexOf("~")) + "~";
   const sdHashOk = payload.sd_hash === b64u(sha256(Buffer.from(presentation, "ascii")));
@@ -129,9 +136,11 @@ function verifyProducer(alg, pubB64, sigB64, message) {
 function verifyProducerBlock(block, message, trusted) {
   const results = []; let pq = false, allPinned = trusted !== null, nPass = 0, nFail = 0, nSkip = 0;
   for (const s of Array.isArray(block?.signatures) ? block.signatures : []) {
-    const alg = s?.sig_alg, pub = s?.public_key_b64 ?? ""; const v = verifyProducer(alg, pub, s?.signature_b64 ?? "", message);
+    const alg = s?.sig_alg, pub = s?.public_key_b64 ?? "";
+    if (typeof alg !== "string") { nFail++; results.push({ sig_alg: null, status: "FAIL", post_quantum: false, key_trusted: null }); allPinned = false; continue; }   // r2: "constructor"/"__proto__" as sig_alg crashed the pin lookup on a prototype-bearing table
+    const v = verifyProducer(alg, pub, s?.signature_b64 ?? "", message);
     const status = v === true ? "PASS" : v === null ? "SKIP" : "FAIL"; if (v === true) nPass++; else if (v === false) nFail++; else nSkip++;
-    let keyTrusted = null; if (trusted !== null) { const allowed = trusted[alg] ?? []; keyTrusted = allowed.includes(pub); if (!keyTrusted) allPinned = false; }
+    let keyTrusted = null; if (trusted !== null) { const allowed = Object.hasOwn(trusted, alg) ? trusted[alg] : []; keyTrusted = allowed.includes(pub); if (!keyTrusted) allPinned = false; }
     if (v === true && alg === "ml-dsa-65" && (trusted === null || keyTrusted)) pq = true;
     results.push({ sig_alg: alg, status, post_quantum: alg === "ml-dsa-65", key_trusted: keyTrusted });
   }
@@ -170,6 +179,7 @@ export function verifyEvidence(path, opts = {}) {
   if (!Array.isArray(ev.artifacts) || ev.artifacts.some((a) => a === null || typeof a !== "object" || Array.isArray(a))) return refuse("artifacts must be a list of objects");
   if ("bindings" in ev && !Array.isArray(ev.bindings)) return refuse("bindings must be a list");
   if ("rfc3161_timestamp" in ev && (ev.rfc3161_timestamp === null || typeof ev.rfc3161_timestamp !== "object" || Array.isArray(ev.rfc3161_timestamp))) return refuse("rfc3161_timestamp must be an object");
+  if ("rfc3161_timestamp" in ev && typeof ev.rfc3161_timestamp.anchored !== "boolean") return refuse("rfc3161_timestamp.anchored must be a boolean");   // r2: [] / {} were "anchored, unverified" here and "not anchored" in the reference
   if ("producer_signatures" in ev && (ev.producer_signatures === null || typeof ev.producer_signatures !== "object" || Array.isArray(ev.producer_signatures))) return refuse("producer_signatures must be an object");
   const e2 = Object.create(null); for (const k of Object.keys(ev)) if (!["evidence_digest_sha256", "rfc3161_timestamp", "producer_signatures"].includes(k)) e2[k] = ev[k];
   const recomputed = sha256(Buffer.from(canon(e2), "utf-8")).toString("hex"); const digestOk = recomputed === ev.evidence_digest_sha256;
@@ -177,6 +187,7 @@ export function verifyEvidence(path, opts = {}) {
   for (const a of ev.artifacts) {
     try { const compact = a.sd_jwt_compact; if (typeof compact !== "string" || compact !== compact.trim() || !/^[\x00-\x7f]*$/.test(compact)) throw new Refused("sd_jwt_compact must be the exact ASCII compact serialization");
       if (!a.key || typeof a.key !== "object" || Array.isArray(a.key)) throw new Refused("artifact key.jwk must be an object");
+      if ("provenance_class" in a.key && a.key.provenance_class !== null && typeof a.key.provenance_class !== "string") throw new Refused("artifact key.provenance_class must be a string");   // r2: a list was sorted here and a TypeError in the reference
       const parsed = parseSdJwt(compact); if (parsed.payload === null || typeof parsed.payload !== "object" || Array.isArray(parsed.payload) || parsed.header === null || typeof parsed.header !== "object" || Array.isArray(parsed.header)) throw new Refused("JWT header and payload must be objects");
       const sigOk = es256Verify(parsed.signingInput, parsed.signature, a.key.jwk); const resolved = resolveDisclosures(parsed.payload, parsed.disclosures);
       const claimsOk = canon(resolved) === canon(a.resolved_claims ?? null); const kb = verifyKbJwt(parsed, resolved);
@@ -185,7 +196,7 @@ export function verifyEvidence(path, opts = {}) {
     } catch (e) { artResults.push({ name: a?.name, error: String(e.message ?? e) }); allOk = false; }
   }
   const bindingsOk = allOk ? canon(findBindings(forBindings)) === canon(ev.bindings ?? []) : false;   // `bindings` absent = [] in both; null is refused above
-  const ts = ev.rfc3161_timestamp ?? {}; let rfc = { claimed: Boolean(ts.anchored), verified: null };
+  const ts = ev.rfc3161_timestamp ?? {}; let rfc = { claimed: Boolean(ts.anchored), verified: null };   // `anchored` is a boolean by the shape check above
   if (ts.anchored && typeof ts.tsr_b64 === "string") rfc = { claimed: true, ...verifyRfc3161(ts.tsr_b64, recomputed), tsa_verified: null };   // BINDING only (status granted + messageImprint == digest, SPEC §3.2); TSA signature/chain: this verifier cannot (no openssl) -> tsa_verified null = incomplete under --tsa-cert
   else if (ts.anchored) rfc = { claimed: true, verified: false, note: "anchored claimed but tsr_b64 absent or not a string" };
   const classes = [...new Set(artResults.map((r) => r.provenance_class).filter(Boolean))].sort();
@@ -206,7 +217,7 @@ function main(argv) {
   const a = argv.slice(2); const opts = { trusted: null }; let path = null;
   for (let i = 0; i < a.length; i++) { let tok = a[i], eqv = null; const eq = tok.indexOf("="); if (eq > 0 && tok.startsWith("--")) { eqv = tok.slice(eq + 1); tok = tok.slice(0, eq); }
     const nx = () => { const v = eqv !== null ? eqv : a[++i]; if (v === undefined || v === "" || v.startsWith("-")) usage(); return v; };
-    if (tok === "--trusted-producer-key") { const v = nx(); const k = v.indexOf("="); if (k <= 0 || k === v.length - 1) usage(); opts.trusted = opts.trusted ?? {}; (opts.trusted[v.slice(0, k)] ??= []).push(v.slice(k + 1)); }
+    if (tok === "--trusted-producer-key") { const v = nx(); const k = v.indexOf("="); if (k <= 0 || k === v.length - 1) usage(); opts.trusted = opts.trusted ?? Object.create(null); (opts.trusted[v.slice(0, k)] ??= []).push(v.slice(k + 1)); }   // r2: a null-prototype table, so "constructor=…" is a pin like any other
     else if (tok === "--tsa-cert") opts.tsaCert = nx();
     else if (tok === "--require-producer" && eqv === null) opts.requireProducer = true; else if (tok === "--require-pq" && eqv === null) opts.requirePq = true; else if (tok === "--require-anchor" && eqv === null) opts.requireAnchor = true;
     else if (tok.startsWith("-") || path !== null) usage(); else path = tok; }

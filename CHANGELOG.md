@@ -32,4 +32,17 @@ measured on the 1.0.2 verifier first (every case below was red there).
   reference verifies the token's signature and chain with `openssl ts -verify -CAfile` (`tsa_verified`), required by
   `--require-anchor --tsa-cert`; the JS verifier cannot and does not pass that policy (declared).
 
+- **Review round 2** (Opus/Sonnet/Haiku, 22/09/2026): the §3.1 profile now applies INSIDE the SD-JWT (issuer header/payload,
+  disclosures, KB-JWT) — the reference read the signed payload with `json.loads` (a duplicate key read last-wins, a BOM
+  skipped) while the JS parser refused, so one verifier certified `{"amount":"1","amount":"999"}` as `"999"` and the other
+  refused it; present-with-`null` is not absent (`dict.get` vs `??`): `_sd`, `_sd_alg`, `{"...": d}`, disclosure names,
+  `cnf`, `cnf.jwk` have imposed shapes; JWK `x`/`y` must be 32 bytes (RFC 7518 §6.2.1 — 31/33 bytes verified in the
+  reference, refused in JS); `provenance_class` a string (a list was a `TypeError` in `sorted`); `anchored` a boolean
+  (`[]` was "not anchored" in the reference and "anchored, unverified" in JS); `sig_alg` a string (`"constructor"` under a
+  pinned key crashed the JS verifier on its prototype-bearing table, now `Object.create(null)`; a list was a `TypeError`
+  in the reference); an empty EXPLICIT `[0]` in the TimeStampResp was an `IndexError` traceback. Oracle: 90 cases,
+  0 disagreements, 1 declared; 21 red against the round-1 state, 65 against 1.0.2; `proto-key` case rehashed so that it
+  can fail; a declared divergence that stops appearing is reported. README: the Node requirement is OpenSSL ≥ 3.5 for
+  ML-DSA-65 (not "Node ≥ 20"); the JS conformance test SKIPS on a build without ML-DSA instead of failing.
+
 Verdicts unchanged on in-profile evidence produced by 1.0.x `build`.

@@ -246,6 +246,8 @@ def verify_producer_block(block: Dict, message: bytes, trusted: Optional[Dict[st
         if not isinstance(s, dict):   # 1.1.0 r1: a non-object entry is a FAIL entry, never a traceback
             n_fail += 1; results.append({"sig_alg": None, "status": "FAIL", "post_quantum": False, "key_trusted": None}); all_keys_pinned = False; continue
         alg = s.get("sig_alg")
+        if not isinstance(alg, str):   # 1.1.0 r2: a non-string sig_alg was `trusted.get(list)` -> TypeError traceback under pins
+            n_fail += 1; results.append({"sig_alg": None, "status": "FAIL", "post_quantum": False, "key_trusted": None}); all_keys_pinned = False; continue
         pub = s.get("public_key_b64", "")
         v = verify(alg, pub if isinstance(pub, str) else "", s.get("signature_b64", "") if isinstance(s.get("signature_b64"), str) else "", message)
         status = "PASS" if v is True else ("SKIP" if v is None else "FAIL")

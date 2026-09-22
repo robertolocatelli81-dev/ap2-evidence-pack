@@ -79,6 +79,20 @@ values of the producer block (RFC 4648) are strict: alphabet only, no whitespace
 padding on base64url, canonical trailing bits; a segment spelled any other way is a
 verification failure of that artifact/signature, not a re-encoding.
 
+The same profile applies to the JSON INSIDE the SD-JWTs — the issuer JWT header and
+payload, every disclosure, the KB-JWT header and payload: strict UTF-8, no BOM, no
+duplicate keys, no floats, bounded integers and depth, no lone surrogate. A signed
+payload with a duplicate key (`{"amount":"1","amount":"999"}`) is refused, not read
+"last wins" by one verifier and "first wins" by another. Shapes are imposed, and a key
+present with `null` is NOT the same as an absent key: `_sd` absent or a list of strings;
+`_sd_alg` absent or exactly `"sha-256"`; an array placeholder `{"...": d}` with `d` a
+string; a disclosed claim name a string; `cnf` absent or an object, `cnf.jwk` absent or an
+object (an empty object is a holder key that fails to parse, not an unknown holder);
+JWK `x`/`y` exactly 32 bytes each (RFC 7518 §6.2.1); `key.provenance_class` a string;
+`rfc3161_timestamp.anchored` a boolean; `producer_signatures.signatures[].sig_alg` a
+string (any other type is a FAIL entry). A violation inside an artifact is that
+artifact's error (the pack is not `valid`); a violation of a top-level shape is a refusal.
+
 ### 3.2 RFC 3161 token check (NORMATIVE when `anchored`)
 
 `rfc3161.verified` is `true` iff the token parses as a TimeStampResp, its status is
@@ -137,8 +151,8 @@ only on a valid ML-DSA-65 signature whose key is pinned (or no pin set given).
 Inputs: the pack file, an optional pinned producer trust set, and three policy
 flags: `require_producer`, `require_pq`, `require_anchor`.
 
-1. Parse (duplicate keys reject). Recompute the digest (§3) → `digest_ok`.
-2. For EVERY artifact: parse `sd_jwt_compact`; verify the ES256 signature with
+1. Parse under the profile (§3.1; duplicate keys reject). Recompute the digest (§3) → `digest_ok`.
+2. For EVERY artifact: parse `sd_jwt_compact` (its JSON under the §3.1 profile); verify the ES256 signature with
    the snapshotted JWK over the JWS signing input; resolve disclosures
    fail-closed (unmatched, duplicate, or malformed disclosure → reject); the
    canonical form of the resolved claims MUST equal the recorded

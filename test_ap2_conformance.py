@@ -110,9 +110,44 @@ class TestAp2ConformanceVectors(unittest.TestCase):
         r = ap2.verify_evidence(p, require_anchor=True, tsa_cert=cert); self.assertFalse(r["rfc3161"]["tsa_verified"]); self.assertFalse(r["valid"])
 
     @unittest.skipUnless(shutil.which("node"), "node absent: the JS verifier is not measured")
+    def test_signed_payload_shapes_are_artifact_errors_in_the_reference(self):
+        # review r2: the §3.1 profile inside the SD-JWT and the imposed shapes — each case is a fresh ES256-signed single-artifact
+        # pack with the digest recomputed, built by the oracle's helper, so only the artifact layer decides; the same builder's
+        # well-formed pack is the positive control (valid True). 1.1.0 r1 read the payload with json.loads (dup key last-wins,
+        # BOM skipped), verified 31/33-byte JWK coordinates, raised TypeError on `_sd: null` and AttributeError on `cnf: null`.
+        import tempfile, base64, hashlib
+        sys.path.insert(0, os.path.join(_HERE, "verifiers")); import differential_oracle as O
+        base = json.load(open(os.path.join(_HERE, "spec", "vectors", "ap2", "valid_signed.json")))
+        sk, n = O._fresh_key(); H = '{"alg":"ES256","typ":"ap2-mandate+sd-jwt"}'; d = tempfile.mkdtemp()
+        kb = ".".join(base64.urlsafe_b64encode(x).decode().rstrip("=") for x in (b'{"alg":"ES256","typ":"kb+jwt"}', b'{"sd_hash":"x"}', b"\x00" * 64))
+        disc = base64.urlsafe_b64encode(b'["salt",[1],"v"]').decode().rstrip("="); dig = base64.urlsafe_b64encode(hashlib.sha256(disc.encode()).digest()).decode().rstrip("=")
+        bad = {"dup": ('{"iss":"x","amount":"1","amount":"999"}', {"iss": "x", "amount": "999"}, {}), "bom": (b'\xef\xbb\xbf{"iss":"x"}', {"iss": "x"}, {}),
+               "sd-null": ('{"iss":"x","_sd":null}', {"iss": "x"}, {}), "sd-object": ('{"iss":"x","_sd":{}}', {"iss": "x"}, {}), "sd-int": ('{"iss":"x","_sd":[1]}', {"iss": "x"}, {}),
+               "sd_alg-null": ('{"iss":"x","_sd_alg":null}', {"iss": "x"}, {}), "dots-list": ('{"iss":"x","a":[{"...":[1]}]}', {"iss": "x", "a": []}, {}),
+               "disc-name-list": ('{"iss":"x","_sd":["%s"]}' % dig, {"iss": "x"}, {"disclosures": [disc]}),
+               "cnf-null": ('{"iss":"x","cnf":null}', {"iss": "x", "cnf": None}, {"kb": kb}), "cnf-string": ('{"iss":"x","cnf":"k"}', {"iss": "x", "cnf": "k"}, {"kb": kb}),
+               "cnf-jwk-empty": ('{"iss":"x","cnf":{"jwk":{}}}', {"iss": "x", "cnf": {"jwk": {}}}, {"kb": kb}),
+               "jwk-x-33": ('{"iss":"x"}', {"iss": "x"}, {"jwk_x_bytes": n.x.to_bytes(33, "big")})}
+        for name, (payload, resolved, kw) in bad.items():
+            p = os.path.join(d, name + ".json"); json.dump(O._fresh_pack(base, sk, n, H, payload, resolved, **kw), open(p, "w"))
+            r = ap2.verify_evidence(p); self.assertFalse(r["valid"], name); self.assertTrue(r["digest_ok"], name); self.assertIn("error", r["artifacts"][0], name)
+        p = os.path.join(d, "ok.json"); json.dump(O._fresh_pack(base, sk, n, H, '{"iss":"x","_sd":[],"_sd_alg":"sha-256"}', {"iss": "x"}), open(p, "w"))
+        self.assertTrue(ap2.verify_evidence(p)["valid"])   # positive control of the builder
+        # top-level shapes of r2: anchored must be a boolean (refusal), provenance_class a string (artifact error), sig_alg a string (FAIL entry)
+        e = dict(base); e["rfc3161_timestamp"] = {"anchored": []}; p = os.path.join(d, "anch.json"); json.dump(e, open(p, "w"))
+        r = ap2.verify_evidence(p); self.assertFalse(r["valid"]); self.assertIn("anchored", r["refused"])
+        e = json.loads(json.dumps(base)); e["artifacts"][0]["key"]["provenance_class"] = ["x"]; p = os.path.join(d, "prov.json"); json.dump(O.rehash(e), open(p, "w"))
+        r = ap2.verify_evidence(p); self.assertFalse(r["valid"]); self.assertIn("provenance_class", r["artifacts"][0]["error"])
+        e = json.loads(json.dumps(base)); e["producer_signatures"]["signatures"].append({"sig_alg": ["ed25519"], "public_key_b64": "AA==", "signature_b64": "AA=="}); p = os.path.join(d, "alg.json"); json.dump(e, open(p, "w"))
+        r = ap2.verify_evidence(p, trusted_producer_keys={"ed25519": [base["producer_signatures"]["signatures"][0]["public_key_b64"]]})
+        self.assertFalse(r["valid"]); self.assertEqual(r["producer_signatures"]["signatures"][-1]["status"], "FAIL")
+
     def test_js_verifier_is_conformant_on_all_normative_fields(self):
         # the JS verifier through the SAME conformance runner as the reference: every normative field of every vector
         import subprocess, run_ap2_conformance as rc
+        probe = subprocess.run(["node", "-e", "const{createPublicKey}=require('node:crypto');try{createPublicKey({key:Buffer.concat([Buffer.from('308207b2300b0609608648016503040312038207a100','hex'),Buffer.alloc(1952)]),format:'der',type:'spki'});console.log('yes')}catch{console.log('no')}"], capture_output=True, text=True)
+        if probe.stdout.strip() != "yes":   # r2: on a Node build without ML-DSA-65 (OpenSSL < 3.5) the ML-DSA vectors are SKIP in the JS verifier, so 8/8 is NOT measured — skip, never a pass
+            self.skipTest("Node build without ML-DSA-65 (OpenSSL < 3.5): JS conformance on the ML-DSA vectors not measured here")
         def js_verify(path, trusted_producer_keys=None, require_pq=False, require_producer=False, require_anchor=False, **_):
             flags = []
             for alg, keys in (trusted_producer_keys or {}).items():

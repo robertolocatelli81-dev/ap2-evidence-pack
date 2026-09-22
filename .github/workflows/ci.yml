@@ -42,3 +42,5 @@ jobs:
           node-version: "24"   # OpenSSL >= 3.5: the JS verifier checks ML-DSA-65 too
       - name: "Differential oracle: Python reference vs Node verifier on every vector, hostile file and CLI case"
         run: python verifiers/differential_oracle.py
+      - name: "Ablation: the strict layers removed from a copy of the reference must turn the suite red"
+        run: bash verifiers/lax_python_ablation.sh
