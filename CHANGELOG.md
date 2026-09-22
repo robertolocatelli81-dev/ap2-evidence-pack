@@ -179,6 +179,12 @@ the policy flags.
   `cnf.jwk` — the reference returned early with a `note`, the JS verifier without one, so the two receipts differed in
   shape there as well. Both record them on every branch now, with identical fields, and the receipt-shape test covers a
   pack that carries a KB-JWT (red against the previous commit). Found by checking the branch the tests did not reach.
+  That prompted a coverage measurement of the whole reference under the tests AND the oracle — 79% of its lines — which
+  named `verify_kb_jwt` as the least exercised path. Probing its six uncovered branches found a seventh defect, shared by
+  both verifiers: a KB-JWT whose signature segment is non-canonical base64url verified with `valid: true`, because the
+  branch for an unknown holder key returns before the signature is ever decoded, so the §3.1 profile never reached it.
+  Both verifiers now apply the profile to all three KB-JWT segments; measured on the previous commit, that pack was
+  `valid: true` in both. The oracle carries the seven KB-JWT branches as cases: 137 cases, 0 disagreements, 4 declared.
 
 **Breaking: 1.1.0 refuses every pack built by 1.0.x.** The scope statement is sealed and pinned by SHA-256 (SPEC §1/§8),
 and it was corrected during the review rounds, so a 1.0.x pack is refused with `honest_scope does not match the canonical

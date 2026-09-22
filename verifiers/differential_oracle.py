@@ -226,6 +226,19 @@ def build_cases(d):
     P("kb-cnf-string-rehashed", '{"iss":"x","cnf":"k"}', {"iss": "x", "cnf": "k"}, kb=kb)
     P("kb-cnf-jwk-empty-rehashed", '{"iss":"x","cnf":{"jwk":{}}}', {"iss": "x", "cnf": {"jwk": {}}}, kb=kb)
     P("fresh-pack-control-valid", '{"iss":"x","_sd":[],"_sd_alg":"sha-256"}', {"iss": "x"})   # positive control of the fresh-key builder: both must say valid
+    # coverage probe before the release: the six KB-JWT branches were never exercised by tests or oracle, and one of them
+    # accepted a non-canonical base64url signature segment (the branch returns before the signature is decoded)
+    kh = base64.urlsafe_b64encode(b'{"alg":"ES256","typ":"kb+jwt"}').decode().rstrip("=")
+    kp = base64.urlsafe_b64encode(b'{"sd_hash":"x"}').decode().rstrip("=")
+    ksig = base64.urlsafe_b64encode(b"\x00" * 64).decode().rstrip("=")
+    for nm, kbv, pay, res in (("kb-two-segments", kh + "." + kp, '{"iss":"x"}', {"iss": "x"}),
+                              ("kb-header-not-json", base64.urlsafe_b64encode(b"not json").decode().rstrip("=") + "." + kp + "." + ksig, '{"iss":"x"}', {"iss": "x"}),
+                              ("kb-payload-array", kh + "." + base64.urlsafe_b64encode(b"[1,2]").decode().rstrip("=") + "." + ksig, '{"iss":"x"}', {"iss": "x"}),
+                              ("kb-alg-rs256", base64.urlsafe_b64encode(b'{"alg":"RS256"}').decode().rstrip("=") + "." + kp + "." + ksig, '{"iss":"x"}', {"iss": "x"}),
+                              ("kb-cnf-jwk-string", kh + "." + kp + "." + ksig, '{"iss":"x","cnf":{"jwk":"k"}}', {"iss": "x", "cnf": {"jwk": "k"}}),
+                              ("kb-sig-padded", kh + "." + kp + "." + ksig + "=", '{"iss":"x"}', {"iss": "x"}),
+                              ("kb-sig-space", kh + "." + kp + "." + ksig[:10] + " " + ksig[10:], '{"iss":"x"}', {"iss": "x"})):
+        cases[nm] = (w(nm, json.dumps(_fresh_pack(base, sk, n, '{"alg":"ES256","typ":"ap2-mandate+sd-jwt"}', pay, res, kb=kbv))), [])
     sk0, n0 = _fresh_key(top_zero=True)
     cases["jwk-x-31-bytes-rehashed"] = (w("jwk31", json.dumps(_fresh_pack(base, sk0, n0, H, '{"iss":"x"}', {"iss": "x"}, jwk_x_bytes=n0.x.to_bytes(31, "big")))), [])
     # ── review r3 (2026-09-22): artifact `name` shapes (the JS binding table was a prototype-bearing object: an absent name was a

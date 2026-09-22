@@ -612,6 +612,9 @@ def verify_kb_jwt(parsed: Dict, resolved_claims: Dict) -> Dict:
     if "cnf" in rc and not isinstance(rc["cnf"], dict):
         raise Ap2EvidenceError("cnf must be an object")
     cnf = rc.get("cnf", {})
+    _b64url_decode(seg[2])   # the §3.1 profile applies to all three segments even when the holder key is unknown: without
+    # this, a KB-JWT whose signature segment is non-canonical base64url passed with valid: true, because the branch below
+    # returns before the signature is ever decoded (found by probing the six uncovered KB-JWT branches)
     recorded = {k: payload.get(k) for k in ("aud", "nonce", "iat") if k in payload}   # final check: the sealed scope says
     # these are RECORDED whenever a KB-JWT is present — this branch returned before recording them, in both verifiers
     if "jwk" not in cnf:

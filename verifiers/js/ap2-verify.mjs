@@ -107,6 +107,7 @@ function verifyKbJwt(parsed, resolved) {
   if (typeof header !== "object" || header === null || Array.isArray(header) || typeof payload !== "object" || payload === null || Array.isArray(payload)) throw new Refused("kb-jwt header and payload must be objects");
   const cnf = resolved !== null && typeof resolved === "object" && "cnf" in resolved ? resolved.cnf : undefined;   // r2: cnf absent or object; cnf.jwk absent or object
   if (cnf !== undefined && (cnf === null || typeof cnf !== "object" || Array.isArray(cnf))) throw new Refused("cnf must be an object");
+  b64uDecode(seg[2]);   // §3.1 applies to all three segments even when the holder key is unknown (see the reference)
   const recorded = {}; for (const k of ["aud", "nonce", "iat"]) if (k in payload) recorded[k] = payload[k];   // the sealed scope says these are RECORDED whenever a KB-JWT is present
   const jwk = cnf !== undefined && "jwk" in cnf ? cnf.jwk : undefined;
   if (jwk === undefined) return { present: true, verified: null, claims_recorded_not_validated: recorded, note: "no cnf.jwk in issuer payload — holder key unknown (declared)" };
