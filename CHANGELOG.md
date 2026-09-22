@@ -174,6 +174,12 @@ the policy flags.
   vectors again. Stale numbers fixed: the ablation is 1 error + 1 failure on the first layer, the declared divergences are
   three `--trust-anchor` packs plus the `--tsa-cert` one, and the hostile-file list named three cases that do not exist.
 
+- **After the second final pass** (22/09/2026): the sealed scope promises the KB-JWT `aud`/`nonce`/`iat` are RECORDED
+  whenever a KB-JWT is present. Measured: neither verifier recorded them on the branch where the KB-JWT carries no
+  `cnf.jwk` — the reference returned early with a `note`, the JS verifier without one, so the two receipts differed in
+  shape there as well. Both record them on every branch now, with identical fields, and the receipt-shape test covers a
+  pack that carries a KB-JWT (red against the previous commit). Found by checking the branch the tests did not reach.
+
 **Breaking: 1.1.0 refuses every pack built by 1.0.x.** The scope statement is sealed and pinned by SHA-256 (SPEC §1/§8),
 and it was corrected during the review rounds, so a 1.0.x pack is refused with `honest_scope does not match the canonical
 scope of this evidence_format` — measured on a pack built with the `v1.0.2` tree and verified with this one, in both
