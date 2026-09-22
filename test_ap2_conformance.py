@@ -85,11 +85,18 @@ class TestAp2ConformanceVectors(unittest.TestCase):
                 else: a["key"]["provenance_class"] = v
             r = ap2.verify_evidence(write("sa-" + name, O.rehash(e)))
             self.assertFalse(r["valid"], name); self.assertIn("provenance_class", r["artifacts"][0]["error"], name)
-        cases = dict(O._x5c_cases(base))   # positive control of the flag: only a leaf ISSUED BY SOMEONE ELSE clears it
-        r = ap2.verify_evidence(write("x5c-self", O.rehash(cases["canonical"])))
-        self.assertTrue(r["valid"]); self.assertTrue(r["self_asserted_only"])
-        r = ap2.verify_evidence(write("x5c-ca", O.rehash(cases["ca-issued-leaf"])))
-        self.assertTrue(r["valid"]); self.assertFalse(r["self_asserted_only"])
+        # r8: offline NOTHING clears the flag — r7 read "issued by someone else" off subject != issuer, two DN strings the
+        # forger writes himself (measured: a leaf self-signed with its own key, declaring CN=DigiCert Global Root CA, cleared
+        # it). Only a chain validated to a trust anchor the relying party supplies does, and that needs openssl.
+        cases = dict(O._x5c_cases(base)); anchor = os.path.join(d, "probe_ca.pem"); open(anchor, "wb").write(O._x5c_cases.ca_pem)
+        for name in ("canonical", "ca-issued-leaf"):
+            r = ap2.verify_evidence(write("x5c-" + name, O.rehash(cases[name])))
+            self.assertTrue(r["valid"], name); self.assertTrue(r["self_asserted_only"], name); self.assertIsNone(r["chain_verified"], name)
+        if shutil.which("openssl"):   # positive control of the ONE path that clears it
+            r = ap2.verify_evidence(write("x5c-ca2", O.rehash(cases["ca-issued-leaf"])), trust_anchor=anchor)
+            self.assertTrue(r["valid"]); self.assertFalse(r["self_asserted_only"]); self.assertTrue(r["chain_verified"])
+            r = ap2.verify_evidence(write("x5c-self2", O.rehash(cases["canonical"])), trust_anchor=anchor)   # negative control: the self-signed leaf does not chain to it
+            self.assertTrue(r["self_asserted_only"]); self.assertFalse(r["chain_verified"])
 
         for name, mut, frag in (("format2", lambda e: e.__setitem__("evidence_format", "ap2-evidence-pack/2.0"), "evidence_format"),
                                 ("noformat", lambda e: e.pop("evidence_format", None), "evidence_format"),

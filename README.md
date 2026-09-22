@@ -55,9 +55,10 @@ QTSP service under eIDAS art. 45j), and does **not** validate x5c chains to a tr
 anchor. ES256 only, by design; other algorithms are rejected loudly, never half-verified.
 `valid: true` means every artifact verifies and the file is intact — read `bindings` for
 chain linkage and `provenance_classes` / `self_asserted_only` for capture strength.
-`self_asserted_only` is fail-closed (SPEC §6.7): a class the verifier cannot check offline
-(`supplied`, `jwks_fetched`) leaves it **true**, because a label is not evidence; only an
-`x5c_header` leaf issued by someone else clears it, and even then no chain is validated here.
+`self_asserted_only` is fail-closed (SPEC §6.7): offline **nothing** clears it — not a label
+(`supplied`, `jwks_fetched`), not a certificate that names a famous CA as its issuer. Only an
+`x5c` chain that validates to a trust anchor YOU supply does (`--trust-anchor <PEM>`, reported in
+`chain_verified`); the Node verifier cannot validate chains and reports `chain_verified: null`.
 
 ## Producer signatures (post-quantum hybrid)
 
@@ -94,7 +95,7 @@ python3 spec/vectors/ap2/run_ap2_conformance.py   # exit 0 = conformant
 give the same `(valid, digest_ok, bindings_ok, producer_ok, pq_protected, rfc3161_verified,
 policy_ok, producer_present, producer_trusted, rfc3161_claimed, rfc3161_gen_time, self_asserted_only, provenance_classes)`
 — the eleven normative fields of SPEC §6 plus `provenance_classes` — on the 8 vectors under their declared policy (plus `anchor_valid` under
-`--require-anchor --tsa-cert`), 95 hostile files that carry the digest a lenient verifier would
+`--require-anchor --tsa-cert`, and the CA-issued `x5c` leaf under `--trust-anchor`), 97 hostile files that carry the digest a lenient verifier would
 recompute or a wrong JSON shape (`__proto__` key with the digest recomputed over it, non-UTF-8, float `1.0`, 2^53+1, 100000-deep,
 `NaN`, lone surrogate, duplicate key, BOM, non-object, `artifacts`/`key`/`jwk`/`rfc3161_timestamp`/
 `producer_signatures` of the wrong type, an empty producer block, base64url with a space /
@@ -115,15 +116,17 @@ enum, a list or absent; `evidence_format` `…/2.0` or absent; `subject`/`create
 absent or the wrong type, `created_utc` not ISO-8601; a SIGNED payload that is an array or a string,
 a signed 100000-deep header; a real self-signed `x5c` leaf — canonical, with a space, with a newline,
 one whose key differs from the snapshotted JWK, and one issued by a CA rather than self-signed;
-`provenance_class` `supplied`, `jwks_fetched`, `null` or absent) and 16 command-line grammar cases
+`provenance_class` `supplied`, `jwks_fetched`, `null` or absent; a rewritten `honest_scope`) and 16 command-line grammar cases
 (15 usage exit 2,
 nothing on stdout, in both — the bare invocation without a subcommand included — and one
 `--flag=value` form that must produce a verdict, not usage), plus three positive
 controls (non-ASCII text in profile; a fresh-key pack that must be `valid` in both; the CA-issued `x5c`
-leaf, the only case in the suite where `self_asserted_only` is false):
-**122 cases, 0 disagreements, of which 1 is a declared divergence** — the real token under `--tsa-cert`, where the
+leaf under `--trust-anchor`, the only case in the suite where `self_asserted_only` is false — and its
+negative control, the self-signed leaf against the same anchor, where it stays true):
+**124 cases, 0 disagreements, of which 2 are declared divergences** — the real token under `--tsa-cert`, where the
 reference proves the TSA with openssl and the JS verifier reports `tsa_verified: null` and does
-not pass the policy. A crash counts as a disagreement, and a declared divergence that stops
+not pass the policy; and the `x5c` chain under `--trust-anchor`, which the reference validates with
+`openssl verify` (clearing `self_asserted_only`) and the JS verifier cannot (`chain_verified: null`). A crash counts as a disagreement, and a declared divergence that stops
 appearing is reported. Positive controls (`AP2_ORACLE_PY_ROOT` / `AP2_ORACLE_JS` point the oracle
 at another checkout), measured 22/09/2026: against the 1.0.2 reference the oracle is red on 71
 (the CLI had no policy flags; float / 2^53+1 / lone surrogate / a space inside a producer

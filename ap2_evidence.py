@@ -86,6 +86,8 @@ HONEST_SCOPE = (
     "for the auditor, not validated — their expected values are transaction context "
     "this tool cannot know offline.")
 
+HONEST_SCOPE_SHA256 = hashlib.sha256(HONEST_SCOPE.encode("utf-8")).hexdigest()   # r8: pinned in SPEC §1, so both verifiers refuse a rewritten scope
+
 
 class Ap2EvidenceError(ValueError):
     """Fail-closed parse/verify error (message is auditor-readable, never a traceback)."""
@@ -385,7 +387,6 @@ def _load_x5c_leaf(x5c: List[str]):
 
 def _pubkey_from_x5c_leaf(x5c: List[str]):
     return _load_x5c_leaf(x5c).public_key()
-    return pub
 
 
 def _jwk_from_pubkey(pub) -> Dict:
@@ -415,16 +416,17 @@ def verify_es256(signing_input: bytes, signature: bytes, jwk: Dict) -> bool:
 PROVENANCE_CLASSES = frozenset({"supplied", "x5c_header", "jwk_header", "jwks_fetched"})
 
 
-def _check_provenance(pc, parsed: Dict, key: Dict) -> bool:
+def _check_provenance(pc, parsed: Dict, key: Dict, trust_anchor: Optional[str] = None) -> bool:
     """1.1.0 r5: the provenance class is the field the honest_scope sends the relying party to, and it was the one field
     entirely under the pack author's control — relabelling `jwk_header` as `x5c_header` flipped `self_asserted_only` to
     False with no x5c anywhere. The two header-derived classes are now RECONCILED against the header the verifier just
     parsed; `supplied` and `jwks_fetched` remain capture-time assertions that cannot be checked offline (SPEC §2).
 
-    Returns whether the key is SELF-ASSERTED as far as an offline verifier can tell (r7, fail-closed): a key taken from the
-    signed header (`jwk_header`, or an `x5c_header` whose leaf is self-signed) is self-asserted, and `supplied`/`jwks_fetched`
-    cannot be checked here so they count as self-asserted too — before r7 a label alone CLEARED `self_asserted_only`, so
-    relabelling or simply DELETING the field hid the weakness the honest scope sends the auditor to."""
+    Returns whether the key is SELF-ASSERTED. r8: offline, "issued by someone else" is NOT establishable — r7 read it off
+    `subject != issuer`, two DN strings the forger writes himself (measured: a leaf self-signed with its own key, declaring
+    `CN=DigiCert Global Root CA` as issuer, cleared the flag in both verifiers while the pack stayed `valid`). The only thing
+    that can clear it is a CHAIN validated to a trust anchor the RELYING PARTY supplies (`--trust-anchor`, same idiom as
+    `--tsa-cert`): without one, every class — `jwk_header`, `x5c_header`, `supplied`, `jwks_fetched` — is self-asserted."""
     if pc not in ("jwk_header", "x5c_header"):
         return True
     header = parsed.get("header") if isinstance(parsed.get("header"), dict) else {}
@@ -444,9 +446,45 @@ def _check_provenance(pc, parsed: Dict, key: Dict) -> bool:
         raise Ap2EvidenceError(f"provenance_class x5c_header but the x5c leaf is unusable: {type(e).__name__}") from e
     if any(leaf.get(f) != jwk.get(f) for f in ("kty", "crv", "x", "y")):
         raise Ap2EvidenceError("provenance_class x5c_header but the x5c leaf key differs from the snapshotted jwk")
-    # a SELF-SIGNED leaf is the issuer vouching for itself: still self-asserted. A leaf someone else issued is not — though
-    # the chain is NOT validated to a trust anchor here (SPEC §2, honest scope).
-    return cert.subject == cert.issuer
+    if trust_anchor is None:
+        return True          # no anchor: the certificate proves only that the key is in a blob the signer wrote
+    return not _verify_x5c_chain(x5c, trust_anchor)   # chain verified to the anchor -> no longer self-asserted
+
+
+def _verify_x5c_chain(x5c: List[str], trust_anchor: str, timeout: int = 15) -> bool:
+    """Validate the x5c chain to a PEM trust anchor with `openssl verify` (the reference only, like `openssl ts -verify` for
+    the TSA — the JS verifier reports `chain_verified: null` and never clears `self_asserted_only`: declared divergence).
+    False on any failure, including openssl being absent: a chain that cannot be checked is not a chain that checked."""
+    import shutil
+    import subprocess
+    import tempfile
+    exe = shutil.which("openssl")
+    if not exe:
+        return False
+    d = tempfile.mkdtemp()
+    try:
+        def pem(b: bytes) -> bytes:
+            body = base64.b64encode(b).decode()
+            return ("-----BEGIN CERTIFICATE-----\n" + "\n".join(body[i:i + 64] for i in range(0, len(body), 64)) + "\n-----END CERTIFICATE-----\n").encode()
+        try:
+            chain = [_sigsuite._unb64(c) for c in x5c]
+        except Exception:  # noqa: BLE001
+            return False
+        leaf_path = os.path.join(d, "leaf.pem")
+        with open(leaf_path, "wb") as f:
+            f.write(pem(chain[0]))
+        cmd = [exe, "verify", "-CAfile", trust_anchor]
+        if len(chain) > 1:
+            unt = os.path.join(d, "untrusted.pem")
+            with open(unt, "wb") as f:
+                f.write(b"".join(pem(c) for c in chain[1:]))
+            cmd += ["-untrusted", unt]
+        r = subprocess.run(cmd + [leaf_path], capture_output=True, text=True, timeout=timeout)
+        return r.returncode == 0 and ": OK" in (r.stdout or "")
+    except Exception:  # noqa: BLE001
+        return False
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
 
 
 def _snapshot_key(parsed: Dict, supplied_jwk: Optional[Dict] = None,
@@ -827,7 +865,8 @@ def sign_evidence(path, identity=None, classical_alg="ed25519"):
 
 
 def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = False,
-                    require_producer: bool = False, require_anchor: bool = False, tsa_cert: Optional[str] = None) -> Dict:
+                    require_producer: bool = False, require_anchor: bool = False, tsa_cert: Optional[str] = None,
+                    trust_anchor: Optional[str] = None) -> Dict:
     """OFFLINE re-verification from the evidence file alone: digest, every signature with
     the SNAPSHOTTED key, every disclosure, every binding, and the RFC 3161 token's binding
     (status + imprint; the TSA itself only with `tsa_cert`, via openssl). Fail-closed."""
@@ -836,11 +875,11 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
     except Ap2EvidenceError as e:   # 1.1.0: a hostile or unreadable file is a refusal receipt, never a traceback
         return {"digest_ok": False, "artifacts": [], "producer_signatures": {"present": False, "pq_protected": False, "trusted": None},
                 "pq_protected": False, "bindings_ok": False, "rfc3161": {"claimed": False, "verified": None}, "provenance_classes": [],
-                "self_asserted_only": False, "policy_ok": False, "valid": False, "honest_scope": None, "refused": str(e)}
+                "self_asserted_only": True, "policy_ok": False, "valid": False, "honest_scope": None, "refused": str(e)}
     def refusal(msg):
         return {"digest_ok": False, "artifacts": [], "producer_signatures": {"present": False, "pq_protected": False, "trusted": None},
                 "pq_protected": False, "bindings_ok": False, "rfc3161": {"claimed": False, "verified": None}, "provenance_classes": [],
-                "self_asserted_only": False, "policy_ok": False, "valid": False, "honest_scope": None, "refused": msg}
+                "self_asserted_only": True, "policy_ok": False, "valid": False, "honest_scope": None, "refused": msg}
     # 1.1.0 (review r1): the SHAPE of the top-level fields is checked before anything touches them — `artifacts` a list of
     # objects, `bindings` a list, `rfc3161_timestamp` an object or absent, `producer_signatures` an object or absent. A wrong
     # type used to be a TypeError/AttributeError traceback (the JS verifier answered); `producer_signatures: {}` was "absent".
@@ -851,6 +890,10 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
             return refusal(f"{f} must be a string (SPEC §1)")
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", ev["created_utc"]):   # r6: §1 says ISO-8601 UTC; only the type was checked
         return refusal("created_utc must be ISO-8601 UTC, YYYY-MM-DDTHH:MM:SSZ (SPEC §1)")
+    if hashlib.sha256(ev["honest_scope"].encode("utf-8")).hexdigest() != HONEST_SCOPE_SHA256:
+        # r8: the receipt used to REPRINT whatever scope the file carried — an author could write "anchored by a QTSP under
+        # eIDAS art. 45j" and see it beside `valid: true`. The scope is the format's, not the pack's (SPEC §1).
+        return refusal("honest_scope does not match the canonical scope of this evidence_format (SPEC §1)")
     if not isinstance(ev.get("artifacts"), list) or any(not isinstance(a, dict) for a in ev["artifacts"]):
         return refusal("artifacts must be a list of objects")
     names = [a.get("name") for a in ev["artifacts"]]   # r3: the name keys the binding table — a non-string crashed the JS table, "__proto__" vanished from it
@@ -887,7 +930,7 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
             parsed = parse_sd_jwt(compact)
             if not isinstance(parsed["payload"], dict) or not isinstance(parsed["header"], dict):
                 raise Ap2EvidenceError("JWT header and payload must be objects")
-            self_asserted = _check_provenance(pc, parsed, key)   # r5: reconciled, not believed; r7: and it decides self_asserted_only
+            self_asserted = _check_provenance(pc, parsed, key, trust_anchor)   # r5: reconciled, not believed; r7/r8: and it decides self_asserted_only
             sig_ok = verify_es256(parsed["signing_input"], parsed["signature"], key["jwk"])
             resolved = resolve_disclosures(parsed["payload"], parsed["disclosures"])
             claims_ok = _canon(resolved) == _canon(a.get("resolved_claims"))
@@ -960,6 +1003,8 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
             # r7 FAIL-CLOSED: self-asserted unless EVERY artifact's key was reconciled to a leaf that someone else issued.
             # A label alone ("supplied", "jwks_fetched") no longer clears it, and deleting the field is a refusal now.
             "self_asserted_only": bool(art_results) and all(r.get("self_asserted", True) for r in art_results),
+            # r8: what the verifier DID about chains — None when no anchor was supplied (so the flag above is fail-closed true)
+            "chain_verified": None if trust_anchor is None else (bool(art_results) and not any(r.get("self_asserted", True) for r in art_results)),
             # un evidence senza artefatti non prova NULLA: mai 'valid' (falso-verde per l'auditor)
             "policy_ok": policy_ok,
             "valid": bool(art_results and digest_ok and all_ok and bindings_ok
@@ -991,6 +1036,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     v.add_argument("--require-producer", action="store_true", help="policy: a valid producer signature is required")
     v.add_argument("--require-pq", action="store_true", help="policy: a valid, PINNED post-quantum producer signature is required")
     v.add_argument("--require-anchor", action="store_true", help="policy: the RFC 3161 anchor must be present and BOUND to this pack (status granted, messageImprint = digest); with --tsa-cert also TSA-verified")
+    v.add_argument("--trust-anchor", help="PEM trust anchor: validate the artifact x5c chain with openssl verify. Without it every key is self-asserted (offline, a certificate proves only that the signer wrote it) — the JS verifier cannot validate chains and reports chain_verified null (declared)")
     v.add_argument("--tsa-cert", help="PEM certificate (or chain) of the TSA: verify the token's signature and chain with openssl ts -verify (without it, the TSA is NOT verified — declared)")
     raw = list(sys.argv[1:] if argv is None else argv)
     # 1.1.0: one CLI grammar with the sibling verifiers — "" or a flag as a value, "--", -h/--help, a value on a boolean flag,
@@ -1057,7 +1103,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                     p.error(f"--trusted-producer-key expects ALG=B64 (got {spec!r})")
                 trusted.setdefault(alg, []).append(key)
         r = verify_evidence(a.evidence, trusted_producer_keys=trusted, require_pq=a.require_pq,
-                            require_producer=a.require_producer, require_anchor=a.require_anchor, tsa_cert=a.tsa_cert)
+                            require_producer=a.require_producer, require_anchor=a.require_anchor, tsa_cert=a.tsa_cert,
+                            trust_anchor=a.trust_anchor)
         print(json.dumps(r, indent=1))
         return 0 if r["valid"] else 1
     p.print_help(sys.stderr)   # r3: usage goes to stderr, no verdict on stdout — as every other usage path and the JS verifier

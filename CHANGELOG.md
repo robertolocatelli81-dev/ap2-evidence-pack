@@ -102,5 +102,16 @@ measured on the 1.0.2 verifier first (every case below was red there).
   oracle compares `rfc3161.gen_time` too and gets a CA-issued `x5c` leaf as the positive control of the honesty flag
   (122 cases, 0 disagreements, 1 declared); an unparseable token returns the same receipt shape in both verifiers; the
   ablation checks the patched module still imports, so a botched patch cannot masquerade as a red ablation.
+- **Review round 8** (Opus/Sonnet/Haiku, 22/09/2026): round 7 had moved the author's freedom one field along — it cleared
+  `self_asserted_only` when the leaf's issuer DN differed from its subject DN, and **measured**: a certificate SELF-SIGNED
+  with its own key, declaring `CN=DigiCert Global Root CA` as issuer, cleared the flag in both verifiers on a `valid` pack.
+  Offline, "issued by someone else" is not establishable, so nothing clears the flag any more except an `x5c` chain that
+  validates to a trust anchor the relying party supplies: new `--trust-anchor <PEM>` (`openssl verify` in the reference,
+  `chain_verified` true/false; the JS verifier cannot validate chains and reports `null` — the second declared divergence,
+  like `--tsa-cert`). A refusal receipt now carries `self_asserted_only: true` as well (it printed the green value, `false`,
+  on a file the verifier had refused to read). `honest_scope` is pinned by SHA-256 to the canonical scope of the declared
+  `evidence_format` in both verifiers: the receipt used to REPRINT whatever scope the file carried, so an author could write
+  "anchored by a QTSP under eIDAS art. 45j" and see it beside `valid: true`. Oracle: 124 cases, 0 disagreements,
+  2 declared.
 
 Verdicts unchanged on in-profile evidence produced by 1.0.x `build`.

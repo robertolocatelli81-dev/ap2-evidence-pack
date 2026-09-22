@@ -5,7 +5,7 @@
 // ml-dsa-65 through the Node build's OpenSSL >= 3.5, else SKIP = incomplete, never a pass), policy flags, valid.
 // Acceptance profile of the file (SPEC §3.1): strict UTF-8, no BOM, no duplicate keys, no floats, integers within
 // +/-(2^53-1), nesting <= 512, no lone surrogate escape, 64 MiB bound. A refused file is a receipt with valid=false.
-// Usage: ap2-verify.mjs <evidence.json> [--trusted-producer-key ALG=B64]... [--require-producer] [--require-pq] [--require-anchor] [--tsa-cert PEM]
+// Usage: ap2-verify.mjs <evidence.json> [--trusted-producer-key ALG=B64]... [--require-producer] [--require-pq] [--require-anchor] [--tsa-cert PEM] [--trust-anchor PEM]
 import { readFileSync, statSync } from "node:fs";
 import { createHash, createPublicKey, verify as cryptoVerify, X509Certificate } from "node:crypto";
 
@@ -55,6 +55,7 @@ function canon(v) { if (v === null) return "null"; if (v === true) return "true"
 const sha256 = (b) => createHash("sha256").update(b).digest();
 const b64u = (b) => Buffer.from(b).toString("base64url");
 const EVIDENCE_FORMAT = "ap2-evidence-pack/1.0";
+const HONEST_SCOPE_SHA256 = "431877e44b759e99d306f79dd52739f08bd94bc05d70a6a03ee82f74fc0f15db";   // SPEC §1: sha256 of the canonical honest scope of this format version
 const B64URL = /^[A-Za-z0-9_-]+$/;
 function b64uDecode(s) { if (typeof s !== "string" || !s || !B64URL.test(s) || s.length % 4 === 1) throw new Refused("invalid base64url segment"); const raw = Buffer.from(s, "base64url"); if (b64u(raw) !== s) throw new Refused("non-canonical base64url"); return raw; }
 const b64Strict = (s) => { if (typeof s !== "string" || !s || s.length % 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(s)) return null; const raw = Buffer.from(s, "base64"); return raw.toString("base64") === s ? raw : null; };
@@ -128,15 +129,17 @@ function checkProvenance(pc, parsed, key) {   // returns: is this key SELF-ASSER
   }
   const x5c = header.x5c;
   if (!Array.isArray(x5c) || !x5c.length || typeof x5c[0] !== "string") throw new Refused("provenance_class x5c_header but the signed header carries no x5c");
-  let leaf, selfSigned;
+  let leaf;
   try {
     const der = b64Strict(x5c[0]); if (!der) throw new Error("leaf not base64");
-    const cert = new X509Certificate(der);
-    leaf = createPublicKey({ key: cert.publicKey.export({ format: "jwk" }), format: "jwk" }).export({ format: "jwk" });
-    selfSigned = cert.subject === cert.issuer;
+    leaf = createPublicKey({ key: new X509Certificate(der).publicKey.export({ format: "jwk" }), format: "jwk" }).export({ format: "jwk" });
   } catch (e) { throw new Refused("provenance_class x5c_header but the x5c leaf is unusable"); }
   if (["kty", "crv", "x", "y"].some((f) => leaf[f] !== jwk[f])) throw new Refused("provenance_class x5c_header but the x5c leaf key differs from the snapshotted jwk");
-  return selfSigned;   // a self-signed leaf is the issuer vouching for itself: still self-asserted (the chain is never validated to an anchor here)
+  // r8: r7 read "issued by someone else" off `subject !== issuer` — two DN strings the forger writes himself (a leaf
+  // self-signed with its own key, declaring CN=DigiCert Global Root CA, cleared the flag). Offline that is not
+  // establishable; only a chain validated to a relying-party trust anchor clears it, and this verifier cannot validate
+  // chains, so it always reports the key as self-asserted and `chain_verified: null` (declared, like tsa_verified).
+  return true;
 }
 function findBindings(arts) {
   const byValue = new Map();   // r5: inverse index (digest string -> [name, encoding]) — the per-leaf scan was O(artifacts), quadratic
@@ -200,12 +203,13 @@ function verifyRfc3161(tsrB64, expectedDigestHex) {
 }
 // ---- evidence ----
 export function verifyEvidence(path, opts = {}) {
-  const refuse = (m) => ({ digest_ok: false, artifacts: [], producer_signatures: { present: false, pq_protected: false, trusted: null }, pq_protected: false, bindings_ok: false, rfc3161: { claimed: false, verified: null }, provenance_classes: [], self_asserted_only: false, policy_ok: false, valid: false, honest_scope: null, refused: m });
+  const refuse = (m) => ({ digest_ok: false, artifacts: [], producer_signatures: { present: false, pq_protected: false, trusted: null }, pq_protected: false, bindings_ok: false, rfc3161: { claimed: false, verified: null }, provenance_classes: [], self_asserted_only: true, chain_verified: null, policy_ok: false, valid: false, honest_scope: null, refused: m });   // r8: the honesty flag is fail-closed inside a refusal too
   let ev; try { if (statSync(path).size > MAX_BYTES) return refuse("evidence file exceeds bound"); const raw = readFileSync(path); const text = UTF8.decode(raw); if (text.startsWith("﻿")) return refuse("BOM"); ev = parseStrict(text); } catch (e) { return refuse(String(e.message ?? e)); }
   if (ev === null || typeof ev !== "object" || Array.isArray(ev)) return refuse("not a JSON object");
   // shape of the top-level fields (SPEC §1), the same refusals as the reference
   if (ev.evidence_format !== EVIDENCE_FORMAT) return refuse("evidence_format must be " + JSON.stringify(EVIDENCE_FORMAT));   // r5: a "…/2.0" pack was verified under the 1.0 rules
   for (const f of ["subject", "created_utc", "honest_scope"]) if (typeof ev[f] !== "string") return refuse(f + " must be a string (SPEC §1)");
+  if (createHash("sha256").update(Buffer.from(ev.honest_scope, "utf8")).digest("hex") !== HONEST_SCOPE_SHA256) return refuse("honest_scope does not match the canonical scope of this evidence_format (SPEC §1)");   // r8: the receipt used to reprint any scope the file carried
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(ev.created_utc)) return refuse("created_utc must be ISO-8601 UTC, YYYY-MM-DDTHH:MM:SSZ (SPEC §1)");   // r6
   if (!Array.isArray(ev.artifacts) || ev.artifacts.some((a) => a === null || typeof a !== "object" || Array.isArray(a))) return refuse("artifacts must be a list of objects");
   const names = ev.artifacts.map((a) => a.name); if (names.some((n) => typeof n !== "string" || !n)) return refuse("artifacts[].name must be a non-empty string");   // r3
@@ -248,16 +252,17 @@ export function verifyEvidence(path, opts = {}) {
   if (opts.requireAnchor && rfc.verified !== true) policyOk = false;
   if (opts.requireAnchor && opts.tsaCert && rfc.tsa_verified !== true) policyOk = false;   // TSA verification requested: this verifier cannot perform it -> not a pass (declared)
   return { digest_ok: digestOk, artifacts: artResults, producer_signatures: producer, pq_protected: producer.pq_protected ?? false, bindings_ok: bindingsOk, rfc3161: rfc, provenance_classes: classes,
-    self_asserted_only: artResults.length > 0 && artResults.every((r) => r.self_asserted !== false), policy_ok: policyOk,   // r7 FAIL-CLOSED: a label alone no longer clears it; a missing class is a refusal
+    self_asserted_only: artResults.length > 0 && artResults.every((r) => r.self_asserted !== false), chain_verified: null, policy_ok: policyOk,   // r8: this verifier cannot validate x5c chains (declared)   // r7 FAIL-CLOSED: a label alone no longer clears it; a missing class is a refusal
     valid: Boolean(artResults.length && digestOk && allOk && bindingsOk && rfc.verified !== false && policyOk), honest_scope: ev.honest_scope ?? null, mldsa_backend: HAVE_MLDSA };
 }
 function main(argv) {
-  const usage = () => { console.error("usage: ap2-verify.mjs <evidence.json> [--trusted-producer-key ALG=B64]... [--require-producer] [--require-pq] [--require-anchor] [--tsa-cert PEM]"); process.exit(2); };
+  const usage = () => { console.error("usage: ap2-verify.mjs <evidence.json> [--trusted-producer-key ALG=B64]... [--require-producer] [--require-pq] [--require-anchor] [--tsa-cert PEM] [--trust-anchor PEM]"); process.exit(2); };
   const a = argv.slice(2); const opts = { trusted: null }; let path = null;
   for (let i = 0; i < a.length; i++) { let tok = a[i], eqv = null; const eq = tok.indexOf("="); if (eq > 0 && tok.startsWith("--")) { eqv = tok.slice(eq + 1); tok = tok.slice(0, eq); }
     const nx = () => { const v = eqv !== null ? eqv : a[++i]; if (v === undefined || v === "" || v.startsWith("-")) usage(); return v; };
     if (tok === "--trusted-producer-key") { const v = nx(); const k = v.indexOf("="); if (k <= 0 || k === v.length - 1) usage(); opts.trusted = opts.trusted ?? Object.create(null); (opts.trusted[v.slice(0, k)] ??= []).push(v.slice(k + 1)); }   // r2: a null-prototype table, so "constructor=…" is a pin like any other
     else if (tok === "--tsa-cert") opts.tsaCert = nx();
+    else if (tok === "--trust-anchor") { nx(); }   // r8: accepted for one CLI grammar; this verifier cannot validate x5c chains -> chain_verified stays null (declared)
     else if (tok === "--require-producer" && eqv === null) opts.requireProducer = true; else if (tok === "--require-pq" && eqv === null) opts.requirePq = true; else if (tok === "--require-anchor" && eqv === null) opts.requireAnchor = true;
     else if (tok.startsWith("-") || path !== null) usage(); else path = tok; }
   if (!path) usage();

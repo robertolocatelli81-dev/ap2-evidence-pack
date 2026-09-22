@@ -204,14 +204,16 @@ flags: `require_producer`, `require_pq`, `require_anchor`.
    block; if `require_pq` and not (`pq_protected` and `producer_trusted` true);
    if `require_anchor` and `rfc3161_verified` is not true (missing, unverifiable
    and failing all reject — "claimed" never upgrades to "proven").
-7. `self_asserted_only` is FAIL-CLOSED: `true` unless EVERY artifact's key was reconciled,
-   against the signed header, to a certificate leaf that **someone else issued**. So it is
-   `true` for `jwk_header`, `true` for an `x5c_header` whose leaf is self-signed, and `true`
-   for `supplied`/`jwks_fetched` — those labels cannot be checked offline, and a label is not
-   evidence. It is `false` only for an `x5c_header` leaf whose issuer differs from its subject,
-   and even then the chain is NOT validated to a trust anchor (that is a relying-party step).
-   1.1.0 r7: before this rule, writing `"supplied"` — or deleting the field — cleared the flag,
-   so the one field the honest scope sends the auditor to was under the pack author's control.
+7. `self_asserted_only` is FAIL-CLOSED: `true` unless EVERY artifact's key was reconciled to an
+   `x5c` chain that VALIDATES to a trust anchor the relying party supplies (`--trust-anchor`,
+   reported in `chain_verified`: `true`/`false`, or `null` when no anchor was given or the
+   verifier cannot validate chains). Offline and without an anchor, every class is
+   self-asserted — `jwk_header`, `x5c_header`, `supplied`, `jwks_fetched` alike — and so is
+   every refusal receipt. 1.1.0 r7 had made `supplied`/`jwks_fetched`/absent fail closed but
+   still cleared the flag when the leaf's issuer DN differed from its subject DN; r8 measured
+   that a leaf SELF-SIGNED with its own key, merely declaring `CN=DigiCert Global Root CA` as
+   its issuer, cleared it in both verifiers while the pack stayed `valid`. Two DN strings the
+   forger writes are not an issuance: only a validated chain is.
    (flag, not a failure: the verdict names the weakness instead of hiding it).
 8. `valid` = artifacts non-empty AND `digest_ok` AND every artifact verifies
    AND `bindings_ok` AND `rfc3161_verified` is not false AND producer block ok

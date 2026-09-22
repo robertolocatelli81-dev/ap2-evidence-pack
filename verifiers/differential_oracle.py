@@ -45,7 +45,12 @@ def _forged_tsr(digest, extra_tst=b""):
 # declaration must be updated with them (the run then reports the mismatch instead of silently passing).
 DECLARED = {"vector-anchor_valid-tsa-cert": {   # only the REAL token differs: Python proves the TSA (openssl), JS cannot -> policy_ok False
     "py": (True, True, True, True, True, None, True, True, True, "20260922110255Z", True, True, ("jwk_header",)),
-    "js": (False, True, True, True, True, None, True, True, True, "20260922110255Z", False, True, ("jwk_header",))}}
+    "js": (False, True, True, True, True, None, True, True, True, "20260922110255Z", False, True, ("jwk_header",))},
+    # r8: the x5c chain is validated by the reference only (openssl verify), like the TSA — with the anchor the reference
+    # clears self_asserted_only, the JS verifier cannot validate chains and keeps it true (declared, not a defect)
+    "x5c-ca-issued-with-trust-anchor": {
+        "py": (True, True, True, False, None, None, False, False, None, None, True, False, ("x5c_header",)),
+        "js": (True, True, True, False, None, None, False, False, None, None, True, True, ("x5c_header",))}}
 
 
 def flags_for(policy):
@@ -127,8 +132,13 @@ def build_cases(d):
     cases["header-deep-signed-rehashed"] = (w("hdeep", json.dumps(rehash(e))), [])
     # r6: the x5c_header branch had NO coverage at all (no vector carries an x5c) — a real self-signed leaf, canonical and
     # non-canonically spelled, plus a leaf whose key differs from the snapshotted jwk
-    for nm, ev6 in _x5c_cases(base):
+    x5c_built = _x5c_cases(base)
+    for nm, ev6 in x5c_built:
         cases["x5c-" + nm] = (w("x5c" + nm, json.dumps(rehash(ev6))), [])
+    anchor = os.path.join(d, "probe_ca.pem"); open(anchor, "wb").write(_x5c_cases.ca_pem)
+    ca_ev = dict(x5c_built)["ca-issued-leaf"]
+    cases["x5c-ca-issued-with-trust-anchor"] = (w("x5canch", json.dumps(rehash(ca_ev))), ["--trust-anchor", anchor])
+    cases["x5c-self-signed-with-trust-anchor"] = (w("x5cselfanch", json.dumps(rehash(dict(x5c_built)["canonical"]))), ["--trust-anchor", anchor])
     for nm, v in (("created_utc-not-iso", "22/09/2026"), ("created_utc-no-Z", "2026-09-22T00:00:00"), ("created_utc-ok", "2026-09-22T00:00:00Z")):
         e = copy.deepcopy(base); e["created_utc"] = v; cases["must-" + nm] = (w("cu" + nm, json.dumps(rehash(e))), [])
     e = copy.deepcopy(base); e["artifacts"][binder]["sd_jwt_compact"] = c + "\u00a0"; cases["compact-trailing-nbsp-rehashed"] = (w("nbsp", json.dumps(rehash(e))), [])
@@ -259,6 +269,10 @@ def _x5c_cases(base):
               .issuer_name(ca_name).public_key(sk.public_key()).serial_number(2)
               .not_valid_before(datetime.datetime(2026, 1, 1)).not_valid_after(datetime.datetime(2046, 1, 1)).sign(ca, hashes.SHA256()))
     leaf_issued = base64.b64encode(issued.public_bytes(serialization.Encoding.DER)).decode()
+    ca_cert = (x509.CertificateBuilder().subject_name(ca_name).issuer_name(ca_name).public_key(ca.public_key()).serial_number(3)
+               .not_valid_before(datetime.datetime(2026, 1, 1)).not_valid_after(datetime.datetime(2046, 1, 1))
+               .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True).sign(ca, hashes.SHA256()))
+    _x5c_cases.ca_pem = ca_cert.public_bytes(serialization.Encoding.PEM)   # r8: the anchor the relying party would pin
     out = []
     for nm, c, key_jwk in (("canonical", leaf, jwk), ("leaf-with-space", leaf[:20] + " " + leaf[20:], jwk), ("leaf-newline", leaf[:20] + "\n" + leaf[20:], jwk),
                            ("ca-issued-leaf", leaf_issued, jwk),
