@@ -369,7 +369,7 @@ def _pubkey_from_jwk(jwk: Dict):
 def _pubkey_from_x5c_leaf(x5c: List[str]):
     from cryptography import x509
     from cryptography.hazmat.primitives.asymmetric import ec
-    leaf = x509.load_der_x509_certificate(base64.b64decode(x5c[0]))
+    leaf = x509.load_der_x509_certificate(_sigsuite._unb64(x5c[0]))   # r6: strict RFC 4648 — b64decode() dropped a space/newline in the leaf, the JS verifier refused it
     pub = leaf.public_key()
     if not isinstance(pub, ec.EllipticCurvePublicKey) or pub.curve.name != "secp256r1":
         raise Ap2EvidenceError("x5c leaf key is not EC P-256 (ES256 only, declared)")
@@ -448,7 +448,7 @@ def _snapshot_key(parsed: Dict, supplied_jwk: Optional[Dict] = None,
             raise Ap2EvidenceError("x5c chain absent or too long (>10 certs): refused "
                                    "(a huge chain is a DoS vector, not a key)")
         pub = _pubkey_from_x5c_leaf(header["x5c"])
-        chain_fp = [hashlib.sha256(base64.b64decode(c)).hexdigest() for c in header["x5c"]]
+        chain_fp = [hashlib.sha256(_sigsuite._unb64(c)).hexdigest() for c in header["x5c"]]   # r6: strict, like the leaf
         return {"jwk": _jwk_from_pubkey(pub), "provenance_class": "x5c_header",
                 "x5c_chain_sha256": chain_fp,
                 "note": "leaf cert key verified the signature; chain recorded, PKI path "
@@ -818,6 +818,8 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
     for f in ("subject", "created_utc", "honest_scope"):   # SPEC §1 MUSTs: present and a string, or the receipt is silently poorer
         if not isinstance(ev.get(f), str):
             return refusal(f"{f} must be a string (SPEC §1)")
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", ev["created_utc"]):   # r6: §1 says ISO-8601 UTC; only the type was checked
+        return refusal("created_utc must be ISO-8601 UTC, YYYY-MM-DDTHH:MM:SSZ (SPEC §1)")
     if not isinstance(ev.get("artifacts"), list) or any(not isinstance(a, dict) for a in ev["artifacts"]):
         return refusal("artifacts must be a list of objects")
     names = [a.get("name") for a in ev["artifacts"]]   # r3: the name keys the binding table — a non-string crashed the JS table, "__proto__" vanished from it

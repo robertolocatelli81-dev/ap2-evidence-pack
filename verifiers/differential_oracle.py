@@ -110,8 +110,25 @@ def build_cases(d):
                     ("producer-signatures-list-of-null", lambda e: e.__setitem__("producer_signatures", {"signatures": [None]}))):
         e = copy.deepcopy(base); mut(e); cases[nm] = (w(nm, json.dumps(e)), [])
     e = copy.deepcopy(base); e["bindings"] = None; cases["bindings-null-rehashed"] = (w("bnull", json.dumps(rehash(e))), [])
-    e = copy.deepcopy(base); pp = parts[:]; pp[0] = ".".join([h, "W10", s_]); e["artifacts"][binder]["sd_jwt_compact"] = "~".join(pp); cases["payload-list-rehashed"] = (w("plist", json.dumps(rehash(e))), [])
-    deep = base64.urlsafe_b64encode(("[" * 100000).encode()).decode().rstrip("="); e = copy.deepcopy(base); pp = parts[:]; pp[0] = ".".join([deep, p_, s_]); e["artifacts"][binder]["sd_jwt_compact"] = "~".join(pp); cases["header-deep-rehashed"] = (w("hdeep", json.dumps(rehash(e))), [])
+    # r6: these two used to swap a segment WITHOUT re-signing, so both verifiers failed on the signature and the shape rule
+    # they are named after was never reached (that is how the JS shape check survived round 5 commented out). Now signed.
+    sk6, n6 = _fresh_key()
+    e = _fresh_pack(base, sk6, n6, '{"alg":"ES256","typ":"ap2-mandate+sd-jwt"}', '["not","an","object"]', ["not", "an", "object"])
+    for a in e["artifacts"]: a["key"].pop("provenance_class", None)
+    cases["payload-array-signed-rehashed"] = (w("parr", json.dumps(rehash(e))), [])
+    e = _fresh_pack(base, sk6, n6, '{"alg":"ES256","typ":"ap2-mandate+sd-jwt"}', '"a string payload"', "a string payload")
+    for a in e["artifacts"]: a["key"].pop("provenance_class", None)
+    cases["payload-string-signed-rehashed"] = (w("pstr2", json.dumps(rehash(e))), [])
+    deep_hdr = "[" * 100000
+    e = _fresh_pack(base, sk6, n6, deep_hdr.encode(), '{"iss":"x"}', {"iss": "x"})
+    for a in e["artifacts"]: a["key"].pop("provenance_class", None)
+    cases["header-deep-signed-rehashed"] = (w("hdeep", json.dumps(rehash(e))), [])
+    # r6: the x5c_header branch had NO coverage at all (no vector carries an x5c) — a real self-signed leaf, canonical and
+    # non-canonically spelled, plus a leaf whose key differs from the snapshotted jwk
+    for nm, ev6 in _x5c_cases(base):
+        cases["x5c-" + nm] = (w("x5c" + nm, json.dumps(rehash(ev6))), [])
+    for nm, v in (("created_utc-not-iso", "22/09/2026"), ("created_utc-no-Z", "2026-09-22T00:00:00"), ("created_utc-ok", "2026-09-22T00:00:00Z")):
+        e = copy.deepcopy(base); e["created_utc"] = v; cases["must-" + nm] = (w("cu" + nm, json.dumps(rehash(e))), [])
     e = copy.deepcopy(base); e["artifacts"][binder]["sd_jwt_compact"] = c + "\u00a0"; cases["compact-trailing-nbsp-rehashed"] = (w("nbsp", json.dumps(rehash(e))), [])
     e = copy.deepcopy(base); e["artifacts"][binder]["key"]["jwk"]["x"] = e["artifacts"][binder]["key"]["jwk"]["x"] + "="; cases["jwk-x-padded-rehashed"] = (w("jwkpad", json.dumps(rehash(e))), [])
     av = json.load(open(os.path.join(vdir, "anchor_valid.json"))); e = copy.deepcopy(av); t = e["rfc3161_timestamp"]["tsr_b64"]; e["rfc3161_timestamp"]["tsr_b64"] = t[:10] + " " + t[10:]; cases["tsr-b64-space"] = (w("tsrsp", json.dumps(e)), [])
@@ -212,6 +229,39 @@ def _fresh_key(top_zero=False):
         sk = ec.generate_private_key(ec.SECP256R1()); n = sk.public_key().public_numbers()
         if not top_zero or n.x >> 248 == 0:   # a coordinate whose leading byte is zero (about 1 key in 256): the 31-byte spelling
             return sk, n
+
+
+def _x5c_cases(base):
+    """A real self-signed P-256 certificate in the signed header, provenance_class x5c_header: canonical (must verify in both),
+    with a space / newline inside the leaf (r6: `base64.b64decode` dropped them in the reference, `b64Strict` refused them in JS),
+    and a leaf whose public key is NOT the snapshotted one (the reconciliation must refuse)."""
+    import datetime
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+    b64u = lambda b: base64.urlsafe_b64encode(b).decode().rstrip("=")  # noqa: E731
+    sk = ec.generate_private_key(ec.SECP256R1()); nums = sk.public_key().public_numbers()
+    jwk = {"kty": "EC", "crv": "P-256", "x": b64u(nums.x.to_bytes(32, "big")), "y": b64u(nums.y.to_bytes(32, "big"))}
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "oracle probe issuer")])
+    cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(sk.public_key()).serial_number(1)
+            .not_valid_before(datetime.datetime(2026, 1, 1)).not_valid_after(datetime.datetime(2046, 1, 1)).sign(sk, hashes.SHA256()))
+    leaf = base64.b64encode(cert.public_bytes(serialization.Encoding.DER)).decode()
+    other = ec.generate_private_key(ec.SECP256R1()); on = other.public_key().public_numbers()
+    out = []
+    for nm, c, key_jwk in (("canonical", leaf, jwk), ("leaf-with-space", leaf[:20] + " " + leaf[20:], jwk), ("leaf-newline", leaf[:20] + "\n" + leaf[20:], jwk),
+                           ("leaf-key-mismatch", leaf, {"kty": "EC", "crv": "P-256", "x": b64u(on.x.to_bytes(32, "big")), "y": b64u(on.y.to_bytes(32, "big"))})):
+        hdr = json.dumps({"alg": "ES256", "typ": "ap2-mandate+sd-jwt", "x5c": [c]}, separators=(",", ":"))
+        si = b64u(hdr.encode()) + "." + b64u(b'{"iss":"x"}')
+        signer = sk if key_jwk is jwk else other
+        r, s_ = decode_dss_signature(signer.sign(si.encode("ascii"), ec.ECDSA(hashes.SHA256())))
+        compact = si + "." + b64u(r.to_bytes(32, "big") + s_.to_bytes(32, "big")) + "~"
+        out.append((nm, {"evidence_format": base["evidence_format"], "subject": "oracle r6", "created_utc": "2026-09-22T00:00:00Z",
+                         "artifacts": [{"name": "intent", "sd_jwt_compact": compact, "header": json.loads(hdr), "key": {"jwk": key_jwk, "provenance_class": "x5c_header"},
+                                        "resolved_claims": {"iss": "x"}, "kb_jwt": {"present": False}, "verified_at_build": {"signature_ok": True, "disclosures_ok": True}}],
+                         "bindings": [], "honest_scope": base["honest_scope"]}))
+    return out
 
 
 def _sign_compact(sk, n, payload_txt):

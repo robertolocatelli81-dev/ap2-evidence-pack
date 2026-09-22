@@ -202,10 +202,6 @@ class TestPositive(_Base):
         self.assertEqual(ap2.main(["verify", self.out]), 0)
 
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
-
-
 class TestProLevelSelfAttack(_Base):
     """Trovati dall'auto-attacco a rigore Pro (2026-08-21): correzioni nei DUE sensi."""
 

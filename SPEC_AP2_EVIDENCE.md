@@ -52,7 +52,8 @@ are equal. `jwk_header` is self-asserted. Any other value (or a non-string) is a
 refusal of that artifact. A verifier MUST RECONCILE the two header-derived classes
 with the header it just parsed: `jwk_header` requires the signed header to carry a
 `jwk` equal to the snapshotted one on `kty`/`crv`/`x`/`y`; `x5c_header` requires a
-signed `x5c` whose leaf public key equals it. `supplied` and `jwks_fetched` are
+signed `x5c` whose leaf public key equals it; `x5c` entries are strict base64 (RFC 4648,
+no whitespace) like every other base64 value in the format. `supplied` and `jwks_fetched` are
 capture-time assertions that cannot be checked offline — a verifier records them,
 and a relying party MUST NOT read them as proof of anything beyond the declaration.
 1.1.0 r5: before this rule `provenance_class` was believed, so relabelling
@@ -115,9 +116,11 @@ and reports `null`. Under `--require-anchor --tsa-cert`, `tsa_verified` must be 
 for `policy_ok` — so the JS verifier never passes that policy (declared divergence).
 `tsr_b64` is strict base64 (RFC 4648) like the producer block. Both verifiers report the
 TSTInfo `genTime` as `rfc3161.gen_time` (GeneralizedTime, UTC, or `null` when absent or
-malformed); the reference validates the TSA chain **at that time** (`openssl ts -verify
--attime`), so a TSA certificate that expired after issuing the token does not turn
-`tsa_verified` false years later. Revocation is not checked (declared).
+malformed); the reference validates the TSA chain **at that time** (`openssl ts -verify -attime`)
+when the token carries a well-formed `genTime`, so a TSA certificate that expired after
+issuing the token does not turn `tsa_verified` false years later; with no usable `genTime`
+the chain is validated at the current time instead (an expired certificate then fails).
+Revocation is not checked (declared).
 
 ## 4. Bindings (NORMATIVE)
 

@@ -72,12 +72,23 @@ measured on the 1.0.2 verifier first (every case below was red there).
   after: 0.009 s and 0.015 s, 0.071 s at 16 000); the set of bindings is unchanged. `build` refuses an empty artifact
   name (it used to write a pack, exit 0, that both verifiers then refused) and its CLI validates `name=path` pairs and
   reports unreadable files as usage (exit 2) instead of a `FileNotFoundError` traceback. The oracle now compares the
-  ELEVEN normative fields of SPEC §6 (it compared seven; `provenance_classes` really did diverge, sorted by code point
+  eleven normative fields of SPEC §6 plus `provenance_classes` (it compared seven; `provenance_classes` really did diverge, sorted by code point
   in the reference and by UTF-16 code unit in JS — the JS side now uses the same comparator) and runs 113 cases,
   0 disagreements, 1 declared; the file-level ablation is applied at its use site (patching `loads_strict` also ablated
   the JWT level, since `_loads_segment` delegates to it); two tests that claimed "in both verifiers" now skip instead of
   passing when node is absent, and the bare-invocation loop really runs the JS CLI. Three vector descriptions realigned
   with the code (they still said "neither verifier validates the TSA chain", "cryptographic token verification" and
   "the one ACCEPT of the set").
+- **Review round 6** (Opus/Sonnet/Haiku, 22/09/2026): the JS "JWT header and payload must be objects" check had ended up
+  INSIDE an unterminated line comment in round 5 — a signed payload that is a JSON array verified there and failed in the
+  reference; it is code again, and the oracle case that was supposed to cover it (`payload-list-rehashed`) turned out to
+  swap the segment without re-signing, so both verifiers failed on the signature and the shape rule was never reached:
+  the payload/header shape cases are now built as freshly SIGNED packs. The `x5c` leaf is decoded with the strict base64
+  decoder in the reference (`base64.b64decode` dropped a space or newline, the JS verifier refused the same bytes) and the
+  `x5c_header` branch, which had no coverage at all, gets four oracle cases with a real self-signed leaf. A stray
+  `unittest.main()` in the middle of `test_ap2_evidence.py` meant 13 of its 27 tests never ran in CI (holder binding,
+  producer content binding, x5c chain limits): removed, and CI now fails if a module collects fewer tests as a script than
+  as a module. `created_utc` is imposed as ISO-8601 UTC in both verifiers (SPEC §1 said MUST, only the type was checked).
+  Oracle: 121 cases, 0 disagreements, 1 declared; positive control 3 red on the round-5 state.
 
 Verdicts unchanged on in-profile evidence produced by 1.0.x `build`.

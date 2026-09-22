@@ -203,6 +203,7 @@ export function verifyEvidence(path, opts = {}) {
   // shape of the top-level fields (SPEC §1), the same refusals as the reference
   if (ev.evidence_format !== EVIDENCE_FORMAT) return refuse("evidence_format must be " + JSON.stringify(EVIDENCE_FORMAT));   // r5: a "…/2.0" pack was verified under the 1.0 rules
   for (const f of ["subject", "created_utc", "honest_scope"]) if (typeof ev[f] !== "string") return refuse(f + " must be a string (SPEC §1)");
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(ev.created_utc)) return refuse("created_utc must be ISO-8601 UTC, YYYY-MM-DDTHH:MM:SSZ (SPEC §1)");   // r6
   if (!Array.isArray(ev.artifacts) || ev.artifacts.some((a) => a === null || typeof a !== "object" || Array.isArray(a))) return refuse("artifacts must be a list of objects");
   const names = ev.artifacts.map((a) => a.name); if (names.some((n) => typeof n !== "string" || !n)) return refuse("artifacts[].name must be a non-empty string");   // r3
   if (new Set(names).size !== names.length) return refuse("artifacts[].name must be unique within the pack");
@@ -218,7 +219,11 @@ export function verifyEvidence(path, opts = {}) {
       if (!a.key || typeof a.key !== "object" || Array.isArray(a.key)) throw new Refused("artifact key.jwk must be an object");
       const pc = a.key.provenance_class ?? null;   // r2: a list was sorted here; r5: out-of-enum passed as a strong class
       if (pc !== null && !PROVENANCE_CLASSES.has(pc)) throw new Refused("artifact key.provenance_class must be one of " + [...PROVENANCE_CLASSES].sort().join(", "));
-      const parsed = parseSdJwt(compact); checkProvenance(pc, parsed, a.key);   // r5: header-derived classes are reconciled with the signed header if (parsed.payload === null || typeof parsed.payload !== "object" || Array.isArray(parsed.payload) || parsed.header === null || typeof parsed.header !== "object" || Array.isArray(parsed.header)) throw new Refused("JWT header and payload must be objects");
+      const parsed = parseSdJwt(compact);
+      // r6: this shape check spent round 5 INSIDE an unterminated line comment — a signed payload that is a JSON array
+      // verified in this verifier and failed in the reference. It runs before checkProvenance, which reads the header.
+      if (parsed.payload === null || typeof parsed.payload !== "object" || Array.isArray(parsed.payload) || parsed.header === null || typeof parsed.header !== "object" || Array.isArray(parsed.header)) throw new Refused("JWT header and payload must be objects");
+      checkProvenance(pc, parsed, a.key);   // r5: header-derived classes are reconciled with the signed header
       const sigOk = es256Verify(parsed.signingInput, parsed.signature, a.key.jwk); const resolved = resolveDisclosures(parsed.payload, parsed.disclosures);
       const claimsOk = canon(resolved) === canon(a.resolved_claims ?? null); const kb = verifyKbJwt(parsed, resolved);
       artResults.push({ name: a.name, signature_ok: sigOk, claims_match: claimsOk, kb_jwt: kb, provenance_class: a.key?.provenance_class });

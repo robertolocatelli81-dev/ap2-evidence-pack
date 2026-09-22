@@ -20,6 +20,16 @@ jobs:
         run: |
           set -e
           for t in test_*.py pqcrypto/test_*.py; do echo "== $t"; python "$t"; done
+      - name: "Every test in every module is actually collected (a stray unittest.main() once hid 13 tests from CI)"
+        run: |
+          set -e
+          for t in test_*.py pqcrypto/test_*.py; do
+            m=$(basename "$t" .py); d=$(dirname "$t")
+            direct=$(cd "$d" && python "$(basename "$t")" 2>&1 | sed -n 's/^Ran \([0-9]*\) test.*/\1/p' | tail -1)
+            full=$(cd "$d" && python -m unittest "$m" 2>&1 | sed -n 's/^Ran \([0-9]*\) test.*/\1/p' | tail -1)
+            echo "$t: as a script $direct, as a module $full"
+            if [ "$direct" != "$full" ]; then echo "::error::$t runs $direct tests as a script but $full as a module"; exit 1; fi
+          done
       - name: "Gate — build the sample evidence, verify it (exit 0), tamper one artifact, verify again (MUST exit 1)"
         run: |
           set -e
