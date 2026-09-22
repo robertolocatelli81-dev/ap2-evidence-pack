@@ -125,5 +125,16 @@ measured on the 1.0.2 verifier first (every case below was red there).
   a CA under the relying party's anchor certified that key, never that the key belongs to the mandate's issuer — without the
   DN an auditor cannot tell `CN=the-bank` from `CN=attacker`. Oracle: 129 cases, 0 disagreements, 2 declared; positive
   control 4 red on the round-8 state, plus a unit test for the expired leaf measured red there.
+- **Review round 10** (Opus/Sonnet/Haiku, 22/09/2026): `self_asserted_only` was computed with `all()` over the per-artifact
+  flags, so ONE reconciled artifact cleared it for the whole pack — measured: a pack whose mandate carried a self-asserted
+  `jwk_header` key and whose second artifact chained to the relying party's anchor reported `self_asserted_only: false`,
+  i.e. "no self-asserted key here", while the mandate-signing key had never been reconciled at all (and the JS verifier
+  said `true`: an undeclared divergence the oracle could not see). It is `any()` in both now. The reference asserted
+  `granted: false` on a truncated token whose PKIStatus it had already read as granted; both verifiers now carry the status
+  that was actually read into the failure path, or `null`. The JS receipt did not carry the leaf validity that SPEC §6.7
+  requires, and rendered DNs in OpenSSL multi-line form while the reference used RFC 4514 — the same certificate produced
+  two different receipts in the field §6.7 asks for precisely to tell `CN=the-bank` from `CN=attacker`; RFC 4514 in both.
+  The oracle now compares `rfc3161.granted`, `rfc3161.imprint_ok`, `chain_verified` and the `x5c_leaf` identity: 130 cases,
+  0 disagreements, 3 declared, and **10 red** against the round-9 state. README: 19 CLI cases, not 16.
 
 Verdicts unchanged on in-profile evidence produced by 1.0.x `build`.

@@ -15,8 +15,12 @@ JS = ["node", os.environ.get("AP2_ORACLE_JS", os.path.join(HERE, "js", "ap2-veri
 # r5: the ELEVEN normative fields of SPEC §6, not the seven of 1.1.0 r1 — `producer_present`, `producer_trusted`,
 # `rfc3161_claimed` and `self_asserted_only` were never compared on the hostile files, and one of them (the sorted
 # `provenance_classes` behind self_asserted_only) really did diverge (code point vs UTF-16 code unit).
+# r10: `granted`/`imprint_ok` and the x5c leaf identity are compared too — the reference asserted `granted: false` on a
+# truncated token whose status it had read as granted, and the two verifiers rendered the same DN in different encodings
+# (RFC 4514 vs OpenSSL multi-line) with the JS one missing the validity a §6.7 MUST requires: none of it was visible here.
 KEYS = ("valid", "digest_ok", "bindings_ok", "producer_present", "producer_ok", "producer_trusted", "pq_protected",
-        "rfc3161_claimed", "rfc3161_verified", "rfc3161_gen_time", "policy_ok", "self_asserted_only", "provenance_classes")
+        "rfc3161_claimed", "rfc3161_verified", "rfc3161_granted", "rfc3161_imprint_ok", "rfc3161_gen_time",
+        "policy_ok", "self_asserted_only", "chain_verified", "provenance_classes", "x5c_leaves")
 
 
 def canon(obj):
@@ -43,14 +47,31 @@ def _forged_tsr(digest, extra_tst=b""):
 # and under --require-anchor --tsa-cert does NOT pass (policy_ok false) — the same verdict, one different field.
 # NB: the gen_time below is the probe TSA token's own genTime — regenerating the anchor vectors changes it and this
 # declaration must be updated with them (the run then reports the mismatch instead of silently passing).
-DECLARED = {"vector-anchor_valid-tsa-cert": {   # only the REAL token differs: Python proves the TSA (openssl), JS cannot -> policy_ok False
-    "py": (True, True, True, True, True, None, True, True, True, "20260922110255Z", True, True, ("jwk_header",)),
-    "js": (False, True, True, True, True, None, True, True, True, "20260922110255Z", False, True, ("jwk_header",))},
-    # r8: the x5c chain is validated by the reference only (openssl verify), like the TSA — with the anchor the reference
-    # clears self_asserted_only, the JS verifier cannot validate chains and keeps it true (declared, not a defect)
+_LEAF_CA = _LEAF_SELF = None   # the x5c leaves are freshly generated each run: the declaration ignores that one field
+
+DECLARED = {
+    # The three declared divergences all have ONE cause: chain and TSA validation run `openssl` and are therefore the
+    # reference's alone — the JS verifier reports `chain_verified: null` / `tsa_verified: null` and never clears a flag or
+    # passes a policy on their strength. NB the gen_time below is the probe TSA token's own genTime: regenerating the
+    # anchor vectors changes it and this declaration must be updated with them (the run then reports the mismatch).
+    "vector-anchor_valid-tsa-cert": {
+        "py": (True, True, True, True, True, None, True, True, True, True, True, "20260922110255Z", True, True, None, ("jwk_header",), ()),
+        "js": (False, True, True, True, True, None, True, True, True, True, True, "20260922110255Z", False, True, None, ("jwk_header",), ())},
     "x5c-ca-issued-with-trust-anchor": {
-        "py": (True, True, True, False, None, None, False, False, None, None, True, False, ("x5c_header",)),
-        "js": (True, True, True, False, None, None, False, False, None, None, True, True, ("x5c_header",))}}
+        "py": (True, True, True, False, None, None, False, False, None, None, None, None, True, False, True, ("x5c_header",), _LEAF_CA),
+        "js": (True, True, True, False, None, None, False, False, None, None, None, None, True, True, None, ("x5c_header",), _LEAF_CA)},
+    "x5c-self-signed-with-trust-anchor": {
+        "py": (True, True, True, False, None, None, False, False, None, None, None, None, True, True, False, ("x5c_header",), _LEAF_SELF),
+        "js": (True, True, True, False, None, None, False, False, None, None, None, None, True, True, None, ("x5c_header",), _LEAF_SELF)}}
+
+
+def _matches_declared(name, py, js):
+    """A declared divergence matches when every compared field agrees with the declaration, except the freshly generated
+    x5c leaf identity (new keys each run) — which must still be IDENTICAL between the two verifiers."""
+    d = DECLARED[name]
+    if py[-1] != js[-1]:
+        return False
+    return py[:-1] == d["py"][:-1] and js[:-1] == d["js"][:-1]
 
 
 def flags_for(policy):
@@ -68,8 +89,11 @@ def run(cmd, path, flags):
     try:
         out = subprocess.run(list(cmd) + [path] + flags, capture_output=True, text=True, timeout=120)
         r = json.loads(out.stdout); prod = r.get("producer_signatures") or {}; ts = r.get("rfc3161") or {}
+        leaves = tuple(tuple((a.get("x5c_leaf") or {}).get(f) for f in ("subject", "issuer", "serial", "not_valid_before", "not_valid_after", "sha256"))
+                       for a in (r.get("artifacts") or []) if a.get("x5c_leaf"))   # identity only: chain_verified is the declared divergence, compared at top level
         return (r.get("valid"), r.get("digest_ok"), r.get("bindings_ok"), prod.get("present"), prod.get("ok"), prod.get("trusted"),
-                r.get("pq_protected"), ts.get("claimed"), ts.get("verified"), ts.get("gen_time"), r.get("policy_ok"), r.get("self_asserted_only"), tuple(r.get("provenance_classes") or ()))
+                r.get("pq_protected"), ts.get("claimed"), ts.get("verified"), ts.get("granted"), ts.get("imprint_ok"), ts.get("gen_time"),
+                r.get("policy_ok"), r.get("self_asserted_only"), r.get("chain_verified"), tuple(r.get("provenance_classes") or ()), leaves)
     except Exception:  # noqa: BLE001
         return ("NONJSON/CRASH:" + os.path.basename(cmd[-1] if cmd[-1] != "verify" else cmd[-2]),) * len(KEYS)   # distinct per verifier: two crashes never agree
 
@@ -136,6 +160,10 @@ def build_cases(d):
     for nm, ev6 in x5c_built:
         cases["x5c-" + nm] = (w("x5c" + nm, json.dumps(rehash(ev6))), [])
     anchor = os.path.join(d, "probe_ca.pem"); open(anchor, "wb").write(_x5c_cases.ca_pem)
+    # r10: a MIXED pack — the mandate is a self-asserted jwk_header, a second artifact chains to the anchor. With `all()`
+    # the reference cleared self_asserted_only, i.e. "no self-asserted key here", while the mandate key was never reconciled.
+    mixed = _mixed_pack(base, dict(x5c_built)["ca-issued-leaf"])
+    cases["mixed-self-asserted-mandate-plus-chained-artifact"] = (w("mixed", json.dumps(rehash(mixed))), ["--trust-anchor", anchor])
     ca_ev = dict(x5c_built)["ca-issued-leaf"]
     cases["x5c-ca-issued-with-trust-anchor"] = (w("x5canch", json.dumps(rehash(ca_ev))), ["--trust-anchor", anchor])
     cases["x5c-self-signed-with-trust-anchor"] = (w("x5cselfanch", json.dumps(rehash(dict(x5c_built)["canonical"]))), ["--trust-anchor", anchor])
@@ -291,6 +319,16 @@ def _x5c_cases(base):
     return out
 
 
+def _mixed_pack(base, x5c_ev):
+    """One self-asserted (jwk_header) artifact plus the CA-issued x5c one: the case where `all` and `any` differ."""
+    sk, n = _fresh_key()
+    solo = _fresh_pack(base, sk, n, '{"alg":"ES256","typ":"ap2-mandate+sd-jwt"}', '{"iss":"x"}', {"iss": "x"})
+    ev = json.loads(json.dumps(x5c_ev))
+    a0 = json.loads(json.dumps(solo["artifacts"][0])); a0["name"] = "mandate"
+    ev["artifacts"] = [a0] + ev["artifacts"]
+    return ev
+
+
 def _sign_compact(sk, n, payload_txt):
     """An SD-JWT (no disclosures) with the JWK in the header, signed by `sk` — what the reference's `build` snapshots as jwk_header."""
     from cryptography.hazmat.primitives import hashes
@@ -341,7 +379,7 @@ def main():
         declared = 0
         for name, (path, flags) in cases.items():
             py, js = run(PY, path, flags), run(JS, path, flags); n += 1
-            if name in DECLARED and (py, js) == (DECLARED[name]["py"], DECLARED[name]["js"]):
+            if name in DECLARED and _matches_declared(name, py, js):
                 declared += 1; print(f"  [DECL] {name:34} py={py} js={js}  <- declared: TSA verification is openssl-only"); continue
             ok = py == js; diffs += 0 if ok else 1
             print(f"  [{'OK ' if ok else 'DIFF'}] {name:34} py={py} js={js}")

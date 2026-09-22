@@ -136,7 +136,13 @@ function checkProvenance(pc, parsed, key) {   // returns: is this key SELF-ASSER
     leaf = createPublicKey({ key: cert.publicKey.export({ format: "jwk" }), format: "jwk" }).export({ format: "jwk" });
     // r9: the receipt names WHO the certificate was issued to — a cleared flag means "a CA under your anchor certified this key",
     // never "the key belongs to the mandate's issuer", and an auditor cannot tell CN=the-bank from CN=attacker without this
-    ident = { subject: cert.subject, issuer: cert.issuer, serial: cert.serialNumber.toLowerCase().replace(/^0+/, ""),
+    // r10: RFC 4514 (most specific RDN first, comma-separated) in both verifiers — Node renders a DN as OpenSSL multi-line
+    // in the opposite order, so the same certificate produced two different receipts in the field §6.7 asks for precisely
+    // to tell CN=the-bank from CN=attacker. Validity too: it is a MUST of §6.7 and it was missing here.
+    const rfc4514 = (dn) => String(dn).split("\n").filter(Boolean).reverse().join(",");
+    const isoZ = (t) => new Date(t).toISOString().replace(/\.\d{3}Z$/, "Z");
+    ident = { subject: rfc4514(cert.subject), issuer: rfc4514(cert.issuer), serial: cert.serialNumber.toLowerCase().replace(/^0+/, ""),
+              not_valid_before: isoZ(cert.validFrom), not_valid_after: isoZ(cert.validTo),
               sha256: createHash("sha256").update(der).digest("hex"), chain_verified: null };
   } catch (e) { throw new Refused("provenance_class x5c_header but the x5c leaf is unusable"); }
   if (["kty", "crv", "x", "y"].some((f) => leaf[f] !== jwk[f])) throw new Refused("provenance_class x5c_header but the x5c leaf key differs from the snapshotted jwk");
@@ -191,10 +197,11 @@ function derTLV(buf, off) { if (off + 2 > buf.length) throw new Refused("der"); 
 function derChildren(buf, tlv) { const out = []; let o = tlv.start; while (o < tlv.end) { const c = derTLV(buf, o); out.push(c); o = c.next; } return out; }
 function verifyRfc3161(tsrB64, expectedDigestHex) {
   const raw = b64Strict(tsrB64); if (!raw) return { verified: false, granted: false, imprint_ok: false, gen_time: null, note: "tsr_b64 is not canonical base64" };   // r7: same receipt shape as the reference
+  let grantedRead = null;   // r10: the status read before any later failure, so the receipt reports a measured granted, never an assumed one
   try {
     const resp = derTLV(raw, 0); if (resp.tag !== 0x30) return { verified: false, note: "not a TimeStampResp" };
     const [status, token] = derChildren(raw, resp); const st = derChildren(raw, status)[0]; if (!st || st.tag !== 0x02) return { verified: false, note: "no status" };
-    const granted = st.end - st.start === 1 && (raw[st.start] === 0 || raw[st.start] === 1);   // granted (0) / grantedWithMods (1)
+    const granted = st.end - st.start === 1 && (raw[st.start] === 0 || raw[st.start] === 1); grantedRead = granted;   // granted (0) / grantedWithMods (1)
     if (!token) return { verified: false, granted, imprint_ok: false };
     const ci = derChildren(raw, token); const sd = ci[1] && derChildren(raw, ci[1])[0]; if (!sd) return { verified: false, granted, imprint_ok: false };
     const sdc = derChildren(raw, sd);           // version, digestAlgorithms, encapContentInfo, [certs], [crls], signerInfos
@@ -204,7 +211,7 @@ function verifyRfc3161(tsrB64, expectedDigestHex) {
     const imprint = raw.subarray(hash.start, hash.end).toString("hex"); const imprintOk = imprint === expectedDigestHex.toLowerCase();
     let genTime = null; const gt = tstc[4]; if (gt && gt.tag === 0x18) { const s = raw.subarray(gt.start, gt.end).toString("latin1"); if (/^\d{14}(\.\d+)?Z$/.test(s)) genTime = s; }   // r4: TSTInfo.genTime, reported as in the reference
     return { verified: Boolean(granted && imprintOk), granted, imprint_ok: imprintOk, gen_time: genTime };
-  } catch (e) { return { verified: false, note: "token not parseable: " + (e.message ?? e) }; }
+  } catch (e) { return { verified: false, granted: grantedRead, imprint_ok: false, gen_time: null, note: "token not parseable: " + (e.message ?? e) }; }   // r10: same shape and same measured status as the reference
 }
 // ---- evidence ----
 export function verifyEvidence(path, opts = {}) {
@@ -257,7 +264,9 @@ export function verifyEvidence(path, opts = {}) {
   if (opts.requireAnchor && rfc.verified !== true) policyOk = false;
   if (opts.requireAnchor && opts.tsaCert && rfc.tsa_verified !== true) policyOk = false;   // TSA verification requested: this verifier cannot perform it -> not a pass (declared)
   return { digest_ok: digestOk, artifacts: artResults, producer_signatures: producer, pq_protected: producer.pq_protected ?? false, bindings_ok: bindingsOk, rfc3161: rfc, provenance_classes: classes,
-    self_asserted_only: artResults.length > 0 && artResults.every((r) => r.self_asserted !== false), chain_verified: null, policy_ok: policyOk,   // r8: this verifier cannot validate x5c chains (declared)   // r7 FAIL-CLOSED: a label alone no longer clears it; a missing class is a refusal
+    // r10: ANY — one reconciled artifact must not clear the flag for the others; r7: a label alone never clears it,
+    // a missing class is a refusal; r8: this verifier cannot validate x5c chains, so chain_verified is always null (declared)
+    self_asserted_only: artResults.length > 0 && artResults.some((r) => r.self_asserted !== false), chain_verified: null, policy_ok: policyOk,
     valid: Boolean(artResults.length && digestOk && allOk && bindingsOk && rfc.verified !== false && policyOk), honest_scope: ev.honest_scope ?? null, mldsa_backend: HAVE_MLDSA };
 }
 function main(argv) {

@@ -204,7 +204,8 @@ flags: `require_producer`, `require_pq`, `require_anchor`.
    block; if `require_pq` and not (`pq_protected` and `producer_trusted` true);
    if `require_anchor` and `rfc3161_verified` is not true (missing, unverifiable
    and failing all reject — "claimed" never upgrades to "proven").
-7. `self_asserted_only` is FAIL-CLOSED: `true` unless EVERY artifact's key was reconciled to an
+7. `self_asserted_only` is FAIL-CLOSED: `true` if ANY artifact's key is still self-asserted — it is
+   cleared only when EVERY artifact's key was reconciled to an
    `x5c` chain that VALIDATES to a trust anchor the relying party supplies (`--trust-anchor`,
    reported in `chain_verified`: `true`/`false`, or `null` when no anchor was given, the verifier
    cannot validate chains, or the check was not measurable — openssl absent). The chain is validated

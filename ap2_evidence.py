@@ -710,12 +710,16 @@ def _der_children(buf: bytes, start: int, end: int) -> List[Tuple[int, int, int]
     return out
 
 
-def parse_timestamp_resp(tsr: bytes) -> Dict:
+def parse_timestamp_resp(tsr: bytes, _partial: Optional[Dict] = None) -> Dict:
     """Minimal DER walk of an RFC 3161 TimeStampResp: PKIStatus and the TSTInfo messageImprint hash (hex). No signature
-    or certificate processing — the same two facts the JS verifier reads (SPEC §3.2)."""
+    or certificate processing — the same two facts the JS verifier reads (SPEC §3.2). `_partial` collects what was read
+    before any failure, so the caller can report a measured `granted` instead of asserting one (r10)."""
+    _partial = {} if _partial is None else _partial
     tag, st, en = _der_tlv(tsr, 0)
     if tag != 0x30:
         raise Ap2EvidenceError("not a TimeStampResp")
+    # r10: PKIStatus is read first and carried on the exception, so a truncated token does not make the receipt claim
+    # `granted: false` — a fact it never established (the JS verifier reported the status it had actually read)
     kids = _der_children(tsr, st, en)
     if not kids:
         raise Ap2EvidenceError("empty TimeStampResp")
@@ -725,6 +729,7 @@ def parse_timestamp_resp(tsr: bytes) -> Dict:
         raise Ap2EvidenceError("no PKIStatus")
     status_bytes = tsr[sk[0][1]:sk[0][2]]
     granted = len(status_bytes) == 1 and status_bytes[0] in (0, 1)
+    _partial["granted"] = granted
     if len(kids) < 2:
         return {"granted": granted, "imprint": None}
     ci = _der_children(tsr, kids[1][1], kids[1][2])           # ContentInfo: OID, [0] SignedData
@@ -775,11 +780,12 @@ def _verify_rfc3161(tsr_b64: str, expected_digest_hex: str, timeout: int = 15, t
         tsr = _sigsuite._unb64(tsr_b64)                       # strict base64 (a space inside the token used to be skipped)
     except (ValueError, TypeError):
         return {"verified": False, "granted": False, "imprint_ok": False, "gen_time": None, "tsa_verified": None, "note": "tsr_b64 is not canonical base64"}
+    partial: Dict = {}
     try:
-        info = parse_timestamp_resp(tsr)
+        info = parse_timestamp_resp(tsr, partial)
     except Exception as e:  # noqa: BLE001 — any malformed DER is "not parseable" (r2: an empty EXPLICIT [0] was an IndexError traceback)
-        return {"verified": False, "granted": False, "imprint_ok": False, "gen_time": None, "tsa_verified": None,   # r7: same receipt shape as the JS verifier
-                "note": f"token not parseable: {type(e).__name__}: {str(e)[:80]}"}
+        return {"verified": False, "granted": partial.get("granted"), "imprint_ok": False, "gen_time": None, "tsa_verified": None,
+                "note": f"token not parseable: {type(e).__name__}: {str(e)[:80]}"}   # r10: the status READ, or None — never an unmeasured False
     imprint_ok = info["imprint"] == expected_digest_hex.lower()
     out = {"verified": bool(info["granted"] and imprint_ok), "granted": info["granted"], "imprint_ok": imprint_ok, "gen_time": info.get("gen_time"), "tsa_verified": None}
     if tsa_cert is None:
@@ -1034,9 +1040,11 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
             "producer_signatures": producer, "pq_protected": producer.get("pq_protected", False),
             "bindings_ok": bindings_ok, "rfc3161": rfc,
             "provenance_classes": classes,
-            # r7 FAIL-CLOSED: self-asserted unless EVERY artifact's key was reconciled to a leaf that someone else issued.
-            # A label alone ("supplied", "jwks_fetched") no longer clears it, and deleting the field is a refusal now.
-            "self_asserted_only": bool(art_results) and all(r.get("self_asserted", True) for r in art_results),
+            # r7 FAIL-CLOSED, r10 with ANY: the flag warns that a key in this pack is self-asserted, so ONE reconciled
+            # artifact must not clear it for the others — measured: a pack whose mandate was `jwk_header` and whose second
+            # artifact chained to the anchor reported `self_asserted_only: false`, i.e. "no self-asserted key here", while
+            # the mandate-signing key had never been reconciled at all. A label ("supplied", "jwks_fetched") never clears it.
+            "self_asserted_only": bool(art_results) and any(r.get("self_asserted", True) for r in art_results),
             # r8: what the verifier DID about chains — None when no anchor was supplied (so the flag above is fail-closed true)
             # r9: True only if every artifact's chain really validated; None when openssl could not measure it; False otherwise
             "chain_verified": None if trust_anchor is None else (
