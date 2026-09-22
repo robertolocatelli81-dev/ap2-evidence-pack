@@ -193,8 +193,8 @@ class TestPositive(_Base):
         self.assertEqual(v["provenance_classes"], ["x5c_header"])
 
     def test_cli_build_and_verify(self):
-        ip = os.path.join(self.d, "intent.sdjwt")
-        cp = os.path.join(self.d, "cart.sdjwt")
+        ip = os.path.join(self.d, "checkout.sdjwt")
+        cp = os.path.join(self.d, "payment.sdjwt")
         open(ip, "w").write(self.intent)
         open(cp, "w").write(self.cart)
         rc = ap2.main(["build", self.out, f"intent={ip}", f"cart={cp}"])

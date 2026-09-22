@@ -3,7 +3,14 @@
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22539659.svg)](https://doi.org/10.5281/zenodo.22539659)
 
 **Self-contained, offline-verifiable dispute evidence for agentic-payment SD-JWT mandates
-(AP2-style Intent / Cart / Payment mandate chains).**
+(AP2 Checkout and Payment Mandates, and the delegation chains between them).**
+
+Measured against the AP2 specification as published in `google-agentic-commerce/AP2` on 2026-09-22, whose mandates are
+the **Checkout Mandate** and the **Payment Mandate** (the earlier Intent/Cart naming is gone from the spec; this README
+used it until today). A delegation chain from that spec — `delegate_payload` carrying an array disclosure — parses and
+resolves here unchanged: `python3 -c` on the encoded token in `docs/ap2/checkout_mandate.md` returns the delegate with
+its `vct`, `constraints` and `cnf`. What this package does NOT yet do is validate the `vct` against the mandate type,
+which the reference SDK does.
 
 The [AP2 spec](https://ap2-protocol.org/ap2/specification/) tells implementers *what* to
 keep for dispute resolution — the SD-JWTs with their disclosures, in compact serialization —
@@ -35,8 +42,8 @@ This tool turns a set of SD-JWT mandates into **one evidence file** that verifie
 ```bash
 pip install ap2-evidence-pack   # cryptography comes with it (declared since 1.1.1)
 
-python3 examples/make_samples.py     # generates sample intent.sdjwt + cart.sdjwt
-python3 ap2_evidence.py build evidence.json intent=intent.sdjwt cart=cart.sdjwt \
+python3 examples/make_samples.py     # generates sample checkout.sdjwt + payment.sdjwt
+python3 ap2_evidence.py build evidence.json checkout=checkout.sdjwt payment=payment.sdjwt \
         [--key name=jwk.json] [--jwks-url name=https://...] [--tsa http://tsa.example]
 
 python3 ap2_evidence.py verify evidence.json     # offline, fail-closed; exit 0/1

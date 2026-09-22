@@ -48,7 +48,7 @@ presumption (a QTSP service does), and validates x5c chains only when the relyin
 ES256 only, by design; other algs are rejected loudly, never half-verified.
 
 Usage:
-  python3 ap2_evidence.py build out.json intent=intent.sdjwt cart=cart.sdjwt \
+  python3 ap2_evidence.py build out.json checkout=checkout.sdjwt payment=payment.sdjwt \
           [--key name=jwk.json] [--jwks-url name=https://...] [--tsa URL]
   python3 ap2_evidence.py verify out.json
 """
@@ -1092,7 +1092,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     b = sub.add_parser("build", allow_abbrev=False, add_help=False)
     b.add_argument("out")
     b.add_argument("artifacts", nargs="+", metavar="name=path",
-                   help="e.g. intent=intent.sdjwt cart=cart.sdjwt")
+                   help="e.g. checkout=checkout.sdjwt payment=payment.sdjwt")
     b.add_argument("--key", action="append", default=[], metavar="name=jwk.json",
                    help="supplied verification JWK for an artifact")
     b.add_argument("--jwks-url", action="append", default=[], metavar="name=https://...",

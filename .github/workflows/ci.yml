@@ -35,7 +35,7 @@ jobs:
           set -e
           T=$(mktemp -d); cp -r . "$T"; cd "$T"
           python examples/make_samples.py > /dev/null
-          python ap2_evidence.py build out.json intent=intent.sdjwt cart=cart.sdjwt > /dev/null
+          python ap2_evidence.py build out.json checkout=checkout.sdjwt payment=payment.sdjwt > /dev/null
           python ap2_evidence.py verify out.json > /dev/null
           python - <<'PY'
           import json

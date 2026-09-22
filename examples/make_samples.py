@@ -5,12 +5,12 @@
 """Generate sample SD-JWT mandates so the README's CLI is runnable end-to-end
 by anyone (third-party verifiability of the documented commands):
 
-    python3 examples/make_samples.py            # writes intent.sdjwt, cart.sdjwt
-    python3 ap2_evidence.py build evidence.json intent=intent.sdjwt cart=cart.sdjwt
+    python3 examples/make_samples.py            # writes checkout.sdjwt, payment.sdjwt
+    python3 ap2_evidence.py build evidence.json checkout=checkout.sdjwt payment=payment.sdjwt
     python3 ap2_evidence.py verify evidence.json
 
 The samples are REAL ES256 SD-JWTs (fresh P-256 key, real signatures, real
-selective disclosures, the cart hash-binding the intent) — generated locally,
+selective disclosures, the payment mandate hash-binding the checkout one) — generated locally,
 worthless outside this demo, never reused.
 """
 from __future__ import annotations
@@ -54,17 +54,17 @@ def main() -> int:
         return (sign_jwt({"alg": "ES256", "typ": "ap2-mandate+sd-jwt", "jwk": jwk},
                          payload) + "~" + "~".join(discs) + "~")
 
-    intent = sd_jwt({"iss": "user-wallet-sample", "mandate_type": "intent"},
+    checkout = sd_jwt({"iss": "user-wallet-sample", "vct": "mandate.checkout.open.1"},
                     {"max_amount": "150.00 EUR", "merchant_scope": "books"})
-    cart = sd_jwt({"iss": "shopping-agent-sample", "mandate_type": "cart",
+    payment = sd_jwt({"iss": "shopping-agent-sample", "vct": "mandate.payment.1",
                    "intent_mandate_hash":
-                       hashlib.sha256(intent.encode("ascii")).hexdigest()},
+                       hashlib.sha256(checkout.encode("ascii")).hexdigest()},
                   {"items": ["book-123"]})
-    open("intent.sdjwt", "w").write(intent)
-    open("cart.sdjwt", "w").write(cart)
-    print("written: intent.sdjwt, cart.sdjwt  (sample ES256 SD-JWTs, demo-only key)")
+    open("checkout.sdjwt", "w").write(checkout)
+    open("payment.sdjwt", "w").write(payment)
+    print("written: checkout.sdjwt, payment.sdjwt  (sample ES256 SD-JWTs, demo-only key)")
     print("next:    python3 ap2_evidence.py build evidence.json "
-          "intent=intent.sdjwt cart=cart.sdjwt")
+          "checkout=checkout.sdjwt payment=payment.sdjwt")
     return 0
 
 

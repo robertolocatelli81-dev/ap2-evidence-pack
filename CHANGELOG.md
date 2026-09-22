@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.1.2 — 2026-09-22 — the vocabulary matches the specification
+
+**Independent competitive analysis by Gemini 3.1 Pro and Fable 5.1, run in parallel after publication.** Fable went
+outside the repository, read the current AP2 specification and the projects competing with this one, and found the thing
+eleven review rounds could not: the public vocabulary was a version behind. Measured in `google-agentic-commerce/AP2` on
+2026-09-22: "Intent Mandate" and "Cart Mandate" occur **zero** times in `docs/ap2/`, while Checkout Mandate occurs 63
+times and Payment Mandate 84. The README opened with "AP2-style Intent / Cart / Payment mandate chains", the sample
+generator wrote `intent.sdjwt` and `cart.sdjwt`, and the CI gate built from them.
+
+- README, samples, CLI help, tests and the CI gate now use **Checkout** and **Payment** mandates, with the `vct` values
+  of the current spec (`mandate.checkout.open.1`, `mandate.payment.1`).
+- The README states what was measured against that spec today: a delegation chain from `docs/ap2/checkout_mandate.md` —
+  `delegate_payload` carrying an array disclosure — parses and resolves here unchanged, returning the delegate with its
+  `vct`, `constraints` and `cnf`; and it states what this package does NOT do, which the reference SDK does: validate
+  the `vct` against the mandate type.
+
+Both analyses also listed what no competitor has (measured by them as zero occurrences in the repositories of
+MandateBound, Verifiable Intent and the AP2 SDK): the hybrid ML-DSA-65 producer signature, the offline-verified RFC 3161
+anchor, a second independent verifier with a differential oracle and declared divergences, and normative vectors with
+expected verdicts. Those claims are recorded here, not in the README, until they are measured in this repository by a
+script anyone can run.
+
 ## 1.1.1 — 2026-09-22 — the dependency is declared, and CI tests the distributed package
 
 **Independent review by Gemini 3.1 Pro, after publication** (the review attacked the framing, not the code, which is what
