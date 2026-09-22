@@ -206,8 +206,16 @@ flags: `require_producer`, `require_pq`, `require_anchor`.
    and failing all reject — "claimed" never upgrades to "proven").
 7. `self_asserted_only` is FAIL-CLOSED: `true` unless EVERY artifact's key was reconciled to an
    `x5c` chain that VALIDATES to a trust anchor the relying party supplies (`--trust-anchor`,
-   reported in `chain_verified`: `true`/`false`, or `null` when no anchor was given or the
-   verifier cannot validate chains). Offline and without an anchor, every class is
+   reported in `chain_verified`: `true`/`false`, or `null` when no anchor was given, the verifier
+   cannot validate chains, or the check was not measurable — openssl absent). The chain is validated
+   at the `genTime` of a TSA-VERIFIED RFC 3161 token when the pack carries one, and at the current
+   time otherwise (1.1.0 r9: a signing certificate lives 1-3 years, so at today's clock a leaf valid
+   2020-2021 could never clear the flag — the one mechanism that clears it was unusable in the very
+   scenario this format exists for). A cleared flag states that **a CA under YOUR anchor certified
+   this key at that time** — never that the key belongs to the mandate's issuer: that binding is
+   outside what an offline verifier can establish. For this reason a verifier MUST report the
+   validated leaf's identity (`x5c_leaf`: subject and issuer DN, serial, validity, SHA-256 of the
+   DER), so an auditor can see whether it says `CN=the-bank` or `CN=someone-else`. Offline and without an anchor, every class is
    self-asserted — `jwk_header`, `x5c_header`, `supplied`, `jwks_fetched` alike — and so is
    every refusal receipt. 1.1.0 r7 had made `supplied`/`jwks_fetched`/absent fail closed but
    still cleared the flag when the leaf's issuer DN differed from its subject DN; r8 measured

@@ -416,26 +416,26 @@ def verify_es256(signing_input: bytes, signature: bytes, jwk: Dict) -> bool:
 PROVENANCE_CLASSES = frozenset({"supplied", "x5c_header", "jwk_header", "jwks_fetched"})
 
 
-def _check_provenance(pc, parsed: Dict, key: Dict, trust_anchor: Optional[str] = None) -> bool:
+def _check_provenance(pc, parsed: Dict, key: Dict, trust_anchor: Optional[str] = None, at_time: Optional[str] = None):
     """1.1.0 r5: the provenance class is the field the honest_scope sends the relying party to, and it was the one field
     entirely under the pack author's control — relabelling `jwk_header` as `x5c_header` flipped `self_asserted_only` to
     False with no x5c anywhere. The two header-derived classes are now RECONCILED against the header the verifier just
     parsed; `supplied` and `jwks_fetched` remain capture-time assertions that cannot be checked offline (SPEC §2).
 
-    Returns whether the key is SELF-ASSERTED. r8: offline, "issued by someone else" is NOT establishable — r7 read it off
+    Returns (self_asserted, leaf_identity): r8: offline, "issued by someone else" is NOT establishable — r7 read it off
     `subject != issuer`, two DN strings the forger writes himself (measured: a leaf self-signed with its own key, declaring
     `CN=DigiCert Global Root CA` as issuer, cleared the flag in both verifiers while the pack stayed `valid`). The only thing
     that can clear it is a CHAIN validated to a trust anchor the RELYING PARTY supplies (`--trust-anchor`, same idiom as
     `--tsa-cert`): without one, every class — `jwk_header`, `x5c_header`, `supplied`, `jwks_fetched` — is self-asserted."""
     if pc not in ("jwk_header", "x5c_header"):
-        return True
+        return True, None
     header = parsed.get("header") if isinstance(parsed.get("header"), dict) else {}
     jwk = key.get("jwk") or {}
     if pc == "jwk_header":
         hj = header.get("jwk")
         if not isinstance(hj, dict) or any(hj.get(f) != jwk.get(f) for f in ("kty", "crv", "x", "y")):
             raise Ap2EvidenceError("provenance_class jwk_header but the signed header carries no matching jwk")
-        return True
+        return True, None
     x5c = header.get("x5c")
     if not isinstance(x5c, list) or not x5c or not isinstance(x5c[0], str):
         raise Ap2EvidenceError("provenance_class x5c_header but the signed header carries no x5c")
@@ -446,21 +446,43 @@ def _check_provenance(pc, parsed: Dict, key: Dict, trust_anchor: Optional[str] =
         raise Ap2EvidenceError(f"provenance_class x5c_header but the x5c leaf is unusable: {type(e).__name__}") from e
     if any(leaf.get(f) != jwk.get(f) for f in ("kty", "crv", "x", "y")):
         raise Ap2EvidenceError("provenance_class x5c_header but the x5c leaf key differs from the snapshotted jwk")
+    # r9: the receipt names WHO the certificate was issued to. A cleared flag means "a CA under your anchor certified this
+    # key", never "the key belongs to the mandate's issuer" — an auditor cannot tell CN=the-bank from CN=attacker without this.
+    ident = {"subject": cert.subject.rfc4514_string(), "issuer": cert.issuer.rfc4514_string(),
+             "serial": format(cert.serial_number, "x"),
+             "not_valid_before": cert.not_valid_before_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+             "not_valid_after": cert.not_valid_after_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+             "sha256": hashlib.sha256(cert.public_bytes(_serialization().Encoding.DER)).hexdigest()}
     if trust_anchor is None:
-        return True          # no anchor: the certificate proves only that the key is in a blob the signer wrote
-    return not _verify_x5c_chain(x5c, trust_anchor)   # chain verified to the anchor -> no longer self-asserted
+        return True, ident   # no anchor: the certificate proves only that the key is in a blob the signer wrote
+    chain_ok = _verify_x5c_chain(x5c, trust_anchor, at_time=at_time)
+    ident["chain_verified"] = chain_ok
+    return (chain_ok is not True), ident   # only a chain that really validated clears it (None = openssl absent = unmeasurable)
 
 
-def _verify_x5c_chain(x5c: List[str], trust_anchor: str, timeout: int = 15) -> bool:
+def _serialization():
+    from cryptography.hazmat.primitives import serialization
+    return serialization
+
+
+def _verify_x5c_chain(x5c: List[str], trust_anchor: str, at_time: Optional[str] = None, timeout: int = 15) -> Optional[bool]:
     """Validate the x5c chain to a PEM trust anchor with `openssl verify` (the reference only, like `openssl ts -verify` for
     the TSA — the JS verifier reports `chain_verified: null` and never clears `self_asserted_only`: declared divergence).
-    False on any failure, including openssl being absent: a chain that cannot be checked is not a chain that checked."""
+
+    `at_time` (r9) is the TSTInfo `genTime` of a TSA-VERIFIED RFC 3161 token, when there is one: the chain is then validated
+    AT that time (`openssl verify -attime`), because a signing certificate lives 1-3 years and this format exists to verify
+    years later — measured: a leaf valid 2020-2021 whose chain is fine under the anchor was `chain_verified: false` at
+    today's clock, so the ONLY mechanism that clears `self_asserted_only` never fired in the scenario the format is for.
+    Without a proven time the current clock is used, as `openssl verify` does by default.
+
+    Returns True/False, or None when openssl is absent (r9: unmeasurable is not the same as failed — `self_asserted_only`
+    stays fail-closed either way)."""
     import shutil
     import subprocess
     import tempfile
     exe = shutil.which("openssl")
     if not exe:
-        return False
+        return None          # r9: not measurable here, which is not the same as "the chain failed"
     d = tempfile.mkdtemp()
     try:
         def pem(b: bytes) -> bytes:
@@ -474,6 +496,13 @@ def _verify_x5c_chain(x5c: List[str], trust_anchor: str, timeout: int = 15) -> b
         with open(leaf_path, "wb") as f:
             f.write(pem(chain[0]))
         cmd = [exe, "verify", "-CAfile", trust_anchor]
+        if at_time:
+            import calendar
+            import time as _t
+            try:
+                cmd += ["-attime", str(calendar.timegm(_t.strptime(at_time.split(".")[0].rstrip("Z"), "%Y%m%d%H%M%S")))]
+            except ValueError:
+                pass
         if len(chain) > 1:
             unt = os.path.join(d, "untrusted.pem")
             with open(unt, "wb") as f:
@@ -727,7 +756,7 @@ def parse_timestamp_resp(tsr: bytes) -> Dict:
     gen_time = None   # r4: TSTInfo.genTime (GeneralizedTime, UTC) — reported, and the TSA chain is validated AT that time
     if len(tstc) >= 5 and tstc[4][0] == 0x18:
         gt = tsr[tstc[4][1]:tstc[4][2]].decode("ascii", "replace")
-        if re.fullmatch(r"\d{14}(\.\d+)?Z", gt):
+        if re.fullmatch(r"[0-9]{14}(\.[0-9]+)?Z", gt):   # r9: ASCII digits, as the JS verifier
             gen_time = gt
     return {"granted": granted, "imprint": tsr[mic[1][1]:mic[1][2]].hex(), "gen_time": gen_time}
 
@@ -875,11 +904,11 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
     except Ap2EvidenceError as e:   # 1.1.0: a hostile or unreadable file is a refusal receipt, never a traceback
         return {"digest_ok": False, "artifacts": [], "producer_signatures": {"present": False, "pq_protected": False, "trusted": None},
                 "pq_protected": False, "bindings_ok": False, "rfc3161": {"claimed": False, "verified": None}, "provenance_classes": [],
-                "self_asserted_only": True, "policy_ok": False, "valid": False, "honest_scope": None, "refused": str(e)}
+                "self_asserted_only": True, "chain_verified": None, "policy_ok": False, "valid": False, "honest_scope": None, "refused": str(e)}
     def refusal(msg):
         return {"digest_ok": False, "artifacts": [], "producer_signatures": {"present": False, "pq_protected": False, "trusted": None},
                 "pq_protected": False, "bindings_ok": False, "rfc3161": {"claimed": False, "verified": None}, "provenance_classes": [],
-                "self_asserted_only": True, "policy_ok": False, "valid": False, "honest_scope": None, "refused": msg}
+                "self_asserted_only": True, "chain_verified": None, "policy_ok": False, "valid": False, "honest_scope": None, "refused": msg}
     # 1.1.0 (review r1): the SHAPE of the top-level fields is checked before anything touches them — `artifacts` a list of
     # objects, `bindings` a list, `rfc3161_timestamp` an object or absent, `producer_signatures` an object or absent. A wrong
     # type used to be a TypeError/AttributeError traceback (the JS verifier answered); `producer_signatures: {}` was "absent".
@@ -888,7 +917,9 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
     for f in ("subject", "created_utc", "honest_scope"):   # SPEC §1 MUSTs: present and a string, or the receipt is silently poorer
         if not isinstance(ev.get(f), str):
             return refusal(f"{f} must be a string (SPEC §1)")
-    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", ev["created_utc"]):   # r6: §1 says ISO-8601 UTC; only the type was checked
+    if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", ev["created_utc"]):   # r6: §1 says ISO-8601 UTC, only the type was checked.
+        # r9: [0-9], not \d — in Python \d matches every Unicode Nd digit, in JavaScript only [0-9], so "٢٠٢٦-٠٩-٢٢T٠٠:٠٠:٠٠Z"
+        # (Arabic-Indic) verified here and was refused by the JS verifier: opposite verdicts on a pack in profile.
         return refusal("created_utc must be ISO-8601 UTC, YYYY-MM-DDTHH:MM:SSZ (SPEC §1)")
     if hashlib.sha256(ev["honest_scope"].encode("utf-8")).hexdigest() != HONEST_SCOPE_SHA256:
         # r8: the receipt used to REPRINT whatever scope the file carried — an author could write "anchored by a QTSP under
@@ -914,6 +945,15 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
     recomputed_digest = hashlib.sha256(_canon(e2)).hexdigest()
     digest_ok = recomputed_digest == ev.get("evidence_digest_sha256")
 
+    # r9: the time anchor is checked FIRST, so a TSA-verified genTime can date the x5c chain validation below
+    ts = ev.get("rfc3161_timestamp") or {}
+    rfc = {"claimed": bool(ts.get("anchored", False)), "verified": None}
+    if ts.get("anchored") and isinstance(ts.get("tsr_b64"), str):
+        rfc = {"claimed": True, **_verify_rfc3161(ts["tsr_b64"], recomputed_digest, tsa_cert=tsa_cert)}
+    elif ts.get("anchored"):
+        rfc = {"claimed": True, "verified": False, "note": "anchored claimed but tsr_b64 absent or not a string"}
+    proven_time = rfc.get("gen_time") if rfc.get("tsa_verified") is True else None
+
     art_results, all_ok = [], True
     for_bindings = []
     for a in ev["artifacts"]:
@@ -930,7 +970,7 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
             parsed = parse_sd_jwt(compact)
             if not isinstance(parsed["payload"], dict) or not isinstance(parsed["header"], dict):
                 raise Ap2EvidenceError("JWT header and payload must be objects")
-            self_asserted = _check_provenance(pc, parsed, key, trust_anchor)   # r5: reconciled, not believed; r7/r8: and it decides self_asserted_only
+            self_asserted, leaf_ident = _check_provenance(pc, parsed, key, trust_anchor, at_time=proven_time)   # r5: reconciled, not believed; r7/r8: it decides self_asserted_only; r9: at a proven time, and it names the leaf
             sig_ok = verify_es256(parsed["signing_input"], parsed["signature"], key["jwk"])
             resolved = resolve_disclosures(parsed["payload"], parsed["disclosures"])
             claims_ok = _canon(resolved) == _canon(a.get("resolved_claims"))
@@ -938,7 +978,8 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
             art_results.append({"name": a.get("name"), "signature_ok": sig_ok,
                                 "claims_match": claims_ok, "kb_jwt": kb,
                                 "provenance_class": key.get("provenance_class"),
-                                "self_asserted": self_asserted})
+                                "self_asserted": self_asserted,
+                                **({"x5c_leaf": leaf_ident} if leaf_ident else {})})
             all_ok = (all_ok and sig_ok and claims_ok
                       and kb.get("verified") is not False)
             for_bindings.append({"name": a.get("name"), "compact": parsed["compact"],
@@ -952,13 +993,6 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
         bindings_ok = (sorted(_canon(b) for b in find_bindings(for_bindings)) == sorted(_canon(b) for b in ev.get("bindings", []))) if all_ok else False
     except Exception:  # noqa: BLE001
         bindings_ok = False
-
-    ts = ev.get("rfc3161_timestamp") or {}
-    rfc = {"claimed": bool(ts.get("anchored", False)), "verified": None}
-    if ts.get("anchored") and isinstance(ts.get("tsr_b64"), str):
-        rfc = {"claimed": True, **_verify_rfc3161(ts["tsr_b64"], recomputed_digest, tsa_cert=tsa_cert)}
-    elif ts.get("anchored"):
-        rfc = {"claimed": True, "verified": False, "note": "anchored claimed but tsr_b64 absent or not a string"}
 
     classes = sorted({r.get("provenance_class") for r in art_results
                       if r.get("provenance_class")})
@@ -1004,7 +1038,10 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
             # A label alone ("supplied", "jwks_fetched") no longer clears it, and deleting the field is a refusal now.
             "self_asserted_only": bool(art_results) and all(r.get("self_asserted", True) for r in art_results),
             # r8: what the verifier DID about chains — None when no anchor was supplied (so the flag above is fail-closed true)
-            "chain_verified": None if trust_anchor is None else (bool(art_results) and not any(r.get("self_asserted", True) for r in art_results)),
+            # r9: True only if every artifact's chain really validated; None when openssl could not measure it; False otherwise
+            "chain_verified": None if trust_anchor is None else (
+                None if any((r.get("x5c_leaf") or {}).get("chain_verified") is None for r in art_results)
+                else (bool(art_results) and not any(r.get("self_asserted", True) for r in art_results))),
             # un evidence senza artefatti non prova NULLA: mai 'valid' (falso-verde per l'auditor)
             "policy_ok": policy_ok,
             "valid": bool(art_results and digest_ok and all_ok and bindings_ok
@@ -1046,12 +1083,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     i = 0
     while i < len(raw):
         tok = raw[i]
-        if tok in ("--trusted-producer-key", "--key", "--jwks-url", "--tsa", "--subject", "--tsa-cert"):
+        if tok in ("--trusted-producer-key", "--key", "--jwks-url", "--tsa", "--subject", "--tsa-cert", "--trust-anchor"):
             val = raw[i + 1] if i + 1 < len(raw) else None
             if val is None or val == "" or val.startswith("-"):
                 p.error(f"{tok} needs a value (got {val!r})")
             i += 2; continue
-        if tok.split("=", 1)[0] in ("--trusted-producer-key", "--key", "--jwks-url", "--tsa", "--subject", "--tsa-cert") and "=" in tok:
+        if tok.split("=", 1)[0] in ("--trusted-producer-key", "--key", "--jwks-url", "--tsa", "--subject", "--tsa-cert", "--trust-anchor") and "=" in tok:
             val = tok.split("=", 1)[1]
             if val == "" or val.startswith("-"):
                 p.error(f"{tok.split('=', 1)[0]} needs a value (got {val!r})")

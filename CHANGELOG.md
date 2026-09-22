@@ -113,5 +113,17 @@ measured on the 1.0.2 verifier first (every case below was red there).
   `evidence_format` in both verifiers: the receipt used to REPRINT whatever scope the file carried, so an author could write
   "anchored by a QTSP under eIDAS art. 45j" and see it beside `valid: true`. Oracle: 124 cases, 0 disagreements,
   2 declared.
+- **Review round 9** (Opus/Sonnet/Haiku, 22/09/2026): `created_utc` was validated with `\d`, which in Python matches every
+  Unicode Nd digit and in JavaScript only `[0-9]` — measured: `"٢٠٢٦-٠٩-٢٢T٠٠:٠٠:٠٠Z"` verified in the reference and was
+  refused by the JS verifier, opposite verdicts on a pack in profile (non-ASCII text is in profile by §3.1). `--trust-anchor`,
+  added in r8, was outside the reference's CLI grammar: `--trust-anchor ""` gave a verdict on stdout there and usage exit 2
+  in JS. The x5c chain was validated at the CURRENT clock, so a leaf valid 2020-2021 — the ordinary case for a format whose
+  claim is "verifies offline years later" — could never clear `self_asserted_only`; it is now validated at the `genTime` of a
+  TSA-verified token when the pack carries one, like the TSA chain since r4. `chain_verified` is tri-state (`null` when
+  openssl is absent: unmeasurable is not failed) and present in refusal receipts, which lacked it while the JS ones had it.
+  Both verifiers now report `artifacts[].x5c_leaf` (subject and issuer DN, serial, validity, SHA-256): a cleared flag means
+  a CA under the relying party's anchor certified that key, never that the key belongs to the mandate's issuer — without the
+  DN an auditor cannot tell `CN=the-bank` from `CN=attacker`. Oracle: 129 cases, 0 disagreements, 2 declared; positive
+  control 4 red on the round-8 state, plus a unit test for the expired leaf measured red there.
 
 Verdicts unchanged on in-profile evidence produced by 1.0.x `build`.

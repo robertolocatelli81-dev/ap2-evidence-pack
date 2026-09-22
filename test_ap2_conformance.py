@@ -116,6 +116,55 @@ class TestAp2ConformanceVectors(unittest.TestCase):
         with self.assertRaises(ap2.Ap2EvidenceError):
             ap2.build_evidence([{"name": "", "sd_jwt": compact}], os.path.join(d, "o.json"))
 
+    @unittest.skipUnless(shutil.which("openssl"), "openssl absent: chain validation not measured")
+    def test_expired_leaf_clears_the_flag_only_at_a_proven_time(self):
+        # r9: `openssl verify` checks validity at the CURRENT clock, so a leaf valid 2020-2021 — the ordinary case for a
+        # format whose claim is "verifies offline years later" — could never clear self_asserted_only. The chain is now
+        # validated at the genTime of a TSA-VERIFIED token when there is one, exactly as the TSA chain is (SPEC §3.2).
+        import base64, datetime, tempfile, json as _json
+        sys.path.insert(0, os.path.join(_HERE, "verifiers")); import differential_oracle as O
+        from cryptography import x509
+        from cryptography.x509.oid import NameOID
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+        b64u = lambda b: base64.urlsafe_b64encode(b).decode().rstrip("=")   # noqa: E731
+        base = json.load(open(os.path.join(_HERE, "spec", "vectors", "ap2", "valid_signed.json"))); d = tempfile.mkdtemp()
+        ca = ec.generate_private_key(ec.SECP256R1()); sk = ec.generate_private_key(ec.SECP256R1()); n = sk.public_key().public_numbers()
+        caname = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "probe CA")])
+        cacert = (x509.CertificateBuilder().subject_name(caname).issuer_name(caname).public_key(ca.public_key()).serial_number(1)
+                  .not_valid_before(datetime.datetime(2020, 1, 1)).not_valid_after(datetime.datetime(2046, 1, 1))
+                  .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True).sign(ca, hashes.SHA256()))
+        leaf = (x509.CertificateBuilder().subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "wallet.example")]))
+                .issuer_name(caname).public_key(sk.public_key()).serial_number(2)
+                .not_valid_before(datetime.datetime(2020, 1, 1)).not_valid_after(datetime.datetime(2021, 1, 1)).sign(ca, hashes.SHA256()))
+        hdr = _json.dumps({"alg": "ES256", "typ": "ap2-mandate+sd-jwt",
+                           "x5c": [base64.b64encode(leaf.public_bytes(serialization.Encoding.DER)).decode()]}, separators=(",", ":"))
+        si = b64u(hdr.encode()) + "." + b64u(b'{"iss":"wallet"}')
+        r, s_ = decode_dss_signature(sk.sign(si.encode("ascii"), ec.ECDSA(hashes.SHA256())))
+        ev = {"evidence_format": base["evidence_format"], "subject": "probe", "created_utc": "2020-06-01T00:00:00Z",
+              "artifacts": [{"name": "intent", "sd_jwt_compact": si + "." + b64u(r.to_bytes(32, "big") + s_.to_bytes(32, "big")) + "~",
+                             "header": _json.loads(hdr),
+                             "key": {"jwk": {"kty": "EC", "crv": "P-256", "x": b64u(n.x.to_bytes(32, "big")), "y": b64u(n.y.to_bytes(32, "big"))},
+                                     "provenance_class": "x5c_header"},
+                             "resolved_claims": {"iss": "wallet"}, "kb_jwt": {"present": False},
+                             "verified_at_build": {"signature_ok": True, "disclosures_ok": True}}],
+              "bindings": [], "honest_scope": base["honest_scope"]}
+        ev = O.rehash(ev); p = os.path.join(d, "expired.json"); _json.dump(ev, open(p, "w"))
+        anchor = os.path.join(d, "ca.pem"); open(anchor, "wb").write(cacert.public_bytes(serialization.Encoding.PEM))
+        r1 = ap2.verify_evidence(p, trust_anchor=anchor)   # today's clock: the leaf is long expired
+        self.assertTrue(r1["self_asserted_only"]); self.assertFalse(r1["chain_verified"])
+        self.assertEqual(r1["artifacts"][0]["x5c_leaf"]["subject"], "CN=wallet.example")   # the receipt names the leaf (r9)
+        orig = ap2._verify_rfc3161                         # a TSA-verified genTime inside the leaf's validity
+        ap2._verify_rfc3161 = lambda *a, **k: {"verified": True, "granted": True, "imprint_ok": True,
+                                               "gen_time": "20200601000000Z", "tsa_verified": True}
+        try:
+            ev["rfc3161_timestamp"] = {"anchored": True, "tsr_b64": "AA=="}; _json.dump(ev, open(p, "w"))
+            r2 = ap2.verify_evidence(p, trust_anchor=anchor, tsa_cert="x")
+        finally:
+            ap2._verify_rfc3161 = orig
+        self.assertFalse(r2["self_asserted_only"]); self.assertTrue(r2["chain_verified"])
+
     def test_build_side_x5c_and_jwks_errors_are_receipts(self):
         # r7: `build` tracebacked (bare ValueError / URLError) on a leaf wrapped at 76 columns, a non-certificate, a
         # non-string entry, an unreachable JWKS — the verify side had been made fail-closed in r1, build had not

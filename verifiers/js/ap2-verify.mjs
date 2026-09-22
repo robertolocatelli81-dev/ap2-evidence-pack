@@ -119,27 +119,32 @@ function checkProvenance(pc, parsed, key) {   // returns: is this key SELF-ASSER
   // r5: `jwk_header`/`x5c_header` are RECONCILED with the header the verifier just parsed (relabelling jwk_header as
   // x5c_header used to flip self_asserted_only to false with no x5c anywhere); `supplied`/`jwks_fetched` are capture-time
   // assertions that cannot be checked offline (SPEC §2).
-  if (pc !== "jwk_header" && pc !== "x5c_header") return true;   // supplied / jwks_fetched: capture-time labels, not checkable here
+  if (pc !== "jwk_header" && pc !== "x5c_header") return { selfAsserted: true, ident: null };   // supplied / jwks_fetched: capture-time labels, not checkable here
   const header = parsed.header && typeof parsed.header === "object" ? parsed.header : {};
   const jwk = key.jwk ?? {};
   if (pc === "jwk_header") {
     const hj = header.jwk;
     if (!hj || typeof hj !== "object" || Array.isArray(hj) || ["kty", "crv", "x", "y"].some((f) => hj[f] !== jwk[f])) throw new Refused("provenance_class jwk_header but the signed header carries no matching jwk");
-    return true;
+    return { selfAsserted: true, ident: null };
   }
   const x5c = header.x5c;
   if (!Array.isArray(x5c) || !x5c.length || typeof x5c[0] !== "string") throw new Refused("provenance_class x5c_header but the signed header carries no x5c");
-  let leaf;
+  let leaf, ident;
   try {
     const der = b64Strict(x5c[0]); if (!der) throw new Error("leaf not base64");
-    leaf = createPublicKey({ key: new X509Certificate(der).publicKey.export({ format: "jwk" }), format: "jwk" }).export({ format: "jwk" });
+    const cert = new X509Certificate(der);
+    leaf = createPublicKey({ key: cert.publicKey.export({ format: "jwk" }), format: "jwk" }).export({ format: "jwk" });
+    // r9: the receipt names WHO the certificate was issued to — a cleared flag means "a CA under your anchor certified this key",
+    // never "the key belongs to the mandate's issuer", and an auditor cannot tell CN=the-bank from CN=attacker without this
+    ident = { subject: cert.subject, issuer: cert.issuer, serial: cert.serialNumber.toLowerCase().replace(/^0+/, ""),
+              sha256: createHash("sha256").update(der).digest("hex"), chain_verified: null };
   } catch (e) { throw new Refused("provenance_class x5c_header but the x5c leaf is unusable"); }
   if (["kty", "crv", "x", "y"].some((f) => leaf[f] !== jwk[f])) throw new Refused("provenance_class x5c_header but the x5c leaf key differs from the snapshotted jwk");
   // r8: r7 read "issued by someone else" off `subject !== issuer` — two DN strings the forger writes himself (a leaf
   // self-signed with its own key, declaring CN=DigiCert Global Root CA, cleared the flag). Offline that is not
   // establishable; only a chain validated to a relying-party trust anchor clears it, and this verifier cannot validate
   // chains, so it always reports the key as self-asserted and `chain_verified: null` (declared, like tsa_verified).
-  return true;
+  return { selfAsserted: true, ident };   // this verifier cannot validate chains: always self-asserted (declared)
 }
 function findBindings(arts) {
   const byValue = new Map();   // r5: inverse index (digest string -> [name, encoding]) — the per-leaf scan was O(artifacts), quadratic
@@ -230,10 +235,10 @@ export function verifyEvidence(path, opts = {}) {
       // r6: this shape check spent round 5 INSIDE an unterminated line comment — a signed payload that is a JSON array
       // verified in this verifier and failed in the reference. It runs before checkProvenance, which reads the header.
       if (parsed.payload === null || typeof parsed.payload !== "object" || Array.isArray(parsed.payload) || parsed.header === null || typeof parsed.header !== "object" || Array.isArray(parsed.header)) throw new Refused("JWT header and payload must be objects");
-      const selfAsserted = checkProvenance(pc, parsed, a.key);   // r5: reconciled with the signed header; r7: decides self_asserted_only
+      const prov = checkProvenance(pc, parsed, a.key); const selfAsserted = prov.selfAsserted;   // r5: reconciled with the signed header; r7: decides self_asserted_only
       const sigOk = es256Verify(parsed.signingInput, parsed.signature, a.key.jwk); const resolved = resolveDisclosures(parsed.payload, parsed.disclosures);
       const claimsOk = canon(resolved) === canon(a.resolved_claims ?? null); const kb = verifyKbJwt(parsed, resolved);
-      artResults.push({ name: a.name, signature_ok: sigOk, claims_match: claimsOk, kb_jwt: kb, provenance_class: a.key?.provenance_class, self_asserted: selfAsserted });
+      artResults.push({ name: a.name, signature_ok: sigOk, claims_match: claimsOk, kb_jwt: kb, provenance_class: a.key?.provenance_class, self_asserted: selfAsserted, ...(prov.ident ? { x5c_leaf: prov.ident } : {}) });
       allOk = allOk && sigOk && claimsOk && kb.verified !== false; forBindings.push({ name: a.name, compact: parsed.compact, resolved });
     } catch (e) { artResults.push({ name: a?.name, error: String(e.message ?? e) }); allOk = false; }
   }

@@ -58,7 +58,11 @@ chain linkage and `provenance_classes` / `self_asserted_only` for capture streng
 `self_asserted_only` is fail-closed (SPEC §6.7): offline **nothing** clears it — not a label
 (`supplied`, `jwks_fetched`), not a certificate that names a famous CA as its issuer. Only an
 `x5c` chain that validates to a trust anchor YOU supply does (`--trust-anchor <PEM>`, reported in
-`chain_verified`); the Node verifier cannot validate chains and reports `chain_verified: null`.
+`chain_verified`, validated at the `genTime` of a TSA-verified token when the pack has one, so an
+expired signing certificate still counts years later); the Node verifier cannot validate chains and
+reports `chain_verified: null`. A cleared flag says a CA under your anchor certified that key — not
+that the key belongs to the mandate's issuer; read `artifacts[].x5c_leaf` for the subject and issuer
+DN of the certificate that was validated.
 
 ## Producer signatures (post-quantum hybrid)
 
@@ -94,7 +98,7 @@ python3 spec/vectors/ap2/run_ap2_conformance.py   # exit 0 = conformant
 **Differential oracle** (`verifiers/differential_oracle.py`, 22/09/2026): the two verifiers must
 give the same `(valid, digest_ok, bindings_ok, producer_ok, pq_protected, rfc3161_verified,
 policy_ok, producer_present, producer_trusted, rfc3161_claimed, rfc3161_gen_time, self_asserted_only, provenance_classes)`
-— the eleven normative fields of SPEC §6 plus `provenance_classes` — on the 8 vectors under their declared policy (plus `anchor_valid` under
+— the eleven normative fields of SPEC §6 plus `rfc3161_gen_time` and `provenance_classes` — on the 8 vectors under their declared policy (plus `anchor_valid` under
 `--require-anchor --tsa-cert`, and the CA-issued `x5c` leaf under `--trust-anchor`), 97 hostile files that carry the digest a lenient verifier would
 recompute or a wrong JSON shape (`__proto__` key with the digest recomputed over it, non-UTF-8, float `1.0`, 2^53+1, 100000-deep,
 `NaN`, lone surrogate, duplicate key, BOM, non-object, `artifacts`/`key`/`jwk`/`rfc3161_timestamp`/
@@ -123,7 +127,7 @@ nothing on stdout, in both — the bare invocation without a subcommand included
 controls (non-ASCII text in profile; a fresh-key pack that must be `valid` in both; the CA-issued `x5c`
 leaf under `--trust-anchor`, the only case in the suite where `self_asserted_only` is false — and its
 negative control, the self-signed leaf against the same anchor, where it stays true):
-**124 cases, 0 disagreements, of which 2 are declared divergences** — the real token under `--tsa-cert`, where the
+**129 cases, 0 disagreements, of which 2 are declared divergences** — the real token under `--tsa-cert`, where the
 reference proves the TSA with openssl and the JS verifier reports `tsa_verified: null` and does
 not pass the policy; and the `x5c` chain under `--trust-anchor`, which the reference validates with
 `openssl verify` (clearing `self_asserted_only`) and the JS verifier cannot (`chain_verified: null`). A crash counts as a disagreement, and a declared divergence that stops

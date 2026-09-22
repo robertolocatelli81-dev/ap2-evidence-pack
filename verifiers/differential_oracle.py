@@ -139,7 +139,9 @@ def build_cases(d):
     ca_ev = dict(x5c_built)["ca-issued-leaf"]
     cases["x5c-ca-issued-with-trust-anchor"] = (w("x5canch", json.dumps(rehash(ca_ev))), ["--trust-anchor", anchor])
     cases["x5c-self-signed-with-trust-anchor"] = (w("x5cselfanch", json.dumps(rehash(dict(x5c_built)["canonical"]))), ["--trust-anchor", anchor])
-    for nm, v in (("created_utc-not-iso", "22/09/2026"), ("created_utc-no-Z", "2026-09-22T00:00:00"), ("created_utc-ok", "2026-09-22T00:00:00Z")):
+    for nm, v in (("created_utc-arabic-indic-digits", "٢٠٢٦-٠٩-٢٢T٠٠:٠٠:٠٠Z"),   # r9: Python \d matches Unicode Nd, JS \d is [0-9]
+                  ("created_utc-fullwidth-digits", "２０２６-０９-２２T００:００:００Z"),
+                  ("created_utc-not-iso", "22/09/2026"), ("created_utc-no-Z", "2026-09-22T00:00:00"), ("created_utc-ok", "2026-09-22T00:00:00Z")):
         e = copy.deepcopy(base); e["created_utc"] = v; cases["must-" + nm] = (w("cu" + nm, json.dumps(rehash(e))), [])
     e = copy.deepcopy(base); e["artifacts"][binder]["sd_jwt_compact"] = c + "\u00a0"; cases["compact-trailing-nbsp-rehashed"] = (w("nbsp", json.dumps(rehash(e))), [])
     e = copy.deepcopy(base); e["artifacts"][binder]["key"]["jwk"]["x"] = e["artifacts"][binder]["key"]["jwk"]["x"] + "="; cases["jwk-x-padded-rehashed"] = (w("jwkpad", json.dumps(rehash(e))), [])
@@ -325,7 +327,9 @@ def _fresh_pack(base, sk, n, header_txt, payload_txt, resolved, disclosures=(), 
 CLI = {"cli-no-path": [], "cli-unknown-flag": ["V", "--no-such"], "cli-two-positionals": ["V", "V"], "cli-empty-path": [""], "cli-help": ["--help"], "cli-h": ["-h"],
        "cli-double-dash": ["--", "V"], "cli-bool-with-value": ["V", "--require-pq=1"], "cli-key-empty": ["V", "--trusted-producer-key", ""], "cli-key-missing-value": ["V", "--trusted-producer-key"],
        "cli-key-flag-as-value": ["V", "--trusted-producer-key", "--require-pq"], "cli-key-no-alg": ["V", "--trusted-producer-key", "abc"], "cli-tsa-cert-empty": ["V", "--tsa-cert", ""], "cli-repeated-key-empty-first": ["V", "--trusted-producer-key", "", "--trusted-producer-key", "ed25519=AA=="],
-       "cli-eq-form-verdict": ["V", "--trusted-producer-key=ed25519=AA=="], "cli-bare-no-subcommand": ["BARE"]}   # r3: no "verify" prefix at all
+       "cli-eq-form-verdict": ["V", "--trusted-producer-key=ed25519=AA=="], "cli-bare-no-subcommand": ["BARE"],
+       "cli-trust-anchor-empty": ["V", "--trust-anchor", ""], "cli-trust-anchor-eq-empty": ["V", "--trust-anchor="],   # r9: the flag added in r8 was outside the reference's grammar
+       "cli-trust-anchor-flag-value": ["V", "--trust-anchor", "--require-pq"]}   # r3: no "verify" prefix at all
 
 
 def main():
