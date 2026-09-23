@@ -1,6 +1,77 @@
 # Changelog
 
-## 1.1.2 — 2026-09-22 — the vocabulary matches the specification
+## 1.2.0 — 2026-09-23 — a third verifier, written by other people
+
+Every measurement in this repository until now came from two verifiers written by one author. Both reviewers of 1.1.2
+named the same limit independently — a misreading of the specification lands identically in Python and in Node, and the
+oracle records it as perfect agreement. `verifiers/sdk_crosscheck.py` closes it for the layer it can reach: it runs
+Google's AP2 SDK (commit `e1ea56db72a6`, the head of its `main` on 23/09/2026) over `sd-jwt` 0.10.4, the reference
+implementation whose PyPI metadata names Daniel Fett — one of RFC 9901's three authors — and the latest release on PyPI, against the same tokens, and
+compares the verdict AND the claims each stack resolves.
+
+- **Measured 23/09/2026:** eight vectors alone, 16 artifacts, same verdict and same claim names and values on all of
+  them. Vectors plus hostile corpus: 136 artifacts compared (16 of them from the vectors), 87 claim-sets compared,
+  **0 undeclared disagreements**, and none in the direction that would signal a hole here — nothing this repository
+  accepts and the third stack refuses.
+- **The third stack also ISSUES.** Comparing opinions about tokens produced here cannot see a reading shared by both
+  local verifiers, because the corpus comes from that same reading. So the SDK mints tokens — with and without decoy
+  digests — and this repository's PYTHON reference verifies them and resolves the same claims (the Node verifier is
+  not run on them). Both pass, and the bench asserts the emitted shape instead of describing it: one
+  `{"...": <digest>}` array-element placeholder per issued token, a shape no hostile file exercises. Nested and recursive disclosures and delegation
+  chains are still not cross-checked, and the README says so.
+- **One declared divergence, with its clause.** A presentation carrying a disclosure that matches no digest: this
+  repository refuses it, the third stack accepts it and returns the payload with that claim dropped. RFC 9901 §7.1
+  step 5 requires rejection. No forged claim passes either way; the divergence is the verdict, not the content.
+- **Three cases that are nobody's defect,** and an earlier draft of this entry got the reason wrong by calling the RFC
+  "silent". It is not: `_sd` that is not an array of digest strings and an array placeholder whose value is not a
+  digest string are MUSTs of §4.2.4.1 and §4.2.4.2 addressed to the Issuer, and §7.1 step 3.b collects only well-formed
+  shapes while step 3.e removes every `_sd` key — so ignoring the malformed part is what the RFC's verification
+  algorithm prescribes. This format rejects instead, a stricter choice. The bench now prints the payload the third
+  stack returns, so that sentence is copied from a measurement: `{"...": [1]}` comes back as an ordinary array element
+  inside the verified payload, a malformed `_sd` simply disappears, and `_sd: null` is refused by BOTH. SPEC §6 step 2
+  says which of these rules come from the RFC and which are this format's choice.
+- **Positive controls and their own ablation,** because a bench that cannot go red measures nothing: a flipped
+  signature must be refused, a rewritten disclosure's forged value must never be disclosed, a wrong key must flip the
+  third stack's verdict — and `AP2_XCHECK_SEED_DIVERGENCE=1` corrupts the key handed to the third stack so that a
+  disagreement is actually reported and the run exits 1.
+- **Six defects in this bench, found by two review passes and re-measured before fixing.** Its verdict for our side
+  read `signature_ok` alone, a proxy for the artifact's verdict: on `claims-mismatch` it printed "both accept" over an
+  artifact this verifier rejects. Three hostile files it cannot even read (a BOM, a 100000-deep nesting, a raw
+  non-UTF-8 byte) were skipped in silence, quietly shrinking the denominator. The wrong-key control passed when the
+  key could not be loaded at all, testing nothing. The seeded-divergence run printed "none in the direction 'we accept,
+  a third implementation refuses'" while the seeded divergence was in precisely that direction. The CI ablation checked
+  only a non-zero exit, which a crash also produces, and now requires the seeded `[DIFF]` in the output. And the
+  citation for `_sd_alg` said §7.1 step 3.d; it is step 2.d.
+- **A false sentence shipped in 1.1.2 and earlier,** found by the same review: the README named the oracle's three
+  positive controls as non-ASCII, a fresh-key pack and "the CA-issued `x5c` leaf under `--trust-anchor`". Measured
+  against `POSITIVE_CONTROLS` in the oracle, the third is `must-created_utc-ok`; the `x5c` leaf is one of the 113
+  hostile files. The README now names them from that set and says the sentence was wrong.
+- **What it does not cover, with the counts:** 32 packs refused here at the file level and 15 artifacts refused at a
+  layer the third stack has no notion of (key provenance, and the `resolved_claims` the file records) get no
+  third-stack opinion; 2 more carry a key block that is not a key, so nothing could be handed over; 6 artifacts are refused under the §3.1 profile this format declares
+  stricter; on 7 packs the KB-JWT's `aud`/`nonce` cannot be read, so its binding could not be compared (where they can
+  be read they are passed through, so the key-binding signature and its `sd_hash` are checked too); 3 hostile files are
+  unreadable by the bench. Of the six verification steps of SPEC §6 it covers the signature and the disclosure
+  resolution inside step 2, nothing else.
+- **`verifiers/type_fuzz.py`, which the cross-check's own result asked for.** Finding that 10 of the third stack's 17
+  refusals are uncaught internal errors raises the same question here, and that one is this repository's to answer:
+  every field of a valid pack (88) replaced by each of eight hostile types is 695 hostile mutations, answered with a
+  verdict 1390/1390 times by the two verifiers (nine substitutions leave the pack identical to the valid one and are
+  counted apart), where an answer means an object with a boolean `valid` on stdout and nothing on stderr.
+  `test_hostile_files_…_never_tracebacks` already covered ten hand-picked file-level shapes against the Python
+  reference as a library, and the differential oracle already ran both verifiers as subprocesses on the 113 hostile
+  files with a non-JSON answer as a crash marker; what this adds is the fields one at a time and a positive control
+  for the crash detector itself, gated on the exact number of crashes that control must produce. The harness ships a deliberately
+  crashing verifier and refuses to measure anything unless it catches it first.
+- **Two more defects of the same shrinking-denominator shape, found by the third review pass.** Two artifacts whose
+  key block is not a key were skipped with no counter at all — in no total, while a bucket label named their case —
+  and the declared divergence printed the `sd-jwt` version as a hand-written `0.10.4` inside a line the bench emits as
+  a measurement, which would have printed that string whatever version CI resolved. The version is now read from the
+  installed package, and those two artifacts have their own line.
+- The workflow gains a job for the cross-check and a step that ablates it, plus a step for the no-crash property. The outcome of the run belongs in the
+  release notes, measured, not here.
+
+## 1.1.2 — 2026-09-22 — the vocabulary matches the specification (committed, never tagged: it ships inside 1.2.0)
 
 **Independent competitive analysis by Gemini 3.1 Pro and Fable 5.1, run in parallel after publication.** Fable went
 outside the repository, read the current AP2 specification and the projects competing with this one, and found the thing

@@ -201,7 +201,14 @@ flags: `require_producer`, `require_pq`, `require_anchor`.
    with no `honest_scope` produced a receipt with `honest_scope: null`). Recompute the digest (§3) → `digest_ok`.
 2. For EVERY artifact: parse `sd_jwt_compact` (its JSON under the §3.1 profile); verify the ES256 signature with
    the snapshotted JWK over the JWS signing input; resolve disclosures
-   fail-closed (unmatched, duplicate, or malformed disclosure → reject); the
+   fail-closed (unmatched, duplicate, or malformed disclosure → reject — for an UNMATCHED
+   disclosure this is RFC 9901 §7.1 step 5 verbatim, "the SD-JWT MUST be rejected"; for an `_sd`
+   that is not an array of digest strings and for an array placeholder whose value is not a digest
+   string, §4.2.4.1 and §4.2.4.2 address the MUST to the Issuer and §7.1 gives the verifier no rejection
+   step of its own — §7.1 step 3.b collects only well-formed shapes and step 3.e removes every `_sd`
+   key — so refusing is this format's stricter choice, measured 23/09/2026 against the `sd-jwt` reference
+   implementation, which drops a malformed `_sd` (`{}`, `[1]`), keeps `{"...": [1]}` as an ordinary array
+   element of its verified payload, and refuses `_sd: null` as this format does); the
    canonical form of the resolved claims MUST equal the recorded
    `resolved_claims`; re-verify the KB-JWT when the issuer payload carries
    `cnf.jwk` (ES256 over `issuer-JWT~disclosure*~`; without `cnf.jwk` a present

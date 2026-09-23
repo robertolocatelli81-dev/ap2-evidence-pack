@@ -54,6 +54,8 @@ jobs:
         run: python verifiers/differential_oracle.py
       - name: "Ablation: the strict layers removed from a copy of the reference must turn the suite red"
         run: bash verifiers/lax_python_ablation.sh
+      - name: "Every malformed input gets a VERDICT, never a traceback (with its own crashing-verifier control)"
+        run: python verifiers/type_fuzz.py
       - name: "The DISTRIBUTED package, not the repository: build the wheel, install it alone in a clean venv, import and verify a vector"
         run: |
           set -e
@@ -64,3 +66,36 @@ jobs:
           /tmp/pkgvenv/bin/python -c "import ap2_evidence, pqcrypto.sigsuite; print('import ok', ap2_evidence.EVIDENCE_FORMAT)"
           /tmp/pkgvenv/bin/python -m ap2_evidence verify spec/vectors/ap2/valid_signed.json > /dev/null
           echo "the published package imports and verifies on its own"
+
+  third-verifier:
+    # The differential oracle compares two verifiers written by the same author: a MISREADING of the specification lands
+    # identically in both and they agree. This job asks a stack written by other people — Google's AP2 SDK over the
+    # `sd-jwt` reference implementation — the same questions about the same tokens. `sd-jwt` is deliberately NOT pinned:
+    # if a future release changes the declared divergence, this job turns red and the declaration gets re-measured
+    # instead of quietly staying in the README.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: "Third-party stack (pinned commit of google-agentic-commerce/AP2)"
+        run: |
+          set -e
+          git clone --quiet https://github.com/google-agentic-commerce/AP2 /tmp/ap2sdk
+          git -C /tmp/ap2sdk checkout --quiet e1ea56db72a6385bce3e5c1112b3a56ce60acb43
+          pip install -q cryptography jwcrypto sd-jwt pydantic
+      - name: "Cross-check: the third stack on every vector and every hostile mandate, with its positive controls"
+        env:
+          AP2_SDK_PATH: /tmp/ap2sdk/code/sdk/python
+        run: python verifiers/sdk_crosscheck.py --hostile
+      - name: "Ablation: a seeded divergence MUST turn that bench red (a bench that cannot report one proves nothing)"
+        env:
+          AP2_SDK_PATH: /tmp/ap2sdk/code/sdk/python
+          AP2_XCHECK_SEED_DIVERGENCE: "1"
+        run: |
+          set +e; python verifiers/sdk_crosscheck.py --hostile > /tmp/seeded.txt; rc=$?; set -e
+          # Exit alone is not the promise: a crash also exits non-zero. The run must REPORT the seeded divergence.
+          if [ "$rc" -eq 0 ] || ! grep -q "SEEDED:" /tmp/seeded.txt; then
+            echo "::error::a seeded divergence was not reported (rc=$rc)"; tail -5 /tmp/seeded.txt; exit 1; fi
+          echo "seeded divergence reported and exit $rc, as required"

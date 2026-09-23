@@ -1,0 +1,518 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Roberto Locatelli
+"""THIRD verifier, written by other people: Google's AP2 SDK over the `sd-jwt` reference implementation.
+
+The differential oracle compares this repository's two verifiers, and both were written by the same author — so an
+error in READING the specification is invisible to it: the same misreading lands in Python and in Node, and they agree.
+This script closes that gap for the layer the SDK covers, the SD-JWT mandate itself. For every artifact of a pack it
+asks `ap2.sdk.sdjwt.sd_jwt.verify()` (Google's wrapper around `sd_jwt.verifier.SDJWTVerifier`, the reference
+implementation of RFC 9901, whose PyPI metadata names Daniel Fett — one of that RFC's three authors — as its author) whether the token verifies under the snapshotted key, and compares two things with what our
+reference says about the same artifact:
+
+  1. the VERDICT  — accept / refuse;
+  2. the RESOLVED CLAIMS — the payload after disclosure resolution, which is where a misread digest rule would hide:
+     a verdict can agree while the two stacks disclose different claims.
+
+What it does NOT compare: the container (digest, bindings, producer signature, RFC 3161, policy, provenance class) —
+the SDK has no notion of any of it, and our packs are the only place it exists. Read this as a cross-check of the
+mandate layer only: of the six verification steps of SPEC §6, the signature and the disclosure resolution inside
+step 2, and nothing else.
+
+Usage:
+    AP2_SDK_PATH=/path/to/AP2/code/sdk/python  python3 verifiers/sdk_crosscheck.py [pack.json ...]
+
+Needs `jwcrypto`, `sd-jwt` and `pydantic` (the SDK's dependencies), which this repository does not require: run it in a
+venv of its own. Exit 1 on any disagreement.
+"""
+import base64
+import glob
+import json
+import os
+import subprocess
+import sys
+
+SDJWT_VERSION = "unknown"   # replaced by _sdk() with the version of the package actually installed
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+sys.path.insert(0, ROOT)
+import ap2_evidence as ap2  # noqa: E402
+
+
+def _sdk():
+    p = os.environ.get("AP2_SDK_PATH")
+    if not p or not os.path.isdir(p):
+        sys.exit("set AP2_SDK_PATH to the AP2 repository's code/sdk/python (the SDK is not vendored here)")
+    sys.path.insert(0, p)
+    from ap2.sdk.sdjwt import sd_jwt as sdk_sdjwt   # noqa: PLC0415
+    from jwcrypto.jwk import JWK                    # noqa: PLC0415
+    try:
+        import importlib.metadata as _md            # noqa: PLC0415
+        globals()["SDJWT_VERSION"] = _md.version("sd-jwt")
+    except Exception:                                # noqa: BLE001
+        globals()["SDJWT_VERSION"] = "unknown"
+    repo = os.path.abspath(os.path.join(p, "..", "..", ".."))
+    r = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], capture_output=True, text=True)
+    return sdk_sdjwt, JWK, (r.stdout.strip()[:12] or "unknown")
+
+
+# Why our stack refused an artifact decides what a divergence MEANS. Three of the four buckets below are not
+# disagreements about RFC 9901 at all: a layer the third stack does not have, a profile this repository declares
+# stricter, or a structural MUST the RFC's own verifier algorithm does not enforce. Only what falls through is a finding — a rule the RFC puts on every verifier that the third stack does not enforce.
+OURS_ONLY = ("provenance_class", "only EC/P-256")   # the pack's key block, no SD-JWT equivalent. "key.jwk must be
+#   an object" does not belong here: such an artifact never reaches this branch, it is counted in `nokey` above.
+# Exception types that are a crash inside the library rather than a refusal it meant to make.
+UNCAUGHT = ("JSONDecodeError", "AttributeError", "TypeError", "KeyError", "IndexError", "RecursionError")
+# A ValueError is ambiguous: the library raises one deliberately ("No holder public key in SD-JWT") and Python raises
+# one when a tuple unpack fails, which is a crash. The message separates them.
+PROFILE_31 = ("invalid base64url segment", "must be exactly 32 bytes", "exact ASCII compact serialization",
+              "duplicate JSON key", "starts with a B", "not valid JSON/base64url")      # SPEC §3.1, declared stricter than RFC
+# RFC 9901 puts a MUST on the VERIFIER in §7.1 step 5, and MUSTs on the STRUCTURE in §4.2.4.1 and §4.2.4.2 that its own
+# verification algorithm then does not enforce: §7.1 step 3.b collects only well-formed `_sd` arrays and
+# `{"...": string}` objects, and step 3.e removes every `_sd` key. So ignoring a malformed one is what the RFC's
+# algorithm prescribes; rejecting it is this format's stricter choice. The two are not the same finding.
+RFC_VERIFIER_MUST = ("match no digest", "disclosure must be [salt", "duplicate disclosure digest",
+                     "disclosed claim name must be a string", "collides", "malformed disclosure",
+                     # §7.1 step 2.d: "Check that the _sd_alg claim value is understood and the hash algorithm is
+                     # deemed secure according to the Holder or Verifier's policy". That IS a verifier step, so an unsupported _sd_alg does not belong below.
+                     "_sd_alg")
+RFC_STRUCTURAL = ("_sd must be a list", "array disclosure placeholder")
+
+# A divergence stays here only with its clause and its measurement. Declaring one is not excusing it: a declared
+# divergence that STOPS appearing fails this bench too (the declaration would no longer describe the machine), which is
+# the rule the differential oracle already applies to its own four.
+DECLARED = {
+    "disclosure-unused.json:intent":
+        'RFC 9901 §7.1 step 5: "If any Disclosure was not referenced by digest value in the Issuer-signed JWT '
+        '(directly or recursively via other Disclosures), the SD-JWT MUST be rejected." First measured 2026-09-22 and re-measured on '
+        "every run of this bench, against the installed sd-jwt through the AP2 SDK: it accepts the presentation and "
+        "returns a payload with the claim dropped. No forged claim passes — the divergence is the verdict, not the "
+        "content.",
+}
+
+
+def classify(err):
+    if not err:
+        return "unknown", ""
+    for k in OURS_ONLY:
+        if k in err:
+            return "ours_only", "a layer of the pack the third stack has no notion of"
+    for k in PROFILE_31:
+        if k in err:
+            return "profile", "this repository's §3.1 profile, declared stricter than RFC 9901"
+    for k in RFC_VERIFIER_MUST:
+        if k in err:
+            return "finding", "RFC 9901 §7.1 puts this MUST on the verifier; the third stack does not enforce it"
+    for k in RFC_STRUCTURAL:
+        if k in err:
+            return "structural", ("RFC 9901 §4.2.4.1/§4.2.4.2 require the structure of the Issuer, and its verification "
+                               "algorithm does not enforce it (§7.1 step 3.b collects only well-formed shapes, step "
+                               "3.e removes every _sd key): ignoring the malformed part is what the RFC prescribes, "
+                               "rejecting it is this format's stricter choice")
+    return "unknown", ""
+
+
+def has_kb(compact):
+    """A KB-JWT is present when the segment after the last `~` is itself a three-part JWT.
+
+    `sd_jwt.verify` is called without expected_aud/nonce, so the third stack does not validate the KB-JWT at all: on
+    such a pack its acceptance carries no opinion, and counting it as agreement OR as a divergence would both be false.
+    """
+    tail = compact.rsplit("~", 1)[-1].strip()
+    # A disclosure is one base64url token with no dot; anything with a dot in that position is a KB-JWT, including a
+    # MALFORMED one (r1 of this bench: a two-segment KB slipped through a `== 3` test and was counted as a finding).
+    return "." in tail
+
+
+def kb_expectations(compact):
+    """The `aud`/`nonce` a KB-JWT carries, so the third stack can be asked about the key binding at all.
+
+    Feeding the token its OWN aud and nonce does not validate them against anything — offline, neither verifier can:
+    this repository records them as present-but-not-validated and says so in its sealed scope. What it does buy is the
+    part that IS checkable offline and was otherwise never compared: the KB-JWT signature and its `sd_hash` binding.
+    Returns (aud, nonce) or (None, None) when there is no KB-JWT or its payload cannot be read.
+    """
+    tail = compact.rsplit("~", 1)[-1].strip()
+    if "." not in tail:
+        return None, None
+    parts = tail.split(".")
+    if len(parts) != 3:
+        return None, None
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4)))
+    except Exception:   # noqa: BLE001
+        return None, None
+    if not isinstance(payload, dict):
+        return None, None
+    aud, nonce = payload.get("aud"), payload.get("nonce")
+    return (aud if isinstance(aud, str) else None), (nonce if isinstance(nonce, str) else None)
+
+
+def sdk_says(sdk_sdjwt, JWK, compact, jwk_dict):
+    """(verdict, claims, note): does the third stack accept this token under this key, and what does it disclose?
+
+    verdict None means the third stack could not be asked at all, which is not a disagreement — it is a gap, printed
+    as such.
+    """
+    try:
+        key = JWK(**{k: v for k, v in jwk_dict.items() if k in ("kty", "crv", "x", "y")})
+    except Exception as e:   # noqa: BLE001
+        return None, None, f"key not loadable by jwcrypto: {type(e).__name__}"
+    aud, nonce = kb_expectations(compact)
+    try:
+        return True, sdk_sdjwt.verify(compact, key, expected_aud=aud, expected_nonce=nonce), ""
+    except Exception as e:   # noqa: BLE001
+        return False, None, f"{type(e).__name__}: {str(e)[:90]}"
+
+
+def ours_says(our_art, art):
+    """(verdict, claims): our reference's opinion on the same artifact, at the same layer.
+
+    The reference does NOT return the claims it resolved: it returns `claims_match`, meaning it re-derived exactly the
+    `resolved_claims` written in the pack. So the claims attributable to our stack are the pack's own, and only when
+    that flag is true — otherwise our verifier has itself disowned them and there is nothing of ours to compare.
+    """
+    # The artifact's verdict is not `signature_ok` alone: a pack whose resolved claims do not match what the file
+    # records, or whose KB-JWT verifies FALSE, fails here too. Reading only the signature was a proxy for the verdict,
+    # and it made `claims-mismatch` print "both accept" over an artifact this verifier rejects.
+    kb = our_art.get("kb_jwt") if isinstance(our_art.get("kb_jwt"), dict) else {}
+    ok = (our_art.get("signature_ok") is True and "error" not in our_art
+          and our_art.get("claims_match") is not False and kb.get("verified") is not False)
+    claims = art.get("resolved_claims") if our_art.get("claims_match") is True else None
+    return ok, (claims if isinstance(claims, dict) else None)
+
+
+def positive_controls(sdk_sdjwt, JWK, base_pack):
+    """Show this bench can go red before trusting the green it prints (metodo verde: a bench that cannot fail measures nothing).
+
+    Three controls, each one a state in which a real disagreement or a real refusal MUST appear:
+      1. a flipped signature byte  — both stacks must refuse;
+      2. a rewritten disclosure    — the forged value must never reach the caller (the third stack ACCEPTS the
+         presentation and drops the claim; only this repository refuses it, which is the declared divergence below);
+      3. a wrong key               — the third stack's own verdict must flip. This asks the third stack alone; that a
+         disagreement is REPORTED and turns this bench red is a separate ablation, AP2_XCHECK_SEED_DIVERGENCE=1.
+    """
+    ev = json.load(open(base_pack, encoding="utf-8"))
+    art = ev["artifacts"][0]
+    compact, jwk = art["sd_jwt_compact"], art["key"]["jwk"]
+    out, ok_all = [], True
+
+    head, _, rest = compact.partition("~")
+    h, pl, sig = head.split(".")
+    flipped_sig = sig[:-1] + ("A" if sig[-1] != "A" else "B")
+    flipped = f"{h}.{pl}.{flipped_sig}~{rest}"
+    v, _, note = sdk_says(sdk_sdjwt, JWK, flipped, jwk)
+    good = v is False
+    ok_all &= good
+    out.append(f"  [{'PASS' if good else 'FAIL'}] control 1 flipped signature: third stack "
+               f"{'refuses' if v is False else 'ACCEPTS — the bench cannot see a forged signature'} ({note})")
+
+    parts = [x for x in rest.split("~") if x]
+    if parts:
+        # A disclosure rewritten so that it STILL PARSES: [salt, name, value] with the value changed. Flipping a byte
+        # would only break base64 or JSON, which any parser catches; this one is caught solely because the digest in
+        # `_sd` no longer matches — the property actually under test.
+        d = parts[0]
+        raw = json.loads(base64.urlsafe_b64decode(d + "=" * (-len(d) % 4)))
+        forged = "999999.00 EUR" if raw[-1] != "999999.00 EUR" else "1.00 EUR"
+        raw[-1] = forged
+        newd = base64.urlsafe_b64encode(json.dumps(raw, separators=(",", ":")).encode()).decode().rstrip("=")
+        tampered = compact.replace("~" + d + "~", "~" + newd + "~", 1)
+        v2, claims2, note2 = sdk_says(sdk_sdjwt, JWK, tampered, jwk)
+        # The security property: whatever the verdict, the forged value must never reach the caller.
+        leaked = forged in json.dumps(claims2 or {})
+        ok_all &= not leaked
+        out.append(f"  [{'FAIL' if leaked else 'PASS'}] control 2 rewritten disclosure: the forged value "
+                   f"{'IS DISCLOSED — a rewritten claim passes' if leaked else 'never reaches the caller'}"
+                   + (f" (third stack refuses: {note2})" if v2 is False else " (third stack accepts, claim dropped)"))
+        if v2 is True:
+            out.append("  [DECL] control 2, divergence of verdict: the third stack ACCEPTS the presentation and "
+                       "silently drops the unreferenced disclosure; this repository refuses it. RFC 9901 §7.1 step 5: "
+                       "\"If any Disclosure was not referenced by digest value in the Issuer-signed JWT (directly or "
+                       "recursively via other Disclosures), the SD-JWT MUST be rejected.\" First measured 2026-09-22, "
+                       f"re-measured on every run, against sd-jwt {SDJWT_VERSION}; no forged claim passes either "
+                       "way, the difference is that a "
+                       "presentation the RFC says MUST be rejected is accepted with a reduced payload.")
+    else:
+        out.append("  [SKIP] control 2 rewritten disclosure: this pack has no disclosure to rewrite")
+
+    wrong = dict(jwk)
+    wrong["x"] = ("A" if wrong["x"][0] != "A" else "B") + wrong["x"][1:]
+    v3, _, note3 = sdk_says(sdk_sdjwt, JWK, compact, wrong)
+    good3 = v3 is False   # `is not True` also passed when the key could not be loaded at all, testing nothing
+    ok_all &= good3
+    out.append(f"  [{'PASS' if good3 else 'FAIL'}] control 3 the third stack's verdict flips on a wrong key: "
+               f"third says {v3} ({note3})")
+    out.append("  [NOTE] control 3 checks the third stack alone. That a divergence is REPORTED and turns this bench "
+               "red is held by AP2_XCHECK_SEED_DIVERGENCE=1, which corrupts the key handed to the third stack on the "
+               "first artifact: the run must then print [DIFF] and exit 1. CI runs it that way as its own step.")
+    return ok_all, out
+
+
+
+def interop_controls(sdk_sdjwt, JWK, base_pack):
+    """Tokens ISSUED by the third stack, verified here — the direction the rest of this bench cannot test.
+
+    Everything else compares opinions about tokens produced in this repository: flat `_sd`, three-element disclosures,
+    no decoys. A misreading shared by this repository's two verifiers would survive that, because the corpus itself
+    comes from the same reading. Here the third stack mints the token — decoy digests included, and the delegate
+    payload lands as an ARRAY-ELEMENT disclosure, a shape no hostile file exercises — and this repository's reference
+    is asked to verify it and to resolve the same claims.
+    """
+    out, ok_all = [], True
+    try:
+        from pydantic import BaseModel   # noqa: PLC0415
+    except Exception:                     # noqa: BLE001
+        return True, ["  [SKIP] interop: pydantic absent, the third stack cannot be asked to issue"]
+
+    class _Mandate(BaseModel):
+        iss: str
+        mandate_type: str
+        max_amount: str
+
+    base = json.load(open(base_pack, encoding="utf-8"))
+    for decoys in (False, True):
+        try:
+            key = JWK.generate(kty="EC", crv="P-256")
+            pub = {k: v for k, v in json.loads(key.export_public()).items() if k in ("kty", "crv", "x", "y")}
+            compact = sdk_sdjwt.create(
+                _Mandate(iss="third-party-issuer", mandate_type="checkout", max_amount="42.00 EUR"),
+                key, add_decoy_claims=decoys).sd_jwt_issuance
+            theirs = sdk_sdjwt.verify(compact, key)
+        except Exception as e:   # noqa: BLE001
+            out.append(f"  [SKIP] interop (decoys={decoys}): the third stack could not issue ({type(e).__name__})")
+            continue
+        ev = {"evidence_format": base["evidence_format"], "subject": "issued by the third stack",
+              "created_utc": "2026-01-01T00:00:00Z",
+              "artifacts": [{"name": "checkout", "sd_jwt_compact": compact,
+                             "key": {"jwk": pub, "provenance_class": "supplied"},
+                             "resolved_claims": theirs, "kb_jwt": {"present": False},
+                             "verified_at_build": {"signature_ok": True, "disclosures_ok": True}}],
+              "bindings": [], "honest_scope": base["honest_scope"]}
+        sys.path.insert(0, HERE)
+        from differential_oracle import rehash   # noqa: PLC0415
+        import tempfile     # noqa: PLC0415
+        fd, path = tempfile.mkstemp(suffix=".json")
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(rehash(ev), fh)
+        try:
+            r = ap2.verify_evidence(path)
+        finally:
+            os.unlink(path)
+        art = (r.get("artifacts") or [{}])[0]
+        # The sentence "the delegate payload lands as an array-element disclosure" is a claim about what the third
+        # stack emitted: asserted here against the signed payload, so it cannot drift away from the token.
+        try:
+            seg = compact.split("~")[0].split(".")[1]
+            payload = json.loads(base64.urlsafe_b64decode(seg + "=" * (-len(seg) % 4)))
+            arr_ph = json.dumps(payload).count('"..."')
+        except Exception:   # noqa: BLE001
+            arr_ph = -1
+        good = r.get("valid") is True and art.get("claims_match") is True and arr_ph > 0
+        ok_all &= good
+        out.append(f"  [{'PASS' if good else 'FAIL'}] interop, token issued by the third stack "
+                   f"(decoy digests: {'yes' if decoys else 'no'}, {arr_ph} array-element placeholders in its signed "
+                   f"payload): "
+                   + ("this repository verifies it and resolves the same claims" if good
+                      else f"REFUSED here — {art.get('error') or r.get('refused')}"))
+    return ok_all, out
+
+
+def hostile_packs():
+    """The oracle's hostile corpus, built here so the third stack sees the same files our two verifiers see.
+
+    Most of those files attack the container (digest, bindings, producer signature), which the third stack has no
+    notion of; the ones that matter here are the mandate-level attacks — the §3.1 profile inside the SD-JWT, base64
+    spelling, duplicate keys, lone surrogates. Returns (tempdir, [paths]); the caller removes the directory.
+    """
+    sys.path.insert(0, HERE)
+    import shutil          # noqa: PLC0415
+    import tempfile        # noqa: PLC0415
+    from differential_oracle import build_cases   # noqa: PLC0415
+    d = tempfile.mkdtemp()
+    try:
+        cases = build_cases(d)
+    except Exception:       # noqa: BLE001
+        shutil.rmtree(d, ignore_errors=True)
+        raise
+    return d, [path for name, (path, _flags) in sorted(cases.items()) if not name.startswith("vector-")]
+
+
+def main(argv):
+    sdk_sdjwt, JWK, sha = _sdk()
+    base = os.path.join(ROOT, "spec", "vectors", "ap2", "valid_signed.json")
+    args = [a for a in argv[1:] if not a.startswith("--")]
+    tmpdir = None
+    if "--hostile" in argv:
+        tmpdir, extra = hostile_packs()
+    else:
+        extra = []
+    packs = (args or sorted(p for p in glob.glob(os.path.join(ROOT, "spec", "vectors", "ap2", "*.json"))
+                            if not p.endswith(".expected.json"))) + extra
+    print(f"third verifier: Google AP2 SDK at commit {sha} over sd-jwt {SDJWT_VERSION}, the reference "
+          f"implementation (version read from the installed package, not written here)")
+    print("layer compared: the SD-JWT mandate only (signature + disclosure resolution). Not the container.")
+    controls_ok, lines = positive_controls(sdk_sdjwt, JWK, base)
+    print("positive controls (this bench must be able to go red):")
+    for line in lines:
+        print(line)
+    interop_ok, ilines = interop_controls(sdk_sdjwt, JWK, base)
+    controls_ok &= interop_ok
+    print("interoperability, the other direction (the third stack issues, this repository verifies):")
+    for line in ilines:
+        print(line)
+    diffs = gaps = n = claims_cmp = earlier = ours_only = profile = kbgap = structural = unreadable = n_vec = 0
+    findings = []
+    raises_uncaught = raises_meant = nokey = 0
+    seen_declared = set()
+    for path in packs:
+        try:
+            ev = json.load(open(path, encoding="utf-8"))
+        except Exception:   # noqa: BLE001
+            # A hostile file this bench cannot even read (a BOM, a 100000-deep nesting, a raw non-UTF-8 byte). It was
+            # being skipped in silence, which quietly shrank the denominator: counted and printed instead.
+            unreadable += 1
+            continue
+        try:
+            ours = ap2.verify_evidence(path)
+        except Exception as e:   # noqa: BLE001
+            print(f"  [SKIP] {os.path.basename(path):44} our reference raised {type(e).__name__}")
+            continue
+        if ours.get("refused"):
+            # Our stack refused the FILE before reaching any artifact (§3.1 profile, evidence_format, sealed scope).
+            # The third stack has no such layer, so this is not a disagreement about the mandate — it is a refusal we
+            # make and it cannot. Counted apart, never as agreement.
+            earlier += 1
+            continue
+        for art, our_art in zip(ev.get("artifacts", []) or [], ours.get("artifacts", []) or []):
+            if not isinstance(art, dict) or not isinstance(our_art, dict):
+                continue
+            compact = art.get("sd_jwt_compact")
+            jwk = (art.get("key") or {}).get("jwk") if isinstance(art.get("key"), dict) else None
+            if not isinstance(compact, str) or not isinstance(jwk, dict):
+                # The key block itself is not a key: there is nothing to hand the third stack, so no opinion of its
+                # own exists. Counted and printed — leaving these out of every total is the shrinking-denominator
+                # defect this bench already had once with the three unreadable files.
+                nokey += 1
+                continue
+            n += 1
+            from_vector = os.path.join("spec", "vectors", "ap2") in path
+            n_vec += 1 if from_vector else 0
+            name = f"{os.path.basename(path)}:{art.get('name')}"
+            seed = os.environ.get("AP2_XCHECK_SEED_DIVERGENCE") == "1" and n == 1
+            asked = dict(jwk)
+            if seed:
+                # Ablation of the comparator itself: hand the third stack a key that cannot verify while our own
+                # verdict is unchanged. A bench that cannot report a disagreement proves nothing by reporting none.
+                asked["x"] = ("A" if str(asked.get("x", "A"))[0] != "A" else "B") + str(asked.get("x", ""))[1:]
+            their, their_claims, note = sdk_says(sdk_sdjwt, JWK, compact, asked)
+            our, our_claims = ours_says(our_art, art)
+            if their is False and note:
+                # "refuse" for the third stack means "raises". Some of those are deliberate refusals carrying a
+                # message; others are uncaught internal errors. Both fail closed here, but only the first is a verdict,
+                # and a reader of these totals must be able to tell them apart.
+                if note.split(":")[0] in UNCAUGHT or "values to unpack" in note:
+                    raises_uncaught += 1
+                else:
+                    raises_meant += 1
+            if their is None:
+                gaps += 1
+                print(f"  [GAP ] {name:46} third stack could not be asked ({note})")
+                continue
+            if their != our:
+                if seed:
+                    diffs += 1
+                    findings.append((name, "seeded divergence", note))
+                    print(f"  [DIFF] {name:46} SEEDED: third stack given a corrupted key — {note}")
+                    continue
+                if our and not their:
+                    # The safety-critical direction: something WE accept and a third implementation refuses. It is never
+                    # bucketed away, whatever the reason — that is the shape of a hole in our own verifier.
+                    diffs += 1
+                    findings.append((name, "we accept, third refuses", note))
+                    print(f"  [DIFF] {name:46} ours=ACCEPT third=refuse — {note}")
+                    continue
+                if has_kb(compact) and kb_expectations(compact) == (None, None):
+                    # No readable aud/nonce, so the third stack cannot be asked about the key binding at all.
+                    kbgap += 1
+                    continue
+                if our_art.get("claims_match") is False:
+                    # `claims_match` compares the resolved claims against the `resolved_claims` RECORDED IN THE PACK —
+                    # a container field the third stack has never seen. Its refusal is ours to make and not comparable.
+                    ours_only += 1
+                    continue
+                kind, why = classify(our_art.get("error"))
+                if kind == "ours_only":
+                    ours_only += 1
+                    continue
+                if kind == "profile":
+                    profile += 1
+                    continue
+                if kind == "structural":
+                    structural += 1
+                    print(f"  [SPEC] {name:46} ours=refuse third=accept — {why}")
+                    print(f"         our reason: {our_art.get('error', '')}")
+                    # What the third stack HANDS BACK matters more than that it accepted: printed, so the sentence
+                    # about it in the README and the SPEC is copied from a measurement, not written from memory.
+                    print(f"         third stack returns: {json.dumps(their_claims, sort_keys=True)[:150]}")
+                    continue
+                if name in DECLARED:
+                    seen_declared.add(name)
+                    print(f"  [DECL] {name:46} ours=refuse third=accept — {DECLARED[name]}")
+                    continue
+                findings.append((name, our_art.get("error", ""), why))
+                diffs += 1
+                print(f"  [DIFF] {name:46} ours=refuse third=accept — {why}")
+                print(f"         our reason: {our_art.get('error', '')}")
+                continue
+            if their and our_claims is not None:
+                claims_cmp += 1
+                theirs = their_claims or {}
+                # Key SETS first: comparing only the intersection would hide a claim one stack discloses and the other
+                # does not, which is exactly the shape a misread digest rule produces.
+                only_ours = sorted(set(our_claims) - set(theirs))
+                only_theirs = sorted(set(theirs) - set(our_claims))
+                bad = sorted(k for k in set(theirs) & set(our_claims) if our_claims[k] != theirs[k])
+                if only_ours or only_theirs or bad:
+                    diffs += 1
+                    print(f"  [DIFF] {name:46} both accept but disclose differently — "
+                          f"only ours {only_ours}, only third {only_theirs}, different values {bad}")
+                    continue
+                print(f"  [OK  ] {name:46} both accept, same {len(theirs)} claims, same values")
+            else:
+                print(f"  [OK  ] {name:46} both {'accept' if our else 'refuse'}"
+                      + (f" ({note})" if not our else ""))
+    missing = sorted(set(DECLARED) - seen_declared) if "--hostile" in argv else []
+    if missing:
+        print(f"  [WARN] declared divergences that did not appear: {missing} — the declaration no longer describes "
+              "this machine (a newer third-party release may have fixed it, or the case stopped being built)")
+        diffs += len(missing)
+    print(f"artifacts from the eight vectors: {n_vec} | from the hostile corpus: {n - n_vec}")
+    print(f"the third stack refuses by RAISING: {raises_meant} deliberate refusals carrying a message, "
+          f"{raises_uncaught} uncaught internal errors (fail-closed in effect, but not a verdict)")
+    print(f"artifacts whose key block is not a key, so nothing could be handed to the third stack: {nokey}")
+    print(f"hostile files this bench cannot even read (BOM, 100000-deep nesting, a non-UTF-8 byte): {unreadable}")
+    print("not disagreements, counted apart:")
+    print(f"  ARTIFACTS refused by us at a layer the third stack has no notion of (key provenance and\n    the `resolved_claims` the file itself records):                                {ours_only}")
+    print(f"  refused by us under the §3.1 profile this repository declares stricter:          {profile}")
+    print(f"  KB-JWT whose aud/nonce could not be read, so its binding could not be compared: {kbgap}")
+    print(f"  refused by us where the RFC's own verification algorithm ignores the malformed part:  {structural}")
+    print(f"packs seen: {len(packs)} | refused by us before the mandate layer (no third-stack opinion "
+          f"applies): {earlier}")
+    print(f"artifacts compared: {n} | claim-sets compared: {claims_cmp} | not askable: {gaps}")
+    print(f"mandate-layer disagreements with the third stack, on a rule the RFC puts on the verifier: {diffs}/{n}")
+    wrong_way = [f for f in findings if f[1] in ("we accept, third refuses", "seeded divergence")]
+    print("  (none in the direction 'we accept, a third implementation refuses')" if not wrong_way
+          else f"  INCLUDING {len(wrong_way)} in the direction 'we accept, the third stack refuses': "
+               f"{[f[0] for f in wrong_way]}")
+    if tmpdir:
+        import shutil    # noqa: PLC0415
+        shutil.rmtree(tmpdir, ignore_errors=True)
+    if not controls_ok:
+        print("positive controls FAILED: a green result here would mean nothing")
+    return 1 if (diffs or not controls_ok) else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
