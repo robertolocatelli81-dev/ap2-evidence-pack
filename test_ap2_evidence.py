@@ -383,5 +383,82 @@ class TestProducerSignatureContentBinding(_Base):
         self.assertFalse(r["valid"])
 
 
+@unittest.skipIf(not hasattr(os, "mkfifo"), "needs POSIX FIFOs and symlinks")
+class TestFileObjects(unittest.TestCase):
+    """25/09/2026 — the evidence file must be a REGULAR file of at most MAX_EVIDENCE_BYTES, decided on the open
+    descriptor. Measured on 1.2.0: a FIFO blocked both verifiers; a symlink to /dev/zero passed the size check (a device
+    reports 0) and was read until memory ran out (MemoryError / abort); a directory was refused with an OS error name.
+    RED on 1.2.0 (the FIFO test ends on the timeout, never by hanging the suite), GREEN after the fix."""
+    VECTOR = os.path.join(_HERE, "spec", "vectors", "ap2", "valid_signed.json")
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.d, ignore_errors=True)
+
+    def cli(self, path):
+        import subprocess
+        try:
+            import resource
+            lim = lambda: resource.setrlimit(resource.RLIMIT_DATA, (1500 << 20, 1500 << 20))  # noqa: E731 — /dev/zero read whole must not take the host down
+        except ImportError:
+            lim = None
+        try:
+            r = subprocess.run([sys.executable, os.path.join(_HERE, "ap2_evidence.py"), "verify", path], capture_output=True, text=True, timeout=20, preexec_fn=lim)
+        except subprocess.TimeoutExpired:
+            return "BLOCKED", None
+        try:
+            return r.returncode, json.loads(r.stdout)
+        except ValueError:
+            return r.returncode, None
+
+    def assert_refused(self, path, why):
+        code, j = self.cli(path)
+        self.assertEqual(code, 1, (code, j))
+        self.assertFalse(j["valid"])
+        self.assertIn(why, j["refused"])
+
+    def test_fifo_devzero_directory_refused_as_not_a_regular_file(self):
+        f = os.path.join(self.d, "fifo.json"); os.mkfifo(f)
+        z = os.path.join(self.d, "zero.json"); os.symlink("/dev/zero", z)
+        dd = os.path.join(self.d, "dir.json"); os.makedirs(dd)
+        for p in (f, z, dd):
+            self.assert_refused(p, "not a regular file")
+
+    def test_the_bound(self):   # trailing spaces change no digest: at the bound it verifies, one byte more is refused unread
+        with open(self.VECTOR, "rb") as f:
+            raw = f.read()
+        p = os.path.join(self.d, "big.json")
+        with open(p, "wb") as f:
+            f.write(raw + b" " * (ap2.MAX_EVIDENCE_BYTES - len(raw)))
+        self.assertTrue(ap2.verify_evidence(p)["valid"])
+        with open(p, "ab") as f:
+            f.write(b" ")
+        self.assert_refused(p, f"exceeds {ap2.MAX_EVIDENCE_BYTES} bytes")
+
+
+class WeakEd25519Keys20260925(unittest.TestCase):
+    """A producer signature under a small-order Ed25519 key (R=identity, S=0 verifies on every message under OpenSSL),
+    with that key PINNED, was PASS before this check (measured 25/09/2026)."""
+    def test_pinned_small_order_key_never_verifies(self):
+        import base64 as _b, copy as _c
+        from pqcrypto import sigsuite
+        d = json.load(open(os.path.join(_HERE, "spec", "vectors", "ap2", "valid_signed.json")))
+        ident = _b.b64encode(bytes([1]) + bytes(31)).decode()
+        f = _c.deepcopy(d)
+        f["producer_signatures"]["signatures"] = [x for x in f["producer_signatures"]["signatures"] if x["sig_alg"] == "ed25519"]
+        f["producer_signatures"]["signatures"][0].update(public_key_b64=ident, signature_b64=_b.b64encode(bytes([1]) + bytes(63)).decode())
+        with tempfile.TemporaryDirectory() as t:
+            fp = os.path.join(t, "f.json"); json.dump(f, open(fp, "w"))
+            r = ap2.verify_evidence(fp, trusted_producer_keys={"ed25519": [ident]})
+            st = [x for x in r["producer_signatures"]["signatures"] if x["sig_alg"] == "ed25519"][0]["status"]
+            self.assertEqual(st, "FAIL")
+        self.assertFalse(sigsuite.verify("ed25519", ident, _b.b64encode(bytes([1]) + bytes(63)).decode(), b"any"))
+        for h in ("ec" + "ff" * 31, "ed" + "ff" * 30 + "7f"):
+            self.assertTrue(sigsuite.weak_ed25519_key(bytes.fromhex(h)))
+
+
 if __name__ == "__main__":
     unittest.main()

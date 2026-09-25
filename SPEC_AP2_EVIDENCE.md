@@ -97,7 +97,9 @@ sealing without changing what they attest.
 
 So that every implementation computes the same canonical bytes or refuses the same
 file, a verifier MUST refuse (a receipt with `valid: false`, never a crash) an evidence
-file that: is not valid UTF-8 or starts with a BOM; exceeds 64 MiB; is not a JSON object;
+file that: is not a regular file (a FIFO, a device, a directory — decided on the opened file, which is opened without
+blocking and never read past 64 MiB + 1 byte; added 25/09/2026, Unreleased); is not valid UTF-8 or starts with a BOM;
+exceeds 64 MiB; is not a JSON object;
 contains a duplicate object key at any depth; contains a number with a fraction or an
 exponent (floats are not portable — use a string) or an integer outside ±(2^53−1);
 contains `NaN`/`Infinity`; nests deeper than 512; contains an unpaired UTF-16 surrogate

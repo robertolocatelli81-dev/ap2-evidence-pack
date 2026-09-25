@@ -6,6 +6,10 @@ hostile files that a lenient verifier would accept (every one carries a digest r
 and a CLI-grammar table (usage exit 2, no verdict, in both). Exit 1 on any disagreement. 1.1.0 (2026-09-22): the cases
 were measured red on the 1.0.2 reference first (see README)."""
 import base64, copy, glob, hashlib, json, os, shutil, subprocess, sys, tempfile
+try:
+    import resource
+except ImportError:   # non-POSIX: the file-object cases then run without a per-child memory bound
+    resource = None
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 HERE = os.path.dirname(os.path.abspath(__file__)); ROOT = os.path.dirname(HERE)
@@ -48,7 +52,15 @@ def _forged_tsr(digest, extra_tst=b""):
 # NB: the gen_time below is the probe TSA token's own genTime — regenerating the anchor vectors changes it and this
 # declaration must be updated with them (the run then reports the mismatch instead of silently passing).
 # the cases that must PASS: they prove the bench can tell green from red (never hostile files)
-POSITIVE_CONTROLS = frozenset({"non-ascii-subject-rehashed", "fresh-pack-control-valid", "must-created_utc-ok"})
+POSITIVE_CONTROLS = frozenset({"non-ascii-subject-rehashed", "fresh-pack-control-valid", "must-created_utc-ok", "file-exactly-at-the-bound"})
+MAX_EVIDENCE_BYTES = 64 << 20
+# 25/09/2026 — what a verifier must refuse BEFORE reading it, with a DECLARED reason that both must give: agreement alone is
+# not enough (a FIFO blocked both verifiers and a symlink to /dev/zero exhausted memory in both: they "agreed").
+# Each row runs with a timeout and, where the OS allows, a per-child RLIMIT_DATA, so a regression is a red row, never a
+# hung oracle or a host out of memory.
+REFUSALS = {"file-fifo": "not a regular file", "file-devzero-symlink": "not a regular file", "file-directory": "not a regular file",
+            "file-one-byte-over-the-bound": "exceeds"}
+HAZARD_TIMEOUT, HAZARD_MEM = 20, 1500 << 20
 
 _LEAF_CA = _LEAF_SELF = _LEAF_MIX = None   # the x5c leaves are freshly generated each run: the declaration ignores that one field
 
@@ -102,6 +114,24 @@ def run(cmd, path, flags):
                 r.get("policy_ok"), r.get("self_asserted_only"), r.get("chain_verified"), tuple(r.get("provenance_classes") or ()), leaves)
     except Exception:  # noqa: BLE001
         return ("NONJSON/CRASH:" + os.path.basename(cmd[-1] if cmd[-1] != "verify" else cmd[-2]),) * len(KEYS)   # distinct per verifier: two crashes never agree
+
+
+def _limit_memory():
+    resource.setrlimit(resource.RLIMIT_DATA, (HAZARD_MEM, HAZARD_MEM))
+
+
+def refusal_of(cmd, path):
+    """The `refused` reason of one verifier on a file-object case: BLOCKED on timeout, CRASH:<exit> without a JSON receipt."""
+    try:
+        out = subprocess.run(list(cmd) + [path], capture_output=True, text=True, timeout=HAZARD_TIMEOUT,
+                             preexec_fn=_limit_memory if resource is not None else None)
+    except subprocess.TimeoutExpired:
+        return "BLOCKED"
+    try:
+        r = json.loads(out.stdout)
+    except ValueError:
+        return f"CRASH:{out.returncode}"
+    return "valid" if r.get("valid") else str(r.get("refused"))
 
 
 def build_cases(d):
@@ -295,6 +325,12 @@ def build_cases(d):
                     ("created_utc-absent", lambda e: e.pop("created_utc", None)), ("honest_scope-absent", lambda e: e.pop("honest_scope", None))):
         e = copy.deepcopy(base); mut(e); cases["must-" + nm] = (w("must" + nm, json.dumps(rehash(e))), [])
     cases["jwk-x-33-bytes-rehashed"] = (w("jwk33", json.dumps(_fresh_pack(base, sk, n, H, '{"iss":"x"}', {"iss": "x"}, jwk_x_bytes=n.x.to_bytes(33, "big")))), [])
+    # ── 25/09/2026: file objects a verifier must not read (REFUSALS) and the bound itself — trailing spaces change no digest
+    fifo = os.path.join(d, "fifo.json"); os.mkfifo(fifo); cases["file-fifo"] = (fifo, [])
+    z = os.path.join(d, "zero.json"); os.symlink("/dev/zero", z); cases["file-devzero-symlink"] = (z, [])
+    dd = os.path.join(d, "dir.json"); os.makedirs(dd); cases["file-directory"] = (dd, [])
+    for nm, size in (("file-one-byte-over-the-bound", MAX_EVIDENCE_BYTES + 1), ("file-exactly-at-the-bound", MAX_EVIDENCE_BYTES)):
+        raw = base_text.encode("utf-8"); cases[nm] = (w(nm, raw + b" " * (size - len(raw))), [])
     return cases
 
 
@@ -411,7 +447,14 @@ def main():
         cases = build_cases(tmp)
         declared = 0
         for name, (path, flags) in cases.items():
+            if name in REFUSALS:   # declared reason, checked in each verifier (not only their agreement)
+                py, js = refusal_of(PY, path), refusal_of(JS, path); n += 1
+                ok = REFUSALS[name] in py and REFUSALS[name] in js and py != "valid" and js != "valid"; diffs += 0 if ok else 1
+                print(f"  [{'OK ' if ok else 'DIFF'}] {name:34} declared refusal {REFUSALS[name]!r}: py={py[:70]!r} js={js[:70]!r}")
+                continue
             py, js = run(PY, path, flags), run(JS, path, flags); n += 1
+            if name in POSITIVE_CONTROLS and py[0] is not True:   # a positive control that does not verify proves nothing
+                diffs += 1; print(f"  [DIFF] {name:34} positive control did not verify: py={py[:3]}"); continue
             if name in DECLARED and _matches_declared(name, py, js):
                 declared += 1; print(f"  [DECL] {name:34} py={py} js={js}  <- declared: " + ("TSA verification" if "tsa-cert" in name else "chain validation") + " is openssl-only"); continue
             ok = py == js; diffs += 0 if ok else 1

@@ -60,6 +60,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import sys
 import urllib.request
 from datetime import datetime, timezone
@@ -189,14 +190,31 @@ def loads_strict(text: str):
         raise Ap2EvidenceError(f"not JSON: {str(e)[:80]}") from e
 
 
+_OPEN_FLAGS = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOCTTY", 0) | getattr(os, "O_CLOEXEC", 0)
+
+
 def read_evidence_file(path: str):
     """Read + decode + parse the evidence file under the profile. UTF-8 strict (a raw byte is a refusal, never U+FFFD),
-    a size bound before reading, an unreadable path is a refusal — all Ap2EvidenceError, never a traceback."""
+    a size bound before reading, an unreadable path is a refusal — all Ap2EvidenceError, never a traceback.
+    The file is opened WITHOUT blocking and read only if the OPEN descriptor is a regular file, at most
+    MAX_EVIDENCE_BYTES bytes: measured 25/09/2026, a FIFO in its place blocked both verifiers and a symlink to /dev/zero
+    passed the size check (a device reports size 0) and was read until memory ran out, in both."""
     try:
-        if os.path.getsize(path) > MAX_EVIDENCE_BYTES:
+        if not stat.S_ISREG(os.stat(path).st_mode):   # refused BEFORE it is opened (opening a device can act on it)
+            raise Ap2EvidenceError("unreadable evidence file: not a regular file")
+        fd = os.open(path, _OPEN_FLAGS)
+        try:                                          # fstat on the open descriptor: closes the race with a swap in between
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                raise Ap2EvidenceError("unreadable evidence file: not a regular file")
+            if st.st_size > MAX_EVIDENCE_BYTES:
+                raise Ap2EvidenceError(f"evidence file exceeds {MAX_EVIDENCE_BYTES} bytes")
+            with os.fdopen(os.dup(fd), "rb") as f:
+                raw = f.read(MAX_EVIDENCE_BYTES + 1)
+        finally:
+            os.close(fd)
+        if len(raw) > MAX_EVIDENCE_BYTES:   # a file that grows while it is read is refused, never buffered past the bound
             raise Ap2EvidenceError(f"evidence file exceeds {MAX_EVIDENCE_BYTES} bytes")
-        with open(path, "rb") as f:
-            raw = f.read()
     except OSError as e:
         raise Ap2EvidenceError(f"unreadable evidence file: {type(e).__name__}") from e
     try:

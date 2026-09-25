@@ -97,6 +97,28 @@ def sign(alg: str, private_key, message: bytes) -> str:
     raise SigError(f"unknown signature class {alg!r}")
 
 
+
+# small-order / non-canonical Ed25519 keys: R=identity, S=0 verifies on every message and OpenSSL accepts it (measured 25/09/2026); same list in verifiers/js/ap2-verify.mjs
+WEAK_ED25519_KEYS = frozenset(bytes.fromhex(h) for h in (
+    "0100000000000000000000000000000000000000000000000000000000000000",
+    "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+    "0000000000000000000000000000000000000000000000000000000000000000",
+    "0000000000000000000000000000000000000000000000000000000000000080",
+    "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+    "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+    "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85",
+    "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa",
+    "0100000000000000000000000000000000000000000000000000000000000080",
+    "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+))
+
+
+def weak_ed25519_key(pk: bytes) -> bool:
+    if len(pk) != 32 or pk in WEAK_ED25519_KEYS:
+        return True
+    return (int.from_bytes(pk, "little") & ((1 << 255) - 1)) >= 2 ** 255 - 19
+
+
 # --- verify (fail-closed; None = unsupported class, never a false green) -------
 
 def verify(alg: str, public_key_b64: str, signature_b64: str, message: bytes) -> Optional[bool]:
@@ -107,6 +129,8 @@ def verify(alg: str, public_key_b64: str, signature_b64: str, message: bytes) ->
         return False
     try:
         if alg == "ed25519":
+            if weak_ed25519_key(pk):
+                return False
             ed25519.Ed25519PublicKey.from_public_bytes(pk).verify(sig, message)
             return True
         if alg == "ecdsa-p256":

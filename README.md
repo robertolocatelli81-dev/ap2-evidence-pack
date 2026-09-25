@@ -131,20 +131,25 @@ absent or the wrong type, `created_utc` not ISO-8601; a SIGNED payload that is a
 a signed 100000-deep header; seven KB-JWT branches (two segments, a header that is not JSON, an array payload, `alg` RS256, `cnf.jwk` a string, and a
 signature segment with padding or with a space) and seven `resolve_disclosures` branches (a disclosure that is not
 base64url, not JSON, an object, four elements, a duplicate digest, one matching nothing, and a colliding claim name);
+a FIFO, a symlink to `/dev/zero`, a directory and a file one byte over 64 MiB in place of the evidence file (each with a
+DECLARED refusal reason both verifiers must give, since 25/09/2026 — a FIFO had blocked both and `/dev/zero` had exhausted
+memory in both, which a comparison of the two alone records as agreement);
 a real self-signed `x5c` leaf — canonical, with a space, with a newline,
 one whose key differs from the snapshotted JWK, and one issued by a CA rather than self-signed;
 `provenance_class` `supplied`, out of enum, a list or absent; `honest_scope` absent; a pack whose mandate is
 self-asserted while a second artifact chains to the anchor) and 19 command-line grammar cases
 (18 usage exit 2,
 nothing on stdout, in both — the bare invocation without a subcommand included — and one
-`--flag=value` form that must produce a verdict, not usage), plus three positive
+`--flag=value` form that must produce a verdict, not usage), plus four positive
 controls, named here from `POSITIVE_CONTROLS` in the oracle rather than from memory (`non-ascii-subject-rehashed`,
-`fresh-pack-control-valid`, `must-created_utc-ok` — each one a pack that must be `valid` in both verifiers, so a
-suite that answers REJECT to everything is caught). The CA-issued `x5c` leaf under `--trust-anchor`, the only case
+`fresh-pack-control-valid`, `must-created_utc-ok` and, since 25/09/2026, `file-exactly-at-the-bound` — the valid vector
+padded with spaces to exactly 64 MiB — each one a pack that must be `valid` in both verifiers, so a suite that answers
+REJECT to everything is caught; through 1.2.0 this sentence said more than the oracle did: it only COUNTED the positive
+controls, and two verifiers refusing one alike were an agreement — measured by ablation on 25/09/2026, see CHANGELOG). The CA-issued `x5c` leaf under `--trust-anchor`, the only case
 where `self_asserted_only` is false, is one of the hostile files, not one of those three — this sentence said
 otherwise through 1.1.2:
-**144 cases, 0 disagreements, of which 4 are declared divergences** (the run prints its own
-decomposition — `9 vector runs + 113 hostile files + 3 positive controls + 19 CLI cases = 144` — so these numbers are
+**149 cases, 0 disagreements, of which 4 are declared divergences** (measured 25/09/2026; the run prints its own
+decomposition — `9 vector runs + 117 hostile files + 4 positive controls + 19 CLI cases = 149` — so these numbers are
 copied from that line rather than counted by hand, which is how several of them went stale during the
 review rounds; this very sentence had gone stale once more, and was caught by the final check) — the real token under `--tsa-cert`, where the
 reference proves the TSA with openssl and the JS verifier reports `tsa_verified: null` and does

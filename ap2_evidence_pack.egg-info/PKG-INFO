@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: ap2-evidence-pack
-Version: 1.1.1
+Version: 1.2.0
 Summary: Self-contained, offline-verifiable dispute evidence for agentic-payment SD-JWT mandates (AP2)
 Author: Roberto Locatelli
 License: Apache-2.0
@@ -17,7 +17,14 @@ Dynamic: license-file
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22539659.svg)](https://doi.org/10.5281/zenodo.22539659)
 
 **Self-contained, offline-verifiable dispute evidence for agentic-payment SD-JWT mandates
-(AP2-style Intent / Cart / Payment mandate chains).**
+(AP2 Checkout and Payment Mandates, and the delegation chains between them).**
+
+Measured against the AP2 specification as published in `google-agentic-commerce/AP2` on 2026-09-22, whose mandates are
+the **Checkout Mandate** and the **Payment Mandate** (the earlier Intent/Cart naming is gone from the spec; this README
+used it until today). A delegation chain from that spec — `delegate_payload` carrying an array disclosure — parses and
+resolves here unchanged: `python3 -c` on the encoded token in `docs/ap2/checkout_mandate.md` returns the delegate with
+its `vct`, `constraints` and `cnf`. What this package does NOT yet do is validate the `vct` against the mandate type,
+which the reference SDK does.
 
 The [AP2 spec](https://ap2-protocol.org/ap2/specification/) tells implementers *what* to
 keep for dispute resolution — the SD-JWTs with their disclosures, in compact serialization —
@@ -49,8 +56,8 @@ This tool turns a set of SD-JWT mandates into **one evidence file** that verifie
 ```bash
 pip install ap2-evidence-pack   # cryptography comes with it (declared since 1.1.1)
 
-python3 examples/make_samples.py     # generates sample intent.sdjwt + cart.sdjwt
-python3 ap2_evidence.py build evidence.json intent=intent.sdjwt cart=cart.sdjwt \
+python3 examples/make_samples.py     # generates sample checkout.sdjwt + payment.sdjwt
+python3 ap2_evidence.py build evidence.json checkout=checkout.sdjwt payment=payment.sdjwt \
         [--key name=jwk.json] [--jwks-url name=https://...] [--tsa http://tsa.example]
 
 python3 ap2_evidence.py verify evidence.json     # offline, fail-closed; exit 0/1
@@ -145,9 +152,11 @@ self-asserted while a second artifact chains to the anchor) and 19 command-line 
 (18 usage exit 2,
 nothing on stdout, in both — the bare invocation without a subcommand included — and one
 `--flag=value` form that must produce a verdict, not usage), plus three positive
-controls (non-ASCII text in profile; a fresh-key pack that must be `valid` in both; the CA-issued `x5c`
-leaf under `--trust-anchor`, the only case in the suite where `self_asserted_only` is false — and its
-negative control, the self-signed leaf against the same anchor, where it stays true):
+controls, named here from `POSITIVE_CONTROLS` in the oracle rather than from memory (`non-ascii-subject-rehashed`,
+`fresh-pack-control-valid`, `must-created_utc-ok` — each one a pack that must be `valid` in both verifiers, so a
+suite that answers REJECT to everything is caught). The CA-issued `x5c` leaf under `--trust-anchor`, the only case
+where `self_asserted_only` is false, is one of the hostile files, not one of those three — this sentence said
+otherwise through 1.1.2:
 **144 cases, 0 disagreements, of which 4 are declared divergences** (the run prints its own
 decomposition — `9 vector runs + 113 hostile files + 3 positive controls + 19 CLI cases = 144` — so these numbers are
 copied from that line rather than counted by hand, which is how several of them went stale during the
@@ -206,6 +215,88 @@ trust-list infrastructure. The cost of that choice is explicit: this is not a st
 years from now has to run this verifier (or the format's SPEC, which is written to be re-implementable) rather than an
 off-the-shelf eIDAS validator.
 
+**Third verifier, written by other people** (`verifiers/sdk_crosscheck.py`, measured 23/09/2026). The oracle above
+compares two verifiers written by one author, so a MISREADING of the specification is invisible to it: the same
+misreading lands in Python and in Node, and they agree. This bench asks the same questions of a stack nobody here
+wrote — Google's AP2 SDK at commit `e1ea56db72a6`, the head of that repository's `main` when this was measured, over
+`sd-jwt` 0.10.4 — measured 23/09/2026 as the latest release on PyPI, whose own summary there reads "The reference
+implementation of the IETF SD-JWT specification" and whose author field names Daniel Fett, one of RFC 9901's three
+authors. The bench compares two things per artifact: the verdict, and the claims left after disclosure resolution, and
+it prints the SDK commit and the `sd-jwt` version it actually loaded rather than repeating them from here.
+
+```bash
+AP2_SDK_PATH=/path/to/AP2/code/sdk/python python3 verifiers/sdk_crosscheck.py --hostile
+```
+
+Measured on the eight vectors alone: **16 artifacts, same verdict, same claim names, same values.** Vectors plus the
+hostile corpus together: **136 artifacts compared (16 from the vectors, 120 hostile), 87 claim-sets compared, 0
+undeclared disagreements**, and **none in the direction that would matter most — nothing this repository accepts and
+the third stack refuses**. One word needs care in that sentence: "refuses", for the third stack, means "raises". Of
+its 17 refusals here, 7 are deliberate and carry a message, and 10 are uncaught internal errors (`JSONDecodeError`,
+`'str' object has no attribute 'get'`, a failed tuple unpack). Fail-closed in effect, but not a verdict, and the bench
+prints that split rather than hiding it inside a total. The buckets that decide what counts as a disagreement at all
+are this repository's own; the one direction never bucketed away is "we accept, the third stack refuses".
+
+**The other direction, which comparing opinions cannot reach.** Every pack above is produced here, so a reading shared
+by both of this repository's verifiers would also shape the corpus they are tested on. So the third stack also ISSUES:
+it mints tokens — with and without decoy digests — and this repository's Python reference verifies them and resolves
+the same claims. Both cases pass, and the bench asserts the shape rather than asserting it in prose: each issued token
+carries one `{"...": <digest>}` array-element placeholder in its signed payload, a shape no hostile file here
+exercises. The Node verifier is not run on them. What is still NOT cross-checked, stated plainly: nested and recursive disclosures, and delegation chains.
+
+**Positive controls, because a bench that cannot go red measures nothing.** A flipped signature must be refused; a
+rewritten disclosure's forged value must never be disclosed (the presentation itself is ACCEPTED by the third stack —
+that is the declared divergence below); a wrong key must flip the third stack's verdict. That a disagreement is
+actually REPORTED and turns the bench red is held by its own ablation: `AP2_XCHECK_SEED_DIVERGENCE=1` corrupts the key
+handed to the third stack, and the run must both print the seeded `[DIFF]` and exit non-zero. The workflow carries
+the bench and that ablation as their own steps; whether they are green is a fact about a run, and belongs in the
+release notes with the run behind it.
+
+**Every malformed input gets a verdict, never a traceback** (`verifiers/type_fuzz.py`). The count above — 10 of the
+third stack's 17 refusals being uncaught internal errors — raises the same question about this repository, and it is
+the one question here that is this repository's business to answer. `test_hostile_files_are_refusal_receipts_never_tracebacks`
+already held it for ten hand-picked FILE-level shapes (eight malformed files, a missing path, a directory) against the
+Python reference called as a library, and the differential oracle already runs BOTH verifiers as subprocesses on the
+113 hostile files, turning a non-JSON answer into a crash marker that never agrees. What this adds is the fields one at
+a time instead of hand-picked files, and a positive control for the crash detector itself. Measured 23/09/2026: every field of a valid pack
+(88 of them) replaced by each of eight hostile types — `null`, a number, `""`, `[]`, `{}`, a boolean, a float where an
+integer belongs, a lone surrogate — is **695 hostile mutations, answered with a verdict 1390 out of 1390 times** across
+the two verifiers (nine substitutions left the pack byte-identical to the valid one — a `true` replaced by `True` — and
+are counted apart rather than inflating the denominator). An answer means stdout parses to an object with a boolean
+`valid` AND stderr is empty: a receipt printed before a traceback does not count. The harness ships its own crashing verifier and must catch it
+first: it does, on 7 of the 8 mutations of the field that verifier mishandles (the eighth is `{}`, which really does
+have the method it calls), and the gate is that exact number, not "at least one" — a detector degraded to seeing a
+single crash out of eight would pass a laxer test. Below that, it exits 2 without measuring anything.
+
+**What the numbers do NOT cover,** stated so nobody reads them as more than they are. The third stack has no notion of
+the container (digest, bindings, producer signature, RFC 3161, policy, key provenance, and the `resolved_claims` the
+file records), so **32 packs** this repository refuses at the file level and **15 artifacts** it refuses at a layer
+the third stack has no notion of (key provenance, and the `resolved_claims` the file itself records) have no
+third-stack opinion at all; **2 more artifacts** carry a key block that is not a key (`null`, or a `jwk` that is a
+list), so there was nothing to hand over and they are counted on their own line rather than vanishing from the
+denominator; **6 artifacts** are refused under the §3.1 profile this repository
+declares stricter than the RFC; on **7 packs** the KB-JWT's `aud`/`nonce` cannot be read, so its binding could not be
+compared (where they can be read they are passed through, so the third stack checks the key-binding signature and its
+`sd_hash` too — feeding a token its own `aud`/`nonce` validates them against nothing, which is what the sealed scope
+already says); and **3 hostile files** this bench cannot even read (a BOM, a 100000-deep nesting, a raw non-UTF-8
+byte). Of the six verification steps of SPEC §6, this bench covers the signature and the disclosure resolution inside
+step 2 — not the §3.1 profile, not `claims_match`, not the KB-JWT expectations, not the provenance reconciliation.
+
+**One declared divergence, with its clause.** On a presentation carrying a disclosure that matches no digest, this
+repository refuses and the third stack accepts, returning a payload with the claim dropped. RFC 9901 §7.1 step 5: *"If
+any Disclosure was not referenced by digest value in the Issuer-signed JWT (directly or recursively via other
+Disclosures), the SD-JWT MUST be rejected."* No forged claim passes either way — the divergence is the verdict, not the
+content. Three further cases are not a defect of anyone: they are where the RFC's own verification algorithm ignores what its
+structural MUSTs require. `_sd` that is not an array of strings (§4.2.4.1: *"The _sd key MUST refer to an array of
+strings"*) and an array placeholder whose value is not a digest string (§4.2.4.2: *"The value MUST be the digest of the
+Disclosure"*) are MUSTs addressed to the Issuer — and §7.1 step 3.b collects only well-formed `_sd` arrays and
+`{"...": string}` objects, then step 3.e removes every `_sd` key, so ignoring the malformed part is exactly what the
+RFC prescribes to a verifier. This repository rejects instead: a stricter choice of this format, not a third-party
+defect. Measured, with the third stack's own returned payload printed by the bench: a malformed `_sd` (`{}`, `[1]`)
+leaves `{"iss": "x"}`, while `{"...": [1]}` comes back inside the verified payload as `{"a": [{"...": [1]}], "iss":
+"x"}` — an ordinary array element, per §7.1 step 3.b.ii, and issuer-signed content, so not an unauthenticated
+injection. `_sd: null` is refused by BOTH.
+
 Independent implementations (any language): open a PR to be listed here.
 
 ## Tests
@@ -215,6 +306,7 @@ python3 test_ap2_evidence.py      # negative controls first — the bench can fa
 python3 test_ap2_conformance.py   # conformance vectors + ACVP ML-DSA-65 + signature suite + acceptance profile + CLI grammar + JS agreement
 python3 verifiers/differential_oracle.py   # Python vs Node on every vector, hostile file and CLI case (needs node)
 verifiers/lax_python_ablation.sh           # the strict layers removed from a copy of the reference -> the suite must be red
+AP2_SDK_PATH=... python3 verifiers/sdk_crosscheck.py --hostile   # a third stack, written by other people, on the same tokens
 ```
 
 

@@ -6,7 +6,7 @@
 // Acceptance profile of the file (SPEC §3.1): strict UTF-8, no BOM, no duplicate keys, no floats, integers within
 // +/-(2^53-1), nesting <= 512, no lone surrogate escape, 64 MiB bound. A refused file is a receipt with valid=false.
 // Usage: ap2-verify.mjs <evidence.json> [--trusted-producer-key ALG=B64]... [--require-producer] [--require-pq] [--require-anchor] [--tsa-cert PEM] [--trust-anchor PEM]
-import { readFileSync, statSync } from "node:fs";
+import { statSync, openSync, fstatSync, readSync, closeSync, constants as FS } from "node:fs";
 import { createHash, createPublicKey, verify as cryptoVerify, X509Certificate } from "node:crypto";
 
 const MAX_DEPTH = 512, MAX_BYTES = 64 * 1024 * 1024, SAFE = 2 ** 53 - 1;
@@ -166,11 +166,19 @@ function findBindings(arts) {
 }
 // ---- producer signatures ----
 const MLDSA65_SPKI_PREFIX = Buffer.from("308207b2300b0609608648016503040312038207a100", "hex");   // SEQ{ SEQ{OID 2.16.840.1.101.3.4.3.18}, BIT STRING(0x00||1952 bytes) } — the wrapping measured in omega-evidence
+// small-order / non-canonical Ed25519 keys: R=identity, S=0 verifies on every message and OpenSSL accepts it (measured 25/09/2026); same list in verifiers/js/ap2-verify.mjs
+const WEAK_ED25519 = new Set(["0100000000000000000000000000000000000000000000000000000000000000", "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f", "0000000000000000000000000000000000000000000000000000000000000000", "0000000000000000000000000000000000000000000000000000000000000080", "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05", "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a", "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85", "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa", "0100000000000000000000000000000000000000000000000000000000000080", "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"]);
+function weakEd25519(pk) {
+  if (WEAK_ED25519.has(pk.toString("hex"))) return true;
+  if ((pk[31] & 0x7f) !== 0x7f || pk[0] < 0xed) return false;
+  for (let i = 1; i < 31; i++) if (pk[i] !== 0xff) return false;
+  return true;
+}
 const HAVE_MLDSA = (() => { try { createPublicKey({ key: Buffer.concat([MLDSA65_SPKI_PREFIX, Buffer.alloc(1952)]), format: "der", type: "spki" }); return true; } catch { return false; } })();
 function verifyProducer(alg, pubB64, sigB64, message) {
   const pk = b64Strict(pubB64), sig = b64Strict(sigB64); if (!pk || !sig) return false;
   try {
-    if (alg === "ed25519") { if (pk.length !== 32 || sig.length !== 64) return false; const key = createPublicKey({ key: Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"), pk]), format: "der", type: "spki" }); return cryptoVerify(null, message, key, sig); }
+    if (alg === "ed25519") { if (pk.length !== 32 || sig.length !== 64 || weakEd25519(pk)) return false; const key = createPublicKey({ key: Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"), pk]), format: "der", type: "spki" }); return cryptoVerify(null, message, key, sig); }
     if (alg === "ecdsa-p256") { if (sig.length !== 64 || pk.length !== 65 || pk[0] !== 4) return false; const key = createPublicKey({ key: { kty: "EC", crv: "P-256", x: pk.subarray(1, 33).toString("base64url"), y: pk.subarray(33).toString("base64url") }, format: "jwk" }); return cryptoVerify("sha256", message, { key, dsaEncoding: "ieee-p1363" }, sig); }
     if (alg === "ml-dsa-65") { if (!HAVE_MLDSA) return null; if (pk.length !== 1952 || sig.length !== 3309) return false;
       const key = createPublicKey({ key: Buffer.concat([MLDSA65_SPKI_PREFIX, pk]), format: "der", type: "spki" }); return cryptoVerify(null, message, key, sig); }
@@ -218,9 +226,24 @@ function verifyRfc3161(tsrB64, expectedDigestHex) {
   } catch (e) { return { verified: false, granted: grantedRead, imprint_ok: null, gen_time: null, note: "token not parseable: " + (e.message ?? e) }; }   // r10: same shape and same measured status as the reference
 }
 // ---- evidence ----
+// The file is opened WITHOUT blocking and read only if the OPEN descriptor is a regular file, at most MAX_BYTES bytes: a FIFO
+// must not hang the verifier, a symlink to /dev/zero (a device reports size 0) must not be read until memory runs out.
+// null = above the bound; a FIFO / device / directory throws "unreadable evidence file: not a regular file".
+function readEvidenceBytes(path) {
+  if (!statSync(path).isFile()) throw new Refused("unreadable evidence file: not a regular file");   // refused BEFORE it is opened (opening a device can act on it)
+  const fd = openSync(path, FS.O_RDONLY | (FS.O_NONBLOCK ?? 0) | (FS.O_NOCTTY ?? 0));
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) throw new Refused("unreadable evidence file: not a regular file");
+    if (st.size > MAX_BYTES) return null;
+    const chunks = [], chunk = Buffer.allocUnsafe(1 << 20); let total = 0;
+    for (;;) { const got = readSync(fd, chunk, 0, chunk.length, null); if (got === 0) break; total += got; if (total > MAX_BYTES) return null; chunks.push(Buffer.from(chunk.subarray(0, got))); }
+    return Buffer.concat(chunks, total);
+  } finally { closeSync(fd); }
+}
 export function verifyEvidence(path, opts = {}) {
   const refuse = (m) => ({ digest_ok: false, artifacts: [], producer_signatures: { present: false, pq_protected: false, trusted: null }, pq_protected: false, bindings_ok: false, rfc3161: { claimed: false, verified: null }, provenance_classes: [], self_asserted_only: true, chain_verified: null, policy_ok: false, valid: false, honest_scope: null, refused: m });   // r8: the honesty flag is fail-closed inside a refusal too
-  let ev; try { if (statSync(path).size > MAX_BYTES) return refuse("evidence file exceeds bound"); const raw = readFileSync(path); const text = UTF8.decode(raw); if (text.startsWith("﻿")) return refuse("BOM"); ev = parseStrict(text); } catch (e) { return refuse(String(e.message ?? e)); }
+  let ev; try { const raw = readEvidenceBytes(path); if (raw === null) return refuse("evidence file exceeds bound"); const text = UTF8.decode(raw); if (text.startsWith("﻿")) return refuse("BOM"); ev = parseStrict(text); } catch (e) { return refuse(String(e.message ?? e)); }
   if (ev === null || typeof ev !== "object" || Array.isArray(ev)) return refuse("not a JSON object");
   // shape of the top-level fields (SPEC §1), the same refusals as the reference
   if (ev.evidence_format !== EVIDENCE_FORMAT) return refuse("evidence_format must be " + JSON.stringify(EVIDENCE_FORMAT));   // r5: a "…/2.0" pack was verified under the 1.0 rules
