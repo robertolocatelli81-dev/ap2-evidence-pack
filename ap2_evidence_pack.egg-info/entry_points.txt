@@ -1,2 +1,0 @@
-[console_scripts]
-ap2-evidence = ap2_evidence:main
