@@ -1,12 +1,14 @@
 # Changelog
 
-## Unreleased — the evidence file must be a regular file
+## 1.2.1 — 2026-09-26 — the evidence file must be a regular file; small-order keys refused
 
-- Small-order Ed25519 keys refused (25/09/2026). A public key that is a point of small order (the identity and the other torsion points) or a non-canonical encoding (y >= p) makes R=identity, S=0 a valid signature on EVERY message, and OpenSSL accepts it — measured through Python `cryptography` and Node (a forged producer signature was PASS with such a key pinned by the relying party verified); the Go, Java and Rust ports received the same guard without a measurement of their behaviour without it. Every verifier now refuses those keys with the same list (8 small-order encodings, 2 with the sign bit on x = 0, every y >= p; checked against curve arithmetic: 0 disagreements on 48 special and 200 000 random keys).
+- Small-order Ed25519 keys refused (25/09/2026). With the identity key as public key, R=identity, S=0 is a valid signature on every message; the other small-order points admit such forgeries on a share of messages (the hash depends on R, so not on every one; not measured here); a non-canonical encoding (y >= p) is refused because the key has no unique encoding. Measured with the identity key in both verifiers, the Python reference (`cryptography`) and the JS verifier (Node): a forged producer signature made that way, with that key pinned by the relying party, was PASS; after the change both refuse it. Both verifiers now refuse those keys with the same list (8 small-order encodings, 2 with the sign bit on x = 0, every y >= p; checked against curve arithmetic: 0 disagreements on 48 special and 200 000 random keys).
 
 
-Found by the 25/09/2026 malformed-input review (four minds) and re-measured here on 1.2.0 (`040a1fa`) before any change,
-under RLIMIT_DATA 1.5 GB: a FIFO in place of the evidence file blocked both verifiers (no receipt after 30 s); a
+Numbers dated 25/09 below come from the author's measurement records, which are not part of this repository, and were
+not re-measured for 1.2.1 except where a 26/09 figure is given; the tests and oracle cases for each rule are in the
+repository. Found by the 25/09/2026 malformed-input review (four minds) and re-measured then on 1.2.0 (`040a1fa`) before
+any change, under an RLIMIT_DATA of 1500 MiB: a FIFO in place of the evidence file blocked both verifiers (no receipt after 30 s); a
 symlink to `/dev/zero` passed the 64 MiB check — a device reports size 0 — and was read until memory ran out (Python
 `MemoryError` traceback exit 1, Node abort `std::bad_alloc`); a directory was refused with an OS error name
 (`IsADirectoryError` / `EISDIR`). Both verifiers now open the file without blocking (`O_NONBLOCK | O_NOCTTY`), keep it
@@ -14,13 +16,15 @@ only if the OPEN descriptor is a regular file (`fstat`), and read at most 64 MiB
 directory is the refusal `unreadable evidence file: not a regular file`; a file above the bound stays `exceeds`, now
 also when it grows while being read. SPEC §3.1 states the rule.
 
-The 64 MiB bound limits what is read, not what parsing costs — measured 25/09/2026, NOT fixed: under RLIMIT_DATA 1.5 GB a 64 MiB file of tiny values (`[{},…]`, `[[],…]`) ends in a Python `MemoryError` traceback with no receipt and a Node abort, and Node aborts on a single 64 MiB string too (its strict parser); a file above the bound or on `/dev/zero` is now refused at a peak of 36 MB (Python) / 48 MB (Node). Closing it needs a lower bound or a bound on the number of values: a change to SPEC §3.1, left to the author.
+The 64 MiB bound limits what is read, not what parsing costs — measured 25/09/2026, NOT fixed: under an RLIMIT_DATA of 1500 MiB a 64 MiB file of tiny values (`[{},…]`, `[[],…]`) ends in a Python `MemoryError` traceback with no receipt and a Node abort, and Node aborts on a single 64 MiB string too (its strict parser); a file above the bound or on `/dev/zero` is now refused at a peak of 36 MB (Python) / 48 MB (Node). Closing it needs a lower bound or a bound on the number of values: a change to SPEC §3.1, left to the author.
 
 Oracle: four cases with a DECLARED refusal reason that both verifiers must give — `file-fifo`, `file-devzero-symlink`,
-`file-directory`, `file-one-byte-over-the-bound` — run with a 20 s timeout and RLIMIT_DATA 1.5 GB per child, and a
+`file-directory`, `file-one-byte-over-the-bound` — run with a 20 s timeout and an RLIMIT_DATA of 1500 MiB per child, and a
 positive control `file-exactly-at-the-bound` (the valid vector padded with spaces to exactly 64 MiB, which changes no
 digest). Positive controls are now REQUIRED to verify: through 1.2.0 the oracle only counted them, so two verifiers
 that refused a positive control alike were an agreement (ablation: both verifiers made to refuse a file of exactly 64 MiB → 0 disagreements with that check removed, 1 with it). Measured 25/09/2026: 144 cases / 0 disagreements (4 declared) on 1.2.0 with its own oracle; the new oracle, 149 cases: 0 disagreements (4 declared) after the change, 3 on 1.2.0 (`file-fifo` BLOCKED in both, `file-devzero-symlink` no receipt in both, `file-directory` with the OS reason). Ablation, each control removed alone in each verifier: the regular-file check (a `stat` before `open` and an `fstat` on the descriptor, which back each other up: either alone turns nothing red) → the 3 file-object cases; `O_NONBLOCK` with the `stat` → `file-fifo`; the `bound + 1` read cap is covered by the `fstat` size check (it guards only a file that grows while read; no case reproduces that). Tests: `test_ap2_evidence.py` 27 → 29 (the FIFO/`/dev/zero`/directory test red on 1.2.0, the bound test green there as a positive control). `type_fuzz.py`: 1390/1390, same denominator (695 mutations × 2 verifiers; it substitutes field types, not files).
+Re-run on 26/09/2026 on the release commit: 30 tests (the 29 above plus the small-order key test), oracle 149 cases / 0
+disagreements (4 declared), `type_fuzz.py` 1390/1390.
 
 ## 1.2.0 — 2026-09-23 — a third verifier, written by other people
 

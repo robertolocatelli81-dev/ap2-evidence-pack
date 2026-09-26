@@ -440,7 +440,7 @@ class TestFileObjects(unittest.TestCase):
 
 
 class WeakEd25519Keys20260925(unittest.TestCase):
-    """A producer signature under a small-order Ed25519 key (R=identity, S=0 verifies on every message under OpenSSL),
+    """A producer signature under a small-order Ed25519 key (with the identity key R=identity, S=0 verifies on every message under OpenSSL),
     with that key PINNED, was PASS before this check (measured 25/09/2026)."""
     def test_pinned_small_order_key_never_verifies(self):
         import base64 as _b, copy as _c

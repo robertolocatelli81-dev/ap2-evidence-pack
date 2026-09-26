@@ -98,7 +98,7 @@ def sign(alg: str, private_key, message: bytes) -> str:
 
 
 
-# small-order / non-canonical Ed25519 keys: R=identity, S=0 verifies on every message and OpenSSL accepts it (measured 25/09/2026); same list in verifiers/js/ap2-verify.mjs
+# small-order / non-canonical Ed25519 keys: with the identity key R=identity, S=0 verifies on every message (other small-order points: a share of messages) and OpenSSL accepts it (measured 25/09/2026); same list in verifiers/js/ap2-verify.mjs
 WEAK_ED25519_KEYS = frozenset(bytes.fromhex(h) for h in (
     "0100000000000000000000000000000000000000000000000000000000000000",
     "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
