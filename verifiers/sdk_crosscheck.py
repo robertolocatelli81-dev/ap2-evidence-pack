@@ -329,14 +329,19 @@ def hostile_packs():
     sys.path.insert(0, HERE)
     import shutil          # noqa: PLC0415
     import tempfile        # noqa: PLC0415
-    from differential_oracle import build_cases   # noqa: PLC0415
+    from differential_oracle import REFUSALS, build_cases   # noqa: PLC0415
     d = tempfile.mkdtemp()
     try:
         cases = build_cases(d)
     except Exception:       # noqa: BLE001
         shutil.rmtree(d, ignore_errors=True)
         raise
-    return d, [path for name, (path, _flags) in sorted(cases.items()) if not name.startswith("vector-")]
+    # 26/09/2026: the oracle's file-object cases (a FIFO, a symlink to /dev/zero, a directory) are not files this bench
+    # may open — json.load(open()) on /dev/zero read until the CI runner was killed, and a FIFO would block. They test
+    # the refusal BEFORE reading, which the third stack has no layer for. Left out, counted and printed.
+    not_files = sorted(n for n, why in REFUSALS.items() if why == "not a regular file")
+    return d, [path for name, (path, _flags) in sorted(cases.items())
+               if not name.startswith("vector-") and name not in not_files], not_files
 
 
 def main(argv):
@@ -345,9 +350,9 @@ def main(argv):
     args = [a for a in argv[1:] if not a.startswith("--")]
     tmpdir = None
     if "--hostile" in argv:
-        tmpdir, extra = hostile_packs()
+        tmpdir, extra, not_files = hostile_packs()
     else:
-        extra = []
+        extra, not_files = [], []
     packs = (args or sorted(p for p in glob.glob(os.path.join(ROOT, "spec", "vectors", "ap2", "*.json"))
                             if not p.endswith(".expected.json"))) + extra
     print(f"third verifier: Google AP2 SDK at commit {sha} over sd-jwt {SDJWT_VERSION}, the reference "
@@ -493,6 +498,8 @@ def main(argv):
           f"{raises_uncaught} uncaught internal errors (fail-closed in effect, but not a verdict)")
     print(f"artifacts whose key block is not a key, so nothing could be handed to the third stack: {nokey}")
     print(f"hostile files this bench cannot even read (BOM, 100000-deep nesting, a non-UTF-8 byte): {unreadable}")
+    print(f"file-object cases not handed to this bench (not regular files; refused before reading by our two verifiers, "
+          f"see the oracle): {len(not_files)} {not_files}")
     print("not disagreements, counted apart:")
     print(f"  ARTIFACTS refused by us at a layer the third stack has no notion of (key provenance and\n    the `resolved_claims` the file itself records):                                {ours_only}")
     print(f"  refused by us under the §3.1 profile this repository declares stricter:          {profile}")

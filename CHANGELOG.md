@@ -51,6 +51,14 @@ in the repository. Found by the 25/09/2026 malformed-input review (four independ
 - **Tests:** `test_ap2_evidence.py` 27 → 29 on 25/09 (the FIFO/`/dev/zero`/directory test red on 1.2.0; the bound
   test green there too — a valid file at exactly the bound must pass, before and after).
 
+- **The third-verifier bench (`verifiers/sdk_crosscheck.py --hostile`) opened the new file-object cases.** It reuses
+  the oracle's hostile corpus and read each file with a plain `json.load(open())`: on the symlink to `/dev/zero` it read
+  until the process was killed — measured 26/09: SIGKILL after 14 s at a peak of 5165 MiB locally, and the CI runner
+  of the first 1.2.1 push shut down in that step — and a FIFO would have blocked it. The FIFO, `/dev/zero` and directory
+  cases are now left out of that bench, counted and printed; they test a refusal before reading, which the third stack
+  has no layer for. After the fix: 7.9 s, peak 237 MiB; 138 artifacts compared (16 from the vectors, 122 hostile), 89
+  claim-sets, 0 undeclared disagreements (1.2.0: 136 and 87; the two added artifacts are the valid pack padded to
+  exactly the bound).
 - **Release assets: the SBOM license was wrong.** The CycloneDX SBOM attached to the 1.1.0, 1.1.1 and 1.2.0
   releases declares `AGPL-3.0-or-later`; the package is `Apache-2.0` (LICENSE, `pyproject.toml`). The release script
   had the license hard-coded; from 1.2.1 it reads it from `pyproject.toml`, and fails (exit 2) if `pyproject.toml`

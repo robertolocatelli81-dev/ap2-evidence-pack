@@ -220,8 +220,9 @@ AP2_SDK_PATH=/path/to/AP2/code/sdk/python python3 verifiers/sdk_crosscheck.py --
 ```
 
 Measured on the eight vectors alone: **16 artifacts, same verdict, same claim names, same values.** Vectors plus the
-hostile corpus together: **136 artifacts compared (16 from the vectors, 120 hostile), 87 claim-sets compared, 0
-undeclared disagreements**, and **none in the direction that would matter most — nothing this repository accepts and
+hostile corpus together (measured 26/09/2026 on 1.2.1): **138 artifacts compared (16 from the vectors, 122 hostile),
+89 claim-sets compared, 0 undeclared disagreements** — the three file-object cases of the oracle (a FIFO, a symlink to
+`/dev/zero`, a directory) are not handed to this bench, which prints them apart — and **none in the direction that would matter most — nothing this repository accepts and
 the third stack refuses**. One word needs care in that sentence: "refuses", for the third stack, means "raises". Of
 its 17 refusals here, 7 are deliberate and carry a message, and 10 are uncaught internal errors (`JSONDecodeError`,
 `'str' object has no attribute 'get'`, a failed tuple unpack). Fail-closed in effect, but not a verdict, and the bench
