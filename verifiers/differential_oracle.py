@@ -65,7 +65,7 @@ HAZARD_TIMEOUT, HAZARD_MEM = 20, 1500 << 20
 _LEAF_CA = _LEAF_SELF = _LEAF_MIX = None   # the x5c leaves are freshly generated each run: the declaration ignores that one field
 
 DECLARED = {
-    # The three declared divergences all have ONE cause: chain and TSA validation run `openssl` and are therefore the
+    # The four declared divergences all have ONE cause: chain and TSA validation run `openssl` and are therefore the
     # reference's alone — the JS verifier reports `chain_verified: null` / `tsa_verified: null` and never clears a flag or
     # passes a policy on their strength. NB the gen_time below is the probe TSA token's own genTime: regenerating the
     # anchor vectors changes it and this declaration must be updated with them (the run then reports the mismatch).
