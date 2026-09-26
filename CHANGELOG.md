@@ -51,6 +51,12 @@ in the repository. Found by the 25/09/2026 malformed-input review (four independ
 - **Tests:** `test_ap2_evidence.py` 27 → 29 on 25/09 (the FIFO/`/dev/zero`/directory test red on 1.2.0; the bound
   test green there too — a valid file at exactly the bound must pass, before and after).
 
+- **Release assets: the SBOM license was wrong.** The CycloneDX SBOM attached to the 1.1.0, 1.1.1 and 1.2.0
+  releases declares `AGPL-3.0-or-later`; the package is `Apache-2.0` (LICENSE, `pyproject.toml`). The release script
+  had the license hard-coded; from 1.2.1 it reads it from `pyproject.toml`. The earlier assets are left as published
+  (they are signed); this entry is the correction. `SHA256SUMS` now covers every release asset, not only the wheel and
+  the sdist.
+
 Re-run on 26/09/2026 on the release commit: `test_ap2_evidence.py` 30 tests (the 29 above plus the small-order key
 test), oracle 149 cases / 0 disagreements (4 declared divergences), `type_fuzz.py` 1390/1390 inputs answered with a
 verdict instead of a crash (695 mutations × 2 verifiers; it substitutes field types, not files).
