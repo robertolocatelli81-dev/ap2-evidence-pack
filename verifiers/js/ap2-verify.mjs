@@ -166,7 +166,7 @@ function findBindings(arts) {
 }
 // ---- producer signatures ----
 const MLDSA65_SPKI_PREFIX = Buffer.from("308207b2300b0609608648016503040312038207a100", "hex");   // SEQ{ SEQ{OID 2.16.840.1.101.3.4.3.18}, BIT STRING(0x00||1952 bytes) } — the wrapping measured in omega-evidence
-// small-order / non-canonical Ed25519 keys: with the identity key R=identity, S=0 verifies on every message (other small-order points: a share of messages) and OpenSSL accepts it (measured 25/09/2026); same list in verifiers/js/ap2-verify.mjs
+// small-order / non-canonical Ed25519 keys: with the identity key R=identity, S=0 verifies on every message and OpenSSL accepts it (measured 25/09/2026); with any small-order key a signature on any message can be built by choosing R, measured 26/09/2026; same list in verifiers/js/ap2-verify.mjs
 const WEAK_ED25519 = new Set(["0100000000000000000000000000000000000000000000000000000000000000", "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f", "0000000000000000000000000000000000000000000000000000000000000000", "0000000000000000000000000000000000000000000000000000000000000080", "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05", "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a", "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85", "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa", "0100000000000000000000000000000000000000000000000000000000000080", "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"]);
 function weakEd25519(pk) {
   if (WEAK_ED25519.has(pk.toString("hex"))) return true;
