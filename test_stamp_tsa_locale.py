@@ -38,11 +38,16 @@ basicConstraints = CA:FALSE
 """
 
 
+def _read(path):
+    with open(path, "rb") as f:
+        return f.read()
+
+
 def _run(*a):
     subprocess.run(list(a), check=True, capture_output=True)
 
 
-@unittest.skipUnless(EXE, "openssl absent: stamp() returns anchored False by contract (tested elsewhere)")
+@unittest.skipUnless(EXE, "openssl absent: the local TSA cannot be built, so stamp() is not measured")
 class TestStampOnlyGrantedTokenForThisDigest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -59,7 +64,7 @@ class TestStampOnlyGrantedTokenForThisDigest(unittest.TestCase):
         _run(EXE, "x509", "-req", "-in", j("tsa.csr"), "-CA", j("ca.crt"), "-CAkey", j("ca.key"), "-CAcreateserial",
              "-out", j("tsa.crt"), "-days", "2", "-extfile", j("tsa.cnf"), "-extensions", "v3_tsa")
         with open(j("chain.pem"), "w") as f:
-            f.write(open(j("ca.crt")).read() + open(j("tsa.crt")).read())
+            f.write((_read(j("ca.crt")) + _read(j("tsa.crt"))).decode("ascii"))
         cls.mode = "honest"
 
         class H(http.server.BaseHTTPRequestHandler):
@@ -90,13 +95,13 @@ class TestStampOnlyGrantedTokenForThisDigest(unittest.TestCase):
         with open(q, "wb") as f:
             f.write(query_bytes)
         _run(EXE, "ts", "-reply", "-queryfile", q, "-config", os.path.join(cls.d, "tsa.cnf"), "-section", "t1", "-out", r)
-        return open(r, "rb").read()
+        return _read(r)
 
     @classmethod
     def _query(cls, digest_hex, *extra):
         q = os.path.join(cls.d, "other.tsq")
         _run(EXE, "ts", "-query", "-digest", digest_hex, "-sha256", "-cert", *extra, "-out", q)
-        return open(q, "rb").read()
+        return _read(q)
 
     @classmethod
     def _answer(cls, q):
@@ -110,6 +115,10 @@ class TestStampOnlyGrantedTokenForThisDigest(unittest.TestCase):
             r = cls._reply(q)
             i = r.find(b"\x02\x01\x00")                      # the first INTEGER 0 is the PKIStatus (granted)
             return r[:i] + b"\x02\x01\x02" + r[i + 3:]
+        if cls.mode == "granted-with-modifications":        # PKIStatus 1 (RFC 3161 §2.4.2): a token is present and valid
+            r = cls._reply(q)
+            i = r.find(b"\x02\x01\x00")
+            return r[:i] + b"\x02\x01\x01" + r[i + 3:]
         if cls.mode == "tampered-signature":                # the genuine token for this digest, last signature byte flipped
             r = cls._reply(q)
             return r[:-1] + bytes([r[-1] ^ 0x01])
@@ -120,9 +129,14 @@ class TestStampOnlyGrantedTokenForThisDigest(unittest.TestCase):
         return _M._rfc3161_stamp(hashlib.sha256(b"x").hexdigest(), self.url)
 
     def test_granted_token_for_this_digest_is_anchored_and_verifies(self):   # positive control
-        r = self._stamp("honest")
-        self.assertIs(r["anchored"], True)
-        self.assertTrue(r["tsr_b64"])
+        for mode in ("honest", "granted-with-modifications"):                 # status 0 and status 1 both carry a token
+            with self.subTest(mode=mode):
+                r = self._stamp(mode)
+                self.assertIs(r["anchored"], True)
+                self.assertTrue(r["tsr_b64"])
+                v = _M._verify_rfc3161(r["tsr_b64"], hashlib.sha256(b"x").hexdigest(), tsa_cert=os.path.join(self.d, "chain.pem"))
+                self.assertIs(v["verified"], True, v)
+                self.assertIs(v["tsa_verified"], True, v)                     # the TSA built here is its own trust anchor
 
     def test_anything_else_is_not_anchored(self):
         # a token with a broken CMS signature is NOT refused here: proving the signature needs the TSA's trust anchor,
