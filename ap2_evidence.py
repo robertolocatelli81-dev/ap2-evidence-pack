@@ -708,6 +708,14 @@ def _rfc3161_stamp(digest_hex: str, tsa_url: str, timeout: int = 20) -> Dict:
         http = urllib.request.Request(tsa_url, data=req, method="POST",
                                       headers={"Content-Type": "application/timestamp-query"})
         resp = urllib.request.urlopen(http, timeout=timeout).read()
+        # anchored only on a token whose imprint is THIS digest (2026-10-03: any HTTP body — an error page, a rejection, a token
+        # for another digest — was recorded as anchored: True)
+        try:     # the DER walk reads an imprint even from a non-granted reply carrying a token: both checks are needed
+            facts = parse_timestamp_resp(resp)
+        except Ap2EvidenceError:
+            facts = {}
+        if not (facts.get("granted") and facts.get("imprint") == digest_hex.lower()):
+            return {"anchored": False, "tsa": tsa_url, "note": "TSA reply is not a granted token for this digest"}
         return {"anchored": True, "tsa": tsa_url, "tsr_b64": base64.b64encode(resp).decode()}
     except Exception as e:  # noqa: BLE001
         return {"anchored": False, "note": f"{type(e).__name__}: {str(e)[:80]}"}
