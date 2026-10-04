@@ -27,6 +27,16 @@ KEYS = ("valid", "digest_ok", "bindings_ok", "producer_present", "producer_ok", 
         "policy_ok", "self_asserted_only", "chain_verified", "provenance_classes", "x5c_leaves")
 
 
+def _load(path):
+    with open(path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def _write(path, data):
+    with open(path, "wb") as fh:
+        fh.write(data)
+
+
 def canon(obj):
     return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode()
 
@@ -138,11 +148,13 @@ def build_cases(d):
     cases = {}
     vdir = os.path.join(ROOT, "spec", "vectors", "ap2")
     for exp_path in sorted(glob.glob(os.path.join(vdir, "*.expected.json"))):
-        exp = json.load(open(exp_path)); name = exp["vector"]
+        exp = _load(exp_path); name = exp["vector"]
         cases["vector-" + name] = (os.path.join(vdir, name + ".json"), flags_for(exp.get("policy", {})))
-    base_text = open(os.path.join(vdir, "valid_signed.json"), encoding="utf-8").read(); base = json.loads(base_text)
+    with open(os.path.join(vdir, "valid_signed.json"), encoding="utf-8") as fh:
+        base_text = fh.read()
+    base = json.loads(base_text)
     def w(name, data):
-        p = os.path.join(d, name + ".json"); open(p, "wb").write(data if isinstance(data, bytes) else data.encode("utf-8")); return p
+        p = os.path.join(d, name + ".json"); _write(p, data if isinstance(data, bytes) else data.encode("utf-8")); return p
     # 1.1.0 profile cases: each hostile file carries the digest a lenient verifier would recompute, so the profile rule decides
     # r2: `__proto__` as an ORDINARY key, digest recomputed with it — a verifier whose parser drops or pollutes it recomputes a
     # different digest (the 1.1.0 r1 case kept the old digest, so every verifier answered digest_ok False and the case could not fail)
@@ -195,7 +207,7 @@ def build_cases(d):
     x5c_built = _x5c_cases(base)
     for nm, ev6 in x5c_built:
         cases["x5c-" + nm] = (w("x5c" + nm, json.dumps(rehash(ev6))), [])
-    anchor = os.path.join(d, "probe_ca.pem"); open(anchor, "wb").write(_x5c_cases.ca_pem)
+    anchor = os.path.join(d, "probe_ca.pem"); _write(anchor, _x5c_cases.ca_pem)
     # r10: a MIXED pack — the mandate is a self-asserted jwk_header, a second artifact chains to the anchor. With `all()`
     # the reference cleared self_asserted_only, i.e. "no self-asserted key here", while the mandate key was never reconciled.
     mixed = _mixed_pack(base, dict(x5c_built)["ca-issued-leaf"])
@@ -209,7 +221,7 @@ def build_cases(d):
         e = copy.deepcopy(base); e["created_utc"] = v; cases["must-" + nm] = (w("cu" + nm, json.dumps(rehash(e))), [])
     e = copy.deepcopy(base); e["artifacts"][binder]["sd_jwt_compact"] = c + "\u00a0"; cases["compact-trailing-nbsp-rehashed"] = (w("nbsp", json.dumps(rehash(e))), [])
     e = copy.deepcopy(base); e["artifacts"][binder]["key"]["jwk"]["x"] = e["artifacts"][binder]["key"]["jwk"]["x"] + "="; cases["jwk-x-padded-rehashed"] = (w("jwkpad", json.dumps(rehash(e))), [])
-    av = json.load(open(os.path.join(vdir, "anchor_valid.json"))); e = copy.deepcopy(av); t = e["rfc3161_timestamp"]["tsr_b64"]; e["rfc3161_timestamp"]["tsr_b64"] = t[:10] + " " + t[10:]; cases["tsr-b64-space"] = (w("tsrsp", json.dumps(e)), [])
+    av = _load(os.path.join(vdir, "anchor_valid.json")); e = copy.deepcopy(av); t = e["rfc3161_timestamp"]["tsr_b64"]; e["rfc3161_timestamp"]["tsr_b64"] = t[:10] + " " + t[10:]; cases["tsr-b64-space"] = (w("tsrsp", json.dumps(e)), [])
     # a self-forged TimeStampResp (status 0, imprint = digest, no signer): binding holds, TSA does not — declared divergence under --tsa-cert
     forged = _forged_tsr(bytes.fromhex(base["evidence_digest_sha256"]))
     e = dict(base); e["rfc3161_timestamp"] = {"anchored": True, "tsa_url": "forged", "tsr_b64": base64.b64encode(forged).decode()}
@@ -309,8 +321,8 @@ def build_cases(d):
     cases["bindings-index-key-after-plain"] = (two("intent", "cart", '{"iss":"x","intent_hash":"%s","0":"%s"}'), [])
     cases["bindings-index-keys-reversed"] = (two("intent", "cart", '{"iss":"x","2":"%s","1":"%s"}'), [])
     cases["bindings-artifact-named-0"] = (two("0", "cart", '{"iss":"x","h":"%s","g":"%s"}'), [])
-    p = two("intent", "cart", '{"iss":"x","a":"%s","b":"%s"}'); ev2 = json.load(open(p)); ev2["bindings"] = list(reversed(ev2["bindings"])); cases["bindings-recorded-reversed-rehashed"] = (w("brev", json.dumps(rehash(ev2))), [])
-    ev2 = json.load(open(p)); ev2["bindings"] = ev2["bindings"] + ev2["bindings"][:1]; cases["bindings-entry-duplicated-rehashed"] = (w("bdup", json.dumps(rehash(ev2))), [])
+    p = two("intent", "cart", '{"iss":"x","a":"%s","b":"%s"}'); ev2 = _load(p); ev2["bindings"] = list(reversed(ev2["bindings"])); cases["bindings-recorded-reversed-rehashed"] = (w("brev", json.dumps(rehash(ev2))), [])
+    ev2 = _load(p); ev2["bindings"] = ev2["bindings"] + ev2["bindings"][:1]; cases["bindings-entry-duplicated-rehashed"] = (w("bdup", json.dumps(rehash(ev2))), [])
     # ── review r5 (2026-09-22): the provenance class is reconciled with the signed header (relabelling jwk_header as x5c_header
     # flipped self_asserted_only with no x5c anywhere), the enum is closed, `evidence_format` and the §1 MUSTs are checked
     for nm, v in (("x5c_header-without-x5c", "x5c_header"), ("out-of-enum", "qualified_eidas_certificate"), ("supplied-unverifiable", "supplied"), ("list", ["jwk_header"])):

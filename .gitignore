@@ -2,3 +2,5 @@ __pycache__/
 *.pyc
 .review_sdk/
 *.egg-info/
+dist/
+build/

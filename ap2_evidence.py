@@ -707,7 +707,8 @@ def _rfc3161_stamp(digest_hex: str, tsa_url: str, timeout: int = 20) -> Dict:
             req = f.read()
         http = urllib.request.Request(tsa_url, data=req, method="POST",
                                       headers={"Content-Type": "application/timestamp-query"})
-        resp = urllib.request.urlopen(http, timeout=timeout).read()
+        with urllib.request.urlopen(http, timeout=timeout) as rh:
+            resp = rh.read()
         # anchored only on a token whose imprint is THIS digest (2026-10-03: any HTTP body — an error page, a rejection, a token
         # for another digest — was recorded as anchored: True)
         try:     # the DER walk reads an imprint even from a non-granted reply carrying a token: both checks are needed

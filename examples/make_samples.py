@@ -60,8 +60,10 @@ def main() -> int:
                    "intent_mandate_hash":
                        hashlib.sha256(checkout.encode("ascii")).hexdigest()},
                   {"items": ["book-123"]})
-    open("checkout.sdjwt", "w").write(checkout)
-    open("payment.sdjwt", "w").write(payment)
+    with open("checkout.sdjwt", "w") as f:
+        f.write(checkout)
+    with open("payment.sdjwt", "w") as f:
+        f.write(payment)
     print("written: checkout.sdjwt, payment.sdjwt  (sample ES256 SD-JWTs, demo-only key)")
     print("next:    python3 ap2_evidence.py build evidence.json "
           "checkout=checkout.sdjwt payment=payment.sdjwt")

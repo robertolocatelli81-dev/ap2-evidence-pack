@@ -193,7 +193,8 @@ def positive_controls(sdk_sdjwt, JWK, base_pack):
       3. a wrong key               — the third stack's own verdict must flip. This asks the third stack alone; that a
          disagreement is REPORTED and turns this bench red is a separate ablation, AP2_XCHECK_SEED_DIVERGENCE=1.
     """
-    ev = json.load(open(base_pack, encoding="utf-8"))
+    with open(base_pack, encoding="utf-8") as fh:
+        ev = json.load(fh)
     art = ev["artifacts"][0]
     compact, jwk = art["sd_jwt_compact"], art["key"]["jwk"]
     out, ok_all = [], True
@@ -271,7 +272,8 @@ def interop_controls(sdk_sdjwt, JWK, base_pack):
         mandate_type: str
         max_amount: str
 
-    base = json.load(open(base_pack, encoding="utf-8"))
+    with open(base_pack, encoding="utf-8") as fh:
+        base = json.load(fh)
     for decoys in (False, True):
         try:
             key = JWK.generate(kty="EC", crv="P-256")
@@ -373,7 +375,8 @@ def main(argv):
     seen_declared = set()
     for path in packs:
         try:
-            ev = json.load(open(path, encoding="utf-8"))
+            with open(path, encoding="utf-8") as fh:
+                ev = json.load(fh)
         except Exception:   # noqa: BLE001
             # A hostile file this bench cannot even read (a BOM, a 100000-deep nesting, a raw non-UTF-8 byte). It was
             # being skipped in silence, which quietly shrank the denominator: counted and printed instead.

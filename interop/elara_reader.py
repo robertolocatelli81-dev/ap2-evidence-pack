@@ -204,7 +204,8 @@ def run_vector(v: dict) -> tuple:
             wf = os.path.join(HERE, "elara_" + os.path.basename(inp["seal_wire_file"]))
             if not os.path.exists(wf):
                 return ("SKIP", "wire file non scaricato")
-            got = sha3(open(wf, "rb").read()).hex()
+            with open(wf, "rb") as fh:
+                got = sha3(fh.read()).hex()
             pin_ok = got == inp["seal_wire_sha3_256"]
             return ("PARTIAL" if pin_ok else "FAIL",
                     f"wire-sha3 pin {'ok' if pin_ok else 'MISMATCH'}; "
@@ -213,7 +214,8 @@ def run_vector(v: dict) -> tuple:
             wf = os.path.join(HERE, "elara_" + os.path.basename(inp["wire_file"]))
             if not os.path.exists(wf):
                 return ("SKIP", "wire file non scaricato")
-            got = sha3(open(wf, "rb").read()).hex()
+            with open(wf, "rb") as fh:
+                got = sha3(fh.read()).hex()
             pin_ok = got == inp["wire_sha3_256"]
             return ("PARTIAL" if pin_ok else "FAIL",
                     f"wire-sha3 pin {'ok' if pin_ok else 'MISMATCH'}; "
@@ -224,7 +226,8 @@ def run_vector(v: dict) -> tuple:
 
 
 def main() -> int:
-    d = json.load(open(VEC))
+    with open(VEC) as fh:
+        d = json.load(fh)
     counts = {}
     rows = []
     for v in d["vectors"]:

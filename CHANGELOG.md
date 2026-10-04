@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.2.2 — 2026-10-04 — an RFC 3161 mark only for a granted token for this digest
+
+- **`_rfc3161_stamp` recorded any HTTP body as `anchored: true`** — an error page, a rejection, a genuine token for
+  another digest — with those bytes as `tsr_b64`. It now reads the reply with `parse_timestamp_resp` (the DER walk the
+  verifier already uses) and requires both: a granted status (0 or 1, both carry a token) and the token's imprint equal
+  to the digest. The granted check is needed: the DER walk reads an imprint even from a rejection that carries a token.
+  `verify` was not affected: it reads the token itself (measured: a pack whose `rfc3161_timestamp` says `anchored: true`
+  over an HTML page is `valid: false`, exit 1).
+  `test_stamp_tsa_locale.py` builds a local TSA with openssl behind a local HTTP server; on 1.2.1 its four wrong replies
+  (another digest, a rejection, an HTML page, a rejection carrying a valid token) are anchored, here none is, while the
+  genuine token and a status-1 token are. Without openssl the test is skipped and says that the stamp is not measured.
+- The HTTP response of the stamp, and the files the example builder, the Elara reader and three tools under `verifiers/`
+  read or write, are closed (`with`).
+- `dist/` held the 1.0.2 wheel and sdist; it is no longer tracked (the packages are the release assets).
+
+Measured: every `test_*.py` and `pqcrypto/test_*.py` on Python 3.9.25, 3.11.2 and 3.13.15 (73 tests, the same count as
+script and as module); the sample gate (tampered pack refused); `differential_oracle.py` 0 disagreements of 149 (4
+declared); the strict-layer ablation; `type_fuzz.py` 1390 of 1390 inputs answered with a verdict; the wheel installs and
+verifies on its own; the third stack (AP2 SDK at `e1ea56d`) 0 disagreements of 138, and a seeded one is reported.
+
 ## Corrections (2026-09-26)
 
 - Small-order keys allow a forgery on any message, not on "a share of messages" (correction to the 1.2.1 notes). The

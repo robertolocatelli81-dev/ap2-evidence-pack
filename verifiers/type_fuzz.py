@@ -41,7 +41,8 @@ JS = ["node", os.path.join(ROOT, "verifiers", "js", "ap2-verify.mjs")]
 HOSTILE_TYPES = [None, 0, "", [], {}, True, 1.5, "\ud800"]
 
 CRASHY = '''import json, sys
-ev = json.load(open(sys.argv[-1], encoding="utf-8"))
+with open(sys.argv[-1], encoding="utf-8") as _fh:
+    ev = json.load(_fh)
 print(json.dumps({"valid": ev["subject"].get("x", False)}))
 '''
 
@@ -121,7 +122,8 @@ def run(cmds, base, types, tmp):
 
 
 def main(argv):
-    base = json.load(open(VECTOR, encoding="utf-8"))
+    with open(VECTOR, encoding="utf-8") as fh:
+        base = json.load(fh)
     types = HOSTILE_TYPES[:3] if "--quick" in argv else HOSTILE_TYPES
     tmp = tempfile.mkdtemp()
     try:
