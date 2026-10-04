@@ -39,10 +39,12 @@ jobs:
           python ap2_evidence.py verify out.json > /dev/null
           python - <<'PY'
           import json
-          d = json.load(open("out.json"))
+          with open("out.json") as fh:
+              d = json.load(fh)
           v = d["artifacts"][0]["sd_jwt_compact"]
           d["artifacts"][0]["sd_jwt_compact"] = v[:30] + ("A" if v[30] != "A" else "B") + v[31:]
-          json.dump(d, open("tampered.json", "w"))
+          with open("tampered.json", "w") as fh:
+              json.dump(d, fh)
           PY
           if python ap2_evidence.py verify tampered.json > /dev/null; then
             echo "::error::the verifier accepted a tampered evidence pack"; exit 1; fi
