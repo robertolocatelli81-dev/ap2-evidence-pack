@@ -326,6 +326,17 @@ the Apache-2.0 license (§7–8). Nothing in this repository is legal advice, an
 representation is made that any output constitutes admissible or sufficient evidence in
 any legal or regulatory proceeding.
 
+## Versioning
+
+Within 1.x these do not change: `build_evidence(artifacts, out_path)`, `verify_evidence(path)` → dict with `valid` and,
+when false, `refused`; the CLI `ap2-evidence build|verify` and its exit codes (0 valid, 1 otherwise). Wheel layout,
+dependency floors and new refusals may change in a minor release and the changelog says so. A change to the three above
+is 2.0.
+
+cryptovalid-opencore >= 0.18.0 depends on this package (its `ap2` extra) and ships no copy of it; the
+`downstream-cryptovalid` CI job runs its AP2 suites against the wheel built from every change here (first run green on
+2026-10-05, run 37287815388).
+
 ## Install (pip)
 
 ```bash
