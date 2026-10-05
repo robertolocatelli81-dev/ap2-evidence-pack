@@ -97,6 +97,64 @@ jobs:
           set -e
           for t in test_*.py pqcrypto/test_*.py; do echo "== $t"; python "$t"; done
 
+  downstream-cryptovalid:
+    # cryptovalid-opencore >= 0.18.0 imports `ap2_evidence` from THIS package (its `ap2` extra) and ships no copy.
+    # The other side of that link is asked the same question on every change here: build the wheel from this checkout,
+    # clone cryptovalid-opencore master and run its AP2 tests against it — a skipped AP2 test is a red, not a green.
+    runs-on: ubuntu-latest
+    needs: tests
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: "The wheel from this checkout (what cryptovalid installs), alone in a venv with cryptography"
+        run: |
+          set -e
+          python -m pip install -q build
+          python -m build --wheel --outdir "$RUNNER_TEMP/dist" .
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install -q "$RUNNER_TEMP/dist"/*.whl cryptography
+      - name: "cryptovalid-opencore master — a clone that ships no ap2_evidence.py and no pqcrypto/ (else its tests would test the copy, not this package)"
+        run: |
+          set -e
+          git clone --quiet --depth 1 https://github.com/robertolocatelli81-dev/cryptovalid-opencore "$RUNNER_TEMP/cvo"
+          cd "$RUNNER_TEMP/cvo"
+          for f in ap2_evidence.py pqcrypto; do
+            if [ -e "$f" ]; then echo "::error::cryptovalid-opencore master ships $f: the clone would shadow this package"; exit 1; fi
+          done
+          "$RUNNER_TEMP/venv/bin/python" -I -c "import ap2_evidence, sys; assert ap2_evidence.__file__.startswith(sys.prefix), ap2_evidence.__file__; print('ap2_evidence from', ap2_evidence.__file__)"
+      - name: "cryptovalid's AP2 suites against this wheel — every AP2 test must RUN"
+        working-directory: ${{ runner.temp }}/cvo
+        run: |
+          set -e
+          for t in test_verify_evidence test_mcp test_audit_v1_types test_verifier_depth test_packaging; do
+            echo "== $t"
+            CV_REQUIRE_CRYPTO=1 "$RUNNER_TEMP/venv/bin/python" -m unittest -v "$t" 2>&1 | tee "$RUNNER_TEMP/$t.log"
+            test "${PIPESTATUS[0]}" -eq 0
+            if grep -iE "ap2.*\.\.\. skipped" "$RUNNER_TEMP/$t.log"; then echo "::error::$t skipped an AP2 test"; exit 1; fi
+          done
+      - name: "Gate through cryptovalid's front-end: a pack built here passes `verify_evidence.py ap2` and `auto` (exit 0); tampered, exit 1"
+        run: |
+          set -e
+          T=$(mktemp -d); cp -r . "$T"; cd "$T"
+          "$RUNNER_TEMP/venv/bin/python" examples/make_samples.py > /dev/null
+          "$RUNNER_TEMP/venv/bin/ap2-evidence" build ev.json checkout=checkout.sdjwt payment=payment.sdjwt > /dev/null
+          "$RUNNER_TEMP/venv/bin/python" "$RUNNER_TEMP/cvo/verify_evidence.py" ap2 ev.json > /dev/null
+          "$RUNNER_TEMP/venv/bin/python" "$RUNNER_TEMP/cvo/verify_evidence.py" auto ev.json > /dev/null   # needs cvo >= the auto-detect fix
+          "$RUNNER_TEMP/venv/bin/python" - <<'PY'
+          import json
+          with open("ev.json") as fh:
+              d = json.load(fh)
+          v = d["artifacts"][0]["sd_jwt_compact"]
+          d["artifacts"][0]["sd_jwt_compact"] = v[:30] + ("A" if v[30] != "A" else "B") + v[31:]
+          with open("tampered.json", "w") as fh:
+              json.dump(d, fh)
+          PY
+          if "$RUNNER_TEMP/venv/bin/python" "$RUNNER_TEMP/cvo/verify_evidence.py" ap2 tampered.json > /dev/null; then
+            echo "::error::cryptovalid's front-end accepted a tampered pack"; exit 1; fi
+          echo "pass on the built pack, refusal on the tampered one, through cryptovalid-opencore master"
+
   third-verifier:
     # The differential oracle compares two verifiers written by the same author: a MISREADING of the specification lands
     # identically in both and they agree. This job asks a stack written by other people — Google's AP2 SDK over the
