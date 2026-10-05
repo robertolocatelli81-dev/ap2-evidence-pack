@@ -10,8 +10,8 @@ jobs:
       matrix:
         python-version: ["3.9", "3.11", "3.13"]   # pyproject declares >=3.9: the floor is tested too
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
       - name: "Dependencies — cryptography (Ed25519/P-256 and, from 48, ML-DSA-65 for the hybrid producer signature)"
@@ -49,7 +49,7 @@ jobs:
           if python ap2_evidence.py verify tampered.json > /dev/null; then
             echo "::error::the verifier accepted a tampered evidence pack"; exit 1; fi
           echo "tampered pack rejected (exit 1), intact pack accepted (exit 0)"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "24"   # OpenSSL >= 3.5: the JS verifier checks ML-DSA-65 too
       - name: "Differential oracle: Python reference vs Node verifier on every vector, hostile file and CLI case"
@@ -87,8 +87,8 @@ jobs:
     # pyproject declares cryptography >= 48: the floor is measured, not asserted (ML-DSA-65 works from 48.0.0)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       - run: pip install "cryptography==48.0.0"
@@ -104,8 +104,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: tests
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       - name: "The wheel from this checkout (what cryptovalid installs), alone in a venv with cryptography"
@@ -163,8 +163,8 @@ jobs:
     # instead of quietly staying in the README.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       - name: "Third-party stack (pinned commit of google-agentic-commerce/AP2)"
