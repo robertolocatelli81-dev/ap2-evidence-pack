@@ -5,8 +5,9 @@ on:
   pull_request:
 jobs:
   tests:
-    runs-on: ${{ matrix.python-version == '3.9' && 'ubuntu-24.04' || 'ubuntu-latest' }}   # 3.9 has no build for ubuntu-26.04 (ubuntu-latest from 2026-10-19)
+    runs-on: ${{ matrix.python-version == '3.9' && 'ubuntu-24.04' || 'ubuntu-26.04' }}   # 3.9 has no build for ubuntu-26.04 (ubuntu-latest from 2026-10-19)
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.9", "3.11", "3.13"]   # pyproject declares >=3.9: the floor is tested too
     steps:
@@ -85,7 +86,7 @@ jobs:
 
   floor:
     # pyproject declares cryptography >= 48: the floor is measured, not asserted (ML-DSA-65 works from 48.0.0)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -101,7 +102,7 @@ jobs:
     # cryptovalid-opencore >= 0.18.0 imports `ap2_evidence` from THIS package (its `ap2` extra) and ships no copy.
     # The other side of that link is asked the same question on every change here: build the wheel from this checkout,
     # clone cryptovalid-opencore master and run its AP2 tests against it — a skipped AP2 test is a red, not a green.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: tests
     steps:
       - uses: actions/checkout@v7
@@ -161,7 +162,7 @@ jobs:
     # `sd-jwt` reference implementation — the same questions about the same tokens. `sd-jwt` is deliberately NOT pinned:
     # if a future release changes the declared divergence, this job turns red and the declaration gets re-measured
     # instead of quietly staying in the README.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
