@@ -40,7 +40,7 @@ This tool turns a set of SD-JWT mandates into **one evidence file** that verifie
 ## Usage
 
 ```bash
-pip install ap2-evidence-pack   # cryptography comes with it (declared since 1.1.1)
+pip install ap2-evidence-pack   # cryptography >= 48 comes with it (declared since 1.1.1; >= 48 since 1.3.0)
 
 python3 examples/make_samples.py     # generates sample checkout.sdjwt + payment.sdjwt
 python3 ap2_evidence.py build evidence.json checkout=checkout.sdjwt payment=payment.sdjwt \
@@ -331,5 +331,9 @@ any legal or regulatory proceeding.
 ```bash
 pip install --extra-index-url https://robertolocatelli81-dev.github.io/pypi/ ap2-evidence-pack
 ```
+
+Installed beside PyPI's `pqcrypto` package? Fine since 1.3.0: this wheel ships its signature suite as `ap2_pqcrypto/`
+(the clone keeps `pqcrypto/`). 1.2.2 and earlier overwrote that package's `__init__.py`. Requires `cryptography >= 48`
+(ML-DSA-65).
 
 Release artifacts are attached to GitHub Releases; the index links carry `#sha256=` fragments verified by pip. All documented `python3 <file>.py` commands keep working unchanged from a clone.

@@ -68,7 +68,10 @@ from typing import Dict, List, Optional, Tuple
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
-sys.path.insert(0, os.path.join(_HERE, "pqcrypto"))
+for _pqc in ("pqcrypto", "ap2_pqcrypto"):        # the clone has pqcrypto/; the wheel installs it as ap2_pqcrypto/ (1.3.0)
+    if os.path.isfile(os.path.join(_HERE, _pqc, "sigsuite.py")):   # the file, not the directory: PyPI's pqcrypto/ may sit beside the wheel
+        sys.path.insert(0, os.path.join(_HERE, _pqc))
+        break
 import sigsuite as _sigsuite  # noqa: E402  (crypto-agile hybrid classical + ML-DSA-65 producer signatures)
 
 EVIDENCE_FORMAT = "ap2-evidence-pack/1.0"

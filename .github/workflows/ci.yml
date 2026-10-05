@@ -14,7 +14,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: "Dependencies — cryptography (Ed25519/P-256 and, since 50, ML-DSA-65 for the hybrid producer signature)"
+      - name: "Dependencies — cryptography (Ed25519/P-256 and, from 48, ML-DSA-65 for the hybrid producer signature)"
         run: pip install cryptography
       - name: Unit + conformance tests (every suite in the repo, fail-closed)
         run: |
@@ -65,9 +65,37 @@ jobs:
           python -m build --wheel --outdir /tmp/dist .
           python -m venv /tmp/pkgvenv
           /tmp/pkgvenv/bin/pip install -q /tmp/dist/*.whl          # no other install: the wheel must bring what it needs
-          /tmp/pkgvenv/bin/python -c "import ap2_evidence, pqcrypto.sigsuite; print('import ok', ap2_evidence.EVIDENCE_FORMAT)"
-          /tmp/pkgvenv/bin/python -m ap2_evidence verify spec/vectors/ap2/valid_signed.json > /dev/null
+          # -I keeps this checkout off sys.path: measured 2026-10-05, without it `python -c` and `python -m` run from the
+          # checkout imported ./ap2_evidence.py and ./pqcrypto/sigsuite.py (the repository, not the wheel) and the step was
+          # green for the wrong reason. The asserts name the origin, so the step cannot go green on the checkout again.
+          /tmp/pkgvenv/bin/python -I - <<'PY'
+          import ap2_evidence, sigsuite
+          assert ap2_evidence.__file__.startswith("/tmp/pkgvenv/"), ap2_evidence.__file__
+          assert sigsuite.__file__.startswith("/tmp/pkgvenv/") and "/ap2_pqcrypto/" in sigsuite.__file__, sigsuite.__file__
+          print("import ok", ap2_evidence.EVIDENCE_FORMAT, sigsuite.__file__)
+          PY
+          /tmp/pkgvenv/bin/python -I -m ap2_evidence verify spec/vectors/ap2/valid_signed.json > /dev/null
           echo "the published package imports and verifies on its own"
+      - name: "Wheel — no path shared with PyPI's pqcrypto (1.3.0): the suite ships as ap2_pqcrypto/"
+        run: |
+          set -e
+          unzip -l /tmp/dist/*.whl | grep -q ' ap2_pqcrypto/sigsuite.py'
+          if unzip -l /tmp/dist/*.whl | grep -q ' pqcrypto/'; then echo "::error::the wheel ships pqcrypto/"; exit 1; fi
+          echo "the wheel ships ap2_pqcrypto/ and no pqcrypto/"
+
+  floor:
+    # pyproject declares cryptography >= 48: the floor is measured, not asserted (ML-DSA-65 works from 48.0.0)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install "cryptography==48.0.0"
+      - name: Every suite with the declared floor
+        run: |
+          set -e
+          for t in test_*.py pqcrypto/test_*.py; do echo "== $t"; python "$t"; done
 
   third-verifier:
     # The differential oracle compares two verifiers written by the same author: a MISREADING of the specification lands

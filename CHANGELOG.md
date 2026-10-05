@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.3.0 — 2026-10-05 — the wheel no longer shares a directory with PyPI's pqcrypto; cryptography >= 48
+
+- **The wheel installs the signature suite as `ap2_pqcrypto/`, not `pqcrypto/`.** PyPI's `pqcrypto` (1.0.0, a PQClean
+  binding) owns `pqcrypto/` in site-packages. Measured 2026-10-05: installing 1.2.2 on top of it replaced its
+  `__init__.py` with our empty one (the public names `dir(pqcrypto)` lists went from 42 to 0; `pip check` said nothing)
+  and uninstalling 1.2.2 removed that file for good. The clone keeps `pqcrypto/` (every documented `python3 <file>.py`
+  command is unchanged); setuptools maps it to `ap2_pqcrypto` in the wheel, and `ap2_evidence` looks for `sigsuite.py`
+  in `pqcrypto/` first, then `ap2_pqcrypto/` — the file, not the directory, because PyPI's `pqcrypto/` may sit beside
+  the installed module. `test_packaging.py` (6 tests) checks the pyproject mapping and the import hook beside a foreign
+  `pqcrypto/`, each with its positive control (the 1.2.2 layout fails the first; a foreign `pqcrypto/` without
+  `ap2_pqcrypto/` fails to import), the declared floor, and that a wheel built from a clean copy carries
+  `ap2_pqcrypto/sigsuite.py` and no `pqcrypto/` entry; the CI checks the built wheel the same way, and its install step
+  now imports from the venv with `-I` and asserts the origin (until now it imported the checkout, not the wheel). Measured with 1.3.0 installed beside pqcrypto
+  1.0.0: 42 names before, with it installed and after `pip uninstall ap2-evidence-pack`; `ap2-evidence build` and
+  `verify` work from the install; a tampered pack is refused (exit 1).
+- **`cryptography >= 48`** (was >= 42). ML-DSA-65 (the hybrid producer signature) works from 48.0.0; 47.0.0 ships the
+  `mldsa` module but raises `UnsupportedAlgorithm`. A new CI job runs every suite with 48.0.0.
+- The next cryptovalid-opencore (0.18.0, prepared beside this release) is to depend on this package (its `ap2` extra)
+  instead of shipping its own copy of `ap2_evidence.py` and `pqcrypto/` (the two wheels installed the same paths and
+  overwrote each other).
+
+Measured before the tag: every `test_*.py` and `pqcrypto/test_*.py` (6 files, 79 tests) on Python 3.9.25, 3.11.2 and
+3.13.15, each with cryptography 48.0.0 and 50.0.2.
+
 ## 1.2.2 — 2026-10-04 — an RFC 3161 mark only for a granted token for this digest
 
 - **`_rfc3161_stamp` recorded any HTTP body as `anchored: true`** — an error page, a rejection, a genuine token for
