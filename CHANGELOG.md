@@ -205,7 +205,7 @@ compares the verdict AND the claims each stack resolves.
 
 ## 1.1.2 — 2026-09-22 — the vocabulary matches the specification (committed, never tagged: it ships inside 1.2.0)
 
-**Independent competitive analysis by Gemini 3.1 Pro and Fable 5.1, run in parallel after publication.** Fable went
+**Independent competitive analysis by two separate AI reviewers, run in parallel after publication.** One of them went
 outside the repository, read the current AP2 specification and the projects competing with this one, and found the thing
 eleven review rounds could not: the public vocabulary was a version behind. Measured in `google-agentic-commerce/AP2` on
 2026-09-22: "Intent Mandate" and "Cart Mandate" occur **zero** times in `docs/ap2/`, while Checkout Mandate occurs 63
@@ -227,7 +227,7 @@ script anyone can run.
 
 ## 1.1.1 — 2026-09-22 — the dependency is declared, and CI tests the distributed package
 
-**Independent review by Gemini 3.1 Pro, after publication** (the review attacked the framing, not the code, which is what
+**Independent AI review, after publication** (the review attacked the framing, not the code, which is what
 three passes of a same-family reviewer could not do). Two findings were measured and acted on here; a third is recorded
 below because it cannot be fixed without changing the sealed scope.
 
@@ -277,7 +277,7 @@ the policy flags.
   messageImprint (SPEC §3.2), the same profile and CLI grammar.
 - **Differential oracle** `verifiers/differential_oracle.py`: 8 vectors (+1 under `--tsa-cert`) + 39 hostile files + 15 CLI cases
   + 1 positive control = 64, 0 disagreements, 1 declared (TSA proof is openssl-only); 43 red against 1.0.2; a crash counts as
-  a disagreement. Review round 1 (Opus/Sonnet/Haiku) added the wrong-JSON-shape class (tracebacks in the reference), the
+  a disagreement. Review round 1 added the wrong-JSON-shape class (tracebacks in the reference), the
   empty producer block, lenient `tsr_b64` and JWK coordinates, the binder-side base64url mutations and the forged TimeStampResp. Two new vectors with a **real RFC 3161 token** from a probe TSA (certificate shipped):
   `anchor_valid` (ACCEPT) and `anchor_wrong_digest` (a real token for another digest: REJECT) — before, the only anchor
   vector was garbage bytes, so a verifier that never parsed the token passed it.
@@ -287,7 +287,7 @@ the policy flags.
   reference verifies the token's signature and chain with `openssl ts -verify -CAfile` (`tsa_verified`), required by
   `--require-anchor --tsa-cert`; the JS verifier cannot and does not pass that policy (declared).
 
-- **Review round 2** (Opus/Sonnet/Haiku, 22/09/2026): the §3.1 profile now applies INSIDE the SD-JWT (issuer header/payload,
+- **Review round 2** (22/09/2026): the §3.1 profile now applies INSIDE the SD-JWT (issuer header/payload,
   disclosures, KB-JWT) — the reference read the signed payload with `json.loads` (a duplicate key read last-wins, a BOM
   skipped) while the JS parser refused, so one verifier certified `{"amount":"1","amount":"999"}` as `"999"` and the other
   refused it; present-with-`null` is not absent (`dict.get` vs `??`): `_sd`, `_sd_alg`, `{"...": d}`, disclosure names,
@@ -299,7 +299,7 @@ the policy flags.
   0 disagreements, 1 declared; `proto-key` case rehashed so that it
   can fail; a declared divergence that stops appearing is reported. README: the Node requirement is OpenSSL ≥ 3.5 for
   ML-DSA-65 (not "Node ≥ 20"); the JS conformance test SKIPS on a build without ML-DSA instead of failing.
-- **Review round 3** (Opus/Sonnet/Haiku, 22/09/2026): `artifacts[].name` must be a non-empty unique string (refusal) — the
+- **Review round 3** (22/09/2026): `artifacts[].name` must be a non-empty unique string (refusal) — the
   JS binding table was a prototype-bearing object: an absent name was a `TypeError` crash, an int name was stringified
   (`bindings_ok` false against the reference's `true`), `"__proto__"` set the prototype and vanished (valid in the
   reference, not in JS); the JS DER length used `<<` (int32): a 4-byte length `84 80 00 00 00` went negative, passed the
@@ -307,7 +307,7 @@ the policy flags.
   help on stdout with exit 2 (now stderr, like every usage path and the JS verifier); the oracle's usage rule is exit 2 AND
   nothing on stdout. Oracle: 97 cases, 0 disagreements, 1 declared; positive controls 5 red on the round-2 state, 26 on the
   round-1 state, 71 on 1.0.2.
-- **Review round 4** (Opus/Sonnet/Haiku, 22/09/2026): `bindings` is compared as a SET in both verifiers (SPEC §4 now defines
+- **Review round 4** (22/09/2026): `bindings` is compared as a SET in both verifiers (SPEC §4 now defines
   the entry schema, the claim-path grammar and both encodings) — JavaScript's `Object.keys` enumerates array-index keys
   (`"0"`, `"2"`) before the others, so a cart committing under `intent_hash` and `"0"` was scanned in a different order and
   the ORDERED comparison gave `valid: true` in the reference and `false` in the JS verifier on a pack `build` had produced.
@@ -317,7 +317,7 @@ the policy flags.
   the token's own `genTime` (`openssl ts -verify -attime`), both verifiers report `rfc3161.gen_time`; the stale
   `requires: ["openssl"]` is off the anchor vectors (the binding check needs no openssl). Oracle: 102 cases,
   0 disagreements, 1 declared; positive control 2 red on the round-3 state.
-- **Review round 5** (Opus/Sonnet/Haiku, 22/09/2026): `provenance_class` is RECONCILED with the signed header instead of
+- **Review round 5** (22/09/2026): `provenance_class` is RECONCILED with the signed header instead of
   believed — relabelling `jwk_header` as `x5c_header` made `self_asserted_only` false with no `x5c` anywhere (the one
   field the honest scope sends the auditor to), and out-of-enum values passed as strong classes; the enum is closed in
   both verifiers. `evidence_format` and the §1 MUSTs (`subject`, `created_utc`, `honest_scope`) are checked: a
@@ -334,7 +334,7 @@ the policy flags.
   passing when node is absent, and the bare-invocation loop really runs the JS CLI. Three vector descriptions realigned
   with the code (they still said "neither verifier validates the TSA chain", "cryptographic token verification" and
   "the one ACCEPT of the set").
-- **Review round 6** (Opus/Sonnet/Haiku, 22/09/2026): the JS "JWT header and payload must be objects" check had ended up
+- **Review round 6** (22/09/2026): the JS "JWT header and payload must be objects" check had ended up
   INSIDE an unterminated line comment in round 5 — a signed payload that is a JSON array verified there and failed in the
   reference; it is code again, and the oracle case that was supposed to cover it (`payload-list-rehashed`) turned out to
   swap the segment without re-signing, so both verifiers failed on the signature and the shape rule was never reached:
@@ -345,7 +345,7 @@ the policy flags.
   producer content binding, x5c chain limits): removed, and CI now fails if a module collects fewer tests as a script than
   as a module. `created_utc` is imposed as ISO-8601 UTC in both verifiers (SPEC §1 said MUST, only the type was checked).
   Oracle: 121 cases, 0 disagreements, 1 declared; positive control 3 red on the round-5 state.
-- **Review round 7** (Opus/Sonnet/Haiku, 22/09/2026): `self_asserted_only` is FAIL-CLOSED (SPEC §6.7). Round 5 reconciled
+- **Review round 7** (22/09/2026): `self_asserted_only` is FAIL-CLOSED (SPEC §6.7). Round 5 reconciled
   two of the six spellings of `provenance_class`; the other four still cleared the flag with no evidence at all —
   measured: `"supplied"` and `"jwks_fetched"` cleared it on the strength of the label, and `null` or a DELETED field
   cleared it by making the class set empty. Since `producer_signatures` sits outside the digest, an unsigned pack is
@@ -357,7 +357,7 @@ the policy flags.
   oracle compares `rfc3161.gen_time` too and gets a CA-issued `x5c` leaf as the positive control of the honesty flag
   (122 cases, 0 disagreements, 1 declared); an unparseable token returns the same receipt shape in both verifiers; the
   ablation checks the patched module still imports, so a botched patch cannot masquerade as a red ablation.
-- **Review round 8** (Opus/Sonnet/Haiku, 22/09/2026): round 7 had moved the author's freedom one field along — it cleared
+- **Review round 8** (22/09/2026): round 7 had moved the author's freedom one field along — it cleared
   `self_asserted_only` when the leaf's issuer DN differed from its subject DN, and **measured**: a certificate SELF-SIGNED
   with its own key, declaring `CN=DigiCert Global Root CA` as issuer, cleared the flag in both verifiers on a `valid` pack.
   Offline, "issued by someone else" is not establishable, so nothing clears the flag any more except an `x5c` chain that
@@ -368,7 +368,7 @@ the policy flags.
   `evidence_format` in both verifiers: the receipt used to REPRINT whatever scope the file carried, so an author could write
   "anchored by a QTSP under eIDAS art. 45j" and see it beside `valid: true`. Oracle: 124 cases, 0 disagreements,
   2 declared.
-- **Review round 9** (Opus/Sonnet/Haiku, 22/09/2026): `created_utc` was validated with `\d`, which in Python matches every
+- **Review round 9** (22/09/2026): `created_utc` was validated with `\d`, which in Python matches every
   Unicode Nd digit and in JavaScript only `[0-9]` — measured: `"٢٠٢٦-٠٩-٢٢T٠٠:٠٠:٠٠Z"` verified in the reference and was
   refused by the JS verifier, opposite verdicts on a pack in profile (non-ASCII text is in profile by §3.1). `--trust-anchor`,
   added in r8, was outside the reference's CLI grammar: `--trust-anchor ""` gave a verdict on stdout there and usage exit 2
@@ -380,7 +380,7 @@ the policy flags.
   a CA under the relying party's anchor certified that key, never that the key belongs to the mandate's issuer — without the
   DN an auditor cannot tell `CN=the-bank` from `CN=attacker`. Oracle: 129 cases, 0 disagreements, 2 declared; positive
   control 4 red on the round-8 state, plus a unit test for the expired leaf measured red there.
-- **Review round 10** (Opus/Sonnet/Haiku, 22/09/2026): `self_asserted_only` was computed with `all()` over the per-artifact
+- **Review round 10** (22/09/2026): `self_asserted_only` was computed with `all()` over the per-artifact
   flags, so ONE reconciled artifact cleared it for the whole pack — measured: a pack whose mandate carried a self-asserted
   `jwk_header` key and whose second artifact chained to the relying party's anchor reported `self_asserted_only: false`,
   i.e. "no self-asserted key here", while the mandate-signing key had never been reconciled at all (and the JS verifier
@@ -400,7 +400,7 @@ the policy flags.
   `mldsa_backend`, emitted by the JS verifier alone and documented nowhere, which is now in both receipts and in SPEC §6.
   Last of the "asserted but not measured" class: `granted` is `null`, not `false`, when `tsr_b64` never decoded and no
   PKIStatus was ever read. Checked and clean: no hostile oracle case shares the intact vector's verdict tuple.
-- **Review round 11** (Opus/Sonnet/Haiku, 22/09/2026), the last before the release: the sealed `honest_scope` said the
+- **Review round 11** (22/09/2026), the last before the release: the sealed `honest_scope` said the
   format "does NOT validate x5c chains to a trust anchor", which round 8 had made false — so a `verify --trust-anchor`
   printed `chain_verified: true` in the same JSON object as a scope denying that chains are ever validated. The scope is
   pinned by SHA-256, so correcting it invalidates every existing pack: it was done now, before the tag, and the whole
@@ -415,7 +415,7 @@ the policy flags.
   producing a six-field receipt on one side and a seven-field one on the other. Oracle: 130 cases, 0 disagreements,
   4 declared.
 
-- **Final check before the tag** (Fable 5.1, 22/09/2026): three public sentences were false of the measurements and one
+- **Final check before the tag** (22/09/2026): three public sentences were false of the measurements and one
   rule the verifiers enforce was missing from the SPEC. `self_asserted_only` printed its GREEN value on a pack with zero
   artifacts (`any()` over an empty list) — the honesty flag is fail-closed there too now, in both verifiers, held by
   `test_honesty_flag_and_scope_are_fail_closed` measured red against the previous commit. Both verifiers refused a

@@ -296,7 +296,7 @@ class TestKbJwtHolderBinding(_Base):
 
 
 class TestFullContextReviewFindings(_Base):
-    """Finding della review a contesto pieno (Gemini flash su repo-pack, 21/08)."""
+    """Finding della review a contesto pieno (revisione indipendente su repo-pack, 21/08)."""
 
     def test_duplicate_artifact_names_refused(self):
         with self.assertRaises(ap2.Ap2EvidenceError):
