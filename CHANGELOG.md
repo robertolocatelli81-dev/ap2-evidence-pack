@@ -38,7 +38,12 @@ With the constraint, the SDK refuses R where it reads a typed mandate (`Validati
 checkout) and still accepts O; AP2: "Any unknown Constraints MUST be treated as failing evaluation". New reasons
 `restricts_misplaced` (the first draft's top-level place), `restricts_disclosable` (a reference the holder could leave
 out); receipt field `claim` renamed `constraint_type`. Intended consequence: R is no longer a mandate on its own for a
-verifier that does not implement §11.
+verifier that does not implement §11. Where the SDK does not read a typed mandate (`verify_chain`, `sd_jwt.verify`,
+`MandateClient.verify` without `payload_type`) R passes like any token, and no constraint of any open mandate is
+evaluated there (SPEC §11.1).
+Measured on this draft (Python 3.9 / 3.11 / 3.13, `env -u PYTHONPATH`): `test_ap2_restriction.py` 81 tests, 13/13 suites
+green (278 tests on 3.11); `sdk_crosscheck --hostile` 0 of 177 disagreements. The counts in the paragraph above are the
+first draft's.
 
 Found while building it, in 1.6.0 and NOT fixed here (another change, both verifiers): a digest repeated in the issuer
 payload is accepted and its disclosure expanded twice — measured 2026-10-28, both verifiers `valid: true`, the mandate twice

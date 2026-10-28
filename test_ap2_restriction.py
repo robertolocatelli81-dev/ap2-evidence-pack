@@ -1354,5 +1354,66 @@ class TestReferenceAsConstraint(PackCase):
         self.assertEqual(why(e), [("contradicted", "restricts_malformed")])
 
 
+class TestReferenceAsConstraintReview(PackCase):
+    """Review of the draft change of 2026-10-28: four mutants of the new lines that the suite above did not see (a look-alike
+    type read as the reference; the order of §11.3 step 2; `constraints` itself a property disclosure, with and without
+    another property disclosure listed before it in `_sd`)."""
+
+    def entry(self, o, r, name):
+        rec = ap2.verify_restrictions(self.pack(("original", o), ("restriction", r), name=name))
+        self.assertTrue(rec["valid"], rec)
+        return rec
+
+    def test_a_look_alike_type_is_an_unknown_constraint_not_a_reference(self):
+        o = issue(PAY)
+        h = ap2.issuer_jwt_hash(o)
+        n = len(PAY["constraints"])
+        for v in (" " + REF, REF + " ", REF.upper(), REF.replace("github", "GitHub"), REF + "2", REF[:-1]):
+            c = with_ref(PAY, h)
+            c["constraints"].append({"type": v, "issuer_jwt_hash": h})
+            with self.subTest(type=v):   # beside the reference: one more constraint of a type outside the table (SPEC §11.4)
+                e = self.entry(o, issue(c), "la.json")["restrictions"][0]
+                self.assertEqual((e["state"], e["reasons"], e["restricts"]), ("verified", [], h))
+                self.assertEqual(e["reported"], [{"reason": "unknown_constraint_added", "at": f"restriction.delegate_payload[0].constraints[{n + 1}]"}])
+            c = copy.deepcopy(PAY)
+            c["constraints"].append({"type": v, "issuer_jwt_hash": h})
+            with self.subTest(type=v, alone=True):   # alone: no reference, so no record (SPEC §11.2)
+                rec = self.entry(o, issue(c), "la2.json")
+                self.assertEqual((rec["restrictions"], rec["met"]), ([], False))
+
+    def test_step_2_judges_the_misplaced_name_before_the_count_the_keys_the_hash_and_the_disclosure(self):
+        o = issue(PAY)
+        h = ap2.issuer_jwt_hash(o)
+        M = [{"state": "contradicted", "reason": "restricts_misplaced", "at": "restriction." + REF}]
+        for c in (with_ref(with_ref(PAY, h), h), with_ref(PAY, h, {"k": 1}), with_ref(PAY, "x")):
+            with self.subTest(refs=[x for x in c["constraints"] if x.get("type") == REF]):
+                self.assertEqual(self.entry(o, issue(c, {REF: h}), "ord.json")["restrictions"][0]["reasons"], M)
+        self.assertEqual(self.entry(o, restrict(o, PAY, {REF: h}, hide_ref="element"), "ord2.json")["restrictions"][0]["reasons"], M)
+
+    def test_constraints_as_a_property_disclosure_holds_a_plain_reference(self):
+        o = issue(PAY)
+        h = ap2.issuer_jwt_hash(o)
+        for order in ("constraints_first", "exp_first"):
+            c = with_ref(PAY, h)
+            dc, de = _disc("constraints", c.pop("constraints")), _disc("exp", c.pop("exp"))
+            digests = [ap2._disclosure_digest(dc), ap2._disclosure_digest(de)]
+            c["_sd"] = digests if order == "constraints_first" else digests[::-1]
+            r = issue(c, sd_arrays=False) + dc + "~" + de + "~"
+            with self.subTest(order=order):
+                self.assertEqual(ap2._digest_census(ap2.parse_sd_jwt(r)), (0, False))
+                e = self.entry(o, r, "pd.json")["restrictions"][0]
+                self.assertEqual((e["state"], e["reasons"], e["restricts"]), ("verified", [], h))
+        c = with_ref(PAY, h)   # the reference an array-element disclosure inside that disclosed list: still not plain
+        cons = c.pop("constraints")
+        d_el = _disc(cons[-1])
+        cons[-1] = {"...": ap2._disclosure_digest(d_el)}
+        dc = _disc("constraints", cons)
+        c["_sd"] = [ap2._disclosure_digest(dc)]
+        e = self.entry(o, issue(c, sd_arrays=False) + dc + "~" + d_el + "~", "pd2.json")["restrictions"][0]
+        self.assertEqual([(x["state"], x["reason"]) for x in e["reasons"]], [("contradicted", "restricts_disclosable")])
+        rec = self.entry(o, issue(c, sd_arrays=False), "pd3.json")   # the holder drops `constraints`: no reference, no record
+        self.assertEqual((rec["restrictions"], rec["met"]), ([], False))
+
+
 if __name__ == "__main__":
     unittest.main()

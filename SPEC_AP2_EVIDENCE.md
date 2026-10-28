@@ -765,8 +765,11 @@ an ordinary mandate's. An unknown constraint type is different: "Any unknown Con
 evaluation" (`agent_authorization.md`, "Verification and Processing Rules"), and the SDK refuses a mandate that carries
 one where it reads the mandate as a type (measured: `pydantic.ValidationError` at `constraints[n]` from
 `SdJwtMandate.from_sd_jwt`, `MandateClient.verify` with `payload_type`, `PaymentMandateChain.parse` — the `constraints`
-field of the generated `OpenPaymentMandate` / `OpenCheckoutMandate` is a closed union of the AP2 types; the untyped
-`verify_chain` checks signatures and disclosures only and returns the payloads). So a verifier that does not know this
+field of the generated `OpenPaymentMandate` / `OpenCheckoutMandate` is a closed union of the AP2 types). Where the SDK
+does not read the open mandate as a type — `sd_jwt.verify`, `verify_chain` / `MandateClient.verify` without
+`payload_type`, which check signatures, disclosures, key binding and time claims and return the payloads, and the
+sample roles that validate only the closed hop (`credentials_provider_agent`, `merchant_agent`) — R passes like any
+token and no constraint of any open mandate is evaluated there (measured, same commit). So a verifier that does not know this
 profile cannot use R as a mandate at all; a verifier that knows it reads R as what it is. The plain-element rule keeps it
 that way: a constraint the holder could leave undisclosed would turn R back into an ordinary mandate for such a verifier. This is the `issuer_jwt_hash` of the Delegate SD-JWT draft
 ("verify that the `issuer_jwt_hash` is present and matches the base64url encoded digest of the preceding Issuer-signed
