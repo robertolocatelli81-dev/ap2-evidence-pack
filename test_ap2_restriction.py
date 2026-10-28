@@ -1202,5 +1202,24 @@ class TestMutantGaps(PackCase):
         self.assertEqual((rec["met"], rec["existed_by"]), (True, times[0]))
 
 
+class TestSecondReview(PackCase):
+    def test_a_key_with_the_same_x_and_the_opposite_y_is_another_key(self):
+        """SPEC §11.3 step 4 compares kty, crv, x AND y. The point (x, p - y) is -P: a valid P-256 public key (private scalar
+        n - d) with the same `x` as the original's and the opposite `y`. A record signed by it verifies under its own
+        snapshotted key, so the pack is valid, and the record is `issuer_key_differs` — a comparison on x alone would bind it."""
+        n = int("FFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551", 16)   # order of P-256 (FIPS 186-4 D.1.2.3)
+        neg = Key()
+        neg.sk = ec.derive_private_key(n - K1.sk.private_numbers().private_value, ec.SECP256R1())
+        nn = neg.sk.public_key().public_numbers()
+        neg.jwk = {"kty": "EC", "crv": "P-256", "x": _b64u(nn.x.to_bytes(32, "big")), "y": _b64u(nn.y.to_bytes(32, "big"))}
+        self.assertEqual(neg.jwk["x"], K1.jwk["x"])
+        self.assertNotEqual(neg.jwk["y"], K1.jwk["y"])
+        o = issue(PAY)
+        rec, e = self.run_pair(o, restrict(o, PAY, key=neg))
+        self.assertTrue(rec["valid"], rec)
+        self.assertEqual(why(e), [("contradicted", "issuer_key_differs")])
+        self.assertFalse(rec["met"])
+
+
 if __name__ == "__main__":
     unittest.main()

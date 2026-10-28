@@ -736,8 +736,8 @@ exactly as any other pack, and its twelve fields and states do not depend on thi
 
 **Why.** AP2 at `e1ea56d` defines no way to restrict or revoke a mandate once issued: its normative text has no
 restriction, revocation, amendment or supersession of a mandate (searched 2026-10-27 in `docs/ap2/*.md` and
-`code/sdk/schemas/ap2/*.json`; the only "revoke" is `revoke_payment_credential` in the samples, which revokes a payment
-token). `implementation_considerations.md` "Mandate Management" says the Shopping Agent "SHOULD provide a mechanism to
+`code/sdk/schemas/ap2/*.json`; the only "revoke" in the repository is `revoke_payment_credential` in the samples and the
+web client, which revokes a payment token). `implementation_considerations.md` "Mandate Management" says the Shopping Agent "SHOULD provide a mechanism to
 manage active Mandates"; the Delegate SD-JWT draft (GarethCOliver/gco-delegate-sd-jwt `0c1d686`, "Delegate SD-JWT
 Revocation") says that revocation "present[s] a practical challenge as, unlike a traditional Issuer, an individual Holder
 can not easily distribute revocation information to Verifiers". This profile records, in a pack, that the issuer of an
@@ -777,7 +777,7 @@ claims carry the claim of §11.1 at the top level. The receipt is one JSON objec
 | `claim` | `"io.github.robertolocatelli81.restricts"` |
 | `admission`, `refusal_class`, `valid` | the §6.9/§6 values of the pack |
 | `time_anchor` | the §6.9 `time_anchor` subject of the pack (`null` on a refusal) |
-| `existed_by` | the earliest `gen_time` among the anchors whose binding AND TSA signature verified (§3.3), else `null` |
+| `existed_by` | the earliest `gen_time` among the anchors whose binding AND TSA signature verified (§3.3), else `null`. It can be set while `time_anchor` is not `verified` (another anchor of the pack failed): the proof of §11.5 needs `time_anchor` `verified` |
 | `restrictions` | one entry per restriction record, in artifact order (below) |
 | `met` | `true` iff `restrictions` is non-empty and every entry is `verified` |
 

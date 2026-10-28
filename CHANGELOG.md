@@ -12,16 +12,22 @@ judge (hidden digests, names and types outside its lists, a pack that is not val
 verified). Additive: `verify`, its receipt, the twelve fields, the states and every conformance vector are unchanged; the
 JS verifier does not implement §11 (declared). Not a revocation: the original stays valid for whoever holds only it.
 
-Measured 2026-10-28 (Python 3.11, `env -u PYTHONPATH`): `test_ap2_restriction.py` 70 tests (65 by the author, 5 added by the
-review), built from the two open mandates of AP2's documentation decoded verbatim; 13/13 suites green (267 tests); 496
-mutants of the new lines, 475 detected, 21 not detected — each read: 16 are a no-op, a value nobody reads, a message text or
-a path not exercised (the 64 MiB bound, `rmtree` errors); 2 remove a `return` after a negative reason (same `state`, more
-`reasons`; one of them crashed on a `constraints: null` of the original — two tests now pin both); 1 `<=` → `<` on
-`budget.max` (equal values are an equal copy, matched before); 1 `add_help` covered by the CLI grammar; 1 `is` → `is not` in
-a help text (report in the branch notes). Three more of the review's own mutants survived the 65 and are pinned by the 5
+Measured 2026-10-28 (Python 3.9 / 3.11 / 3.13, `env -u PYTHONPATH`): `test_ap2_restriction.py` 71 tests (65 by the author,
+5 added by the first review, 1 by the second), built from the two open mandates of AP2's documentation decoded verbatim;
+13/13 suites green (268 tests on 3.11); 496 mutants of the new lines: with the author's 65 tests 475 detected and 21 not;
+re-run on the 70-test file, 477 detected and 19 not — the two that remove a `return` after a negative reason (same `state`,
+more `reasons`; one of them crashed on a `constraints: null` of the original) are pinned by two of the first review's tests.
+The 19 read: 16 are a no-op, a value nobody reads, a message text or a path not exercised (the 64 MiB bound, `rmtree`
+errors); 1 `<=` → `<` on `budget.max` (equal values are an equal copy, matched before; differential fuzz head vs mutant
+1500 pairs, 0 differences, control `<=` → `>=` 300/300); 1 `add_help` covered by the CLI grammar; 1 `is` → `is not` in a
+help text (report in the branch notes). Three more of the first review's own mutants survived the 65 and are pinned by its 5
 tests: non-ASCII digits in a date (`\d` would read an earlier `not_before` as later), a swap of two neighbours in the
-`frequency` order, a non-object constraint of the original copied equal. On 1.6.0 the 65 tests fail (the functions do not exist) and `verify` of a pack whose record widens the
-amount to 10^9 says `valid: true`: 1.6.0 records a record, it does not judge it.
+`frequency` order, a non-object constraint of the original copied equal. The second review's 70 targeted mutants (plus the
+identity mutant, which survived): 66 killed by the test file, 3 survivors read as equivalent (`valid` is always a boolean in
+an admitted receipt; a record naming its own issuer JWT needs a SHA-256 preimage; the `budget.max` case above), 1 pinned by
+its test (the `y` of the issuer key: a key with the same `x` and the opposite `y` passed as the same key). On 1.6.0 the 65
+tests fail (the functions do not exist) and `verify` of a pack whose record widens the amount to 10^9 says `valid: true`:
+1.6.0 records a record, it does not judge it.
 
 Found while building it, in 1.6.0 and NOT fixed here (another change, both verifiers): a digest repeated in the issuer
 payload is accepted and its disclosure expanded twice — measured 2026-10-28, both verifiers `valid: true`, the mandate twice
