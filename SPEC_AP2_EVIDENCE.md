@@ -3,6 +3,8 @@
 
 # ap2-evidence-pack — normative format v1.0 (2026-09-05), specification revision 1.6.0 (2026-10-18)
 
+> Draft on branch `restriction-record` (2026-10-28, NOT released): §11, a restriction record profile. §1–§10 are unchanged by it.
+
 Status: **proposed format** (no standards body; normative for this repository), defined by the conformance vectors in
 `spec/vectors/ap2/` (each `<name>.json` pack + `<name>.expected.json`
 policy/verdict). Revision 1.6.0 adds to every receipt one closed field per question a relying party asks (§6.9):
@@ -722,3 +724,178 @@ verifier from recorded inputs, never asserted without re-derivation" (§4.2). Re
 - `settlement_anchor` (§4.3): outside this format; a pack carries no settlement artifact.
 - Keys: -01 §3 requires keys to be "resolved out of band"; that is this format's `self_asserted` / `key_unresolved` →
   pinned-key rule, for the producer and for the issuer.
+
+## 11. Restriction record (profile `io.github.robertolocatelli81.restriction/1`, DRAFT revision 1.7.0, 2026-10-28)
+
+Status: a profile of THIS repository, named in its own namespace as AP2 recommends for extensions ("It is RECOMMENDED to
+use a collision-resistant naming approach, for example via a rDNS prefix controlled by the specifying entity",
+`docs/ap2/agent_authorization.md` at google-agentic-commerce/AP2 `e1ea56db72a6385bce3e5c1112b3a56ce60acb43`). It is not
+part of AP2 and AP2 has not reviewed it. Draft: not released, not in a conformance vector, and the JS verifier does not
+implement it (declared). §1–§10 are unchanged: a pack that carries a restriction record is built, sealed and verified
+exactly as any other pack, and its twelve fields and states do not depend on this section.
+
+**Why.** AP2 at `e1ea56d` defines no way to restrict or revoke a mandate once issued: its normative text has no
+restriction, revocation, amendment or supersession of a mandate (searched 2026-10-27 in `docs/ap2/*.md` and
+`code/sdk/schemas/ap2/*.json`; the only "revoke" is `revoke_payment_credential` in the samples, which revokes a payment
+token). `implementation_considerations.md` "Mandate Management" says the Shopping Agent "SHOULD provide a mechanism to
+manage active Mandates"; the Delegate SD-JWT draft (GarethCOliver/gco-delegate-sd-jwt `0c1d686`, "Delegate SD-JWT
+Revocation") says that revocation "present[s] a practical challenge as, unlike a traditional Issuer, an individual Holder
+can not easily distribute revocation information to Verifiers". This profile records, in a pack, that the issuer of an
+open mandate later signed narrower terms for it — and lets a verifier check that they ARE narrower.
+
+### 11.1 The record
+
+A restriction record R is an SD-JWT artifact (§2, ES256, verified as every artifact is) whose issuer payload, after
+disclosure resolution, carries at its TOP LEVEL the claim
+
+`io.github.robertolocatelli81.restricts` = BASE64URL(SHA-256(ASCII bytes of the original's Issuer-signed JWT)), no padding
+
+— the original O being another artifact of the same pack. This is the `issuer_jwt_hash` of the Delegate SD-JWT draft
+("verify that the `issuer_jwt_hash` is present and matches the base64url encoded digest of the preceding Issuer-signed
+JWT or KB-SD-JWT+KB", section "Verification" of `draft-ietf-oauth-delegate-sd-jwt.md` at `0c1d686`) and of the AP2 SDK
+(`compute_issuer_jwt_hash`, `code/sdk/python/ap2/sdk/sdjwt/common.py` at `e1ea56d`): it commits to the signed issuer JWT
+and not to the disclosures a copy carries. (AP2's own example `payment.reference` hashes the whole compact serialization
+instead — measured 2026-10-28: `FzLoxbbtgQGYZxoSM2NJYJtkFTSsdfUBoVEQ12k7JN8` in `payment_mandate.md` is the SHA-256 of the
+open checkout example token including its disclosures and final `~`. The two forms are different values; this profile
+uses only the first.)
+
+R carries the restricted Mandate Content in the same FORM as O. The forms are those of the AP2 SDK's `from_sd_jwt`
+(`code/sdk/python/ap2/sdk/mandate.py` at `e1ea56d`): when the payload has a `delegate_payload` list, the Mandate Content
+is its one element, which MUST be an object (the SDK requires exactly one disclosed item); otherwise the payload itself
+is the Mandate Content. A record is evaluated only against the Mandate Content it carries; R and O in different forms
+are `not_evaluated` (`form_differs`).
+
+### 11.2 Evaluation and receipt
+
+`ap2_evidence.py restriction <pack> [--tsa-cert PEM]` (library: `verify_restrictions(path, tsa_cert=None)`) verifies the
+pack under §6 with the default policy (and `--tsa-cert` passed through), then evaluates every artifact whose resolved
+claims carry the claim of §11.1 at the top level. The receipt is one JSON object:
+
+| field | meaning |
+|---|---|
+| `restriction_profile` | `"io.github.robertolocatelli81.restriction/1"` |
+| `claim` | `"io.github.robertolocatelli81.restricts"` |
+| `admission`, `refusal_class`, `valid` | the §6.9/§6 values of the pack |
+| `time_anchor` | the §6.9 `time_anchor` subject of the pack (`null` on a refusal) |
+| `existed_by` | the earliest `gen_time` among the anchors whose binding AND TSA signature verified (§3.3), else `null` |
+| `restrictions` | one entry per restriction record, in artifact order (below) |
+| `met` | `true` iff `restrictions` is non-empty and every entry is `verified` |
+
+Each entry: `in` (the record's artifact name), `restricts` (the claim value as found, or `null` when it is not a string),
+`original` (the name of the artifact it was evaluated against, or `null`), `same_issuer_jwt` (the other artifacts with
+the same issuer JWT, sorted), `state`, `reasons`, `reported`. `reasons` lists, in evaluation order, one object
+`{"state", "reason", "at"}` per check that did not pass (`at` is a path inside the Mandate Content or the payload, or
+`"original"` / `"restriction"`). `state` is the highest state among `reasons`: `contradicted` > `not_evaluated` >
+`verified`; `verified` only with no reason. `reported` lists `{"reason", "at"}` for what the rules below accept but name
+(never a change of state).
+
+The words are those of §6.9 with this meaning here: **`verified`** — R is bound to O (§11.3) and, under every rule of
+§11.4, no broader than O; **`contradicted`** — a rule of §11.3/§11.4 is not met (R is not shown bound to O, or not shown
+within it under that rule; a rule stricter than AP2 can contradict a record AP2 would find equivalent — declared in
+§11.4); **`not_evaluated`** — this profile cannot judge (the pack is not valid, the original is not in the pack, hidden
+content, a name or a type outside the closed lists of §11.4). Nothing else is `verified`; a record is NEVER `verified`
+when it is broader than O or not bound to it.
+
+Exit: `0` iff `met`; `1` otherwise (refusal included); `2` usage; `74` as §6.10 (a check asked for could not be run here:
+the complete receipt on stdout, one line `check not run here:` on stderr; or the receipt was not written).
+
+### 11.3 Binding (in this order)
+
+1. The pack is admitted and `valid` (§6 step 8, default policy) — else every entry is `not_evaluated` `pack_not_valid` and
+   nothing else is evaluated: a record in a pack that does not verify is not evidence of anything.
+2. The claim value is a string of 43 base64url characters (the length of an unpadded SHA-256) — else `contradicted`
+   `restricts_malformed`.
+3. An artifact of the pack has an issuer JWT whose hash (§11.1) equals it — else `not_evaluated` `original_not_in_pack`.
+   Several artifacts with that same issuer JWT are one signed mandate presented with different disclosures: the one with
+   the fewest undisclosed digests (step 5), then the first in pack order, is O; the others are listed in `same_issuer_jwt`.
+4. Same issuer key: R's and O's snapshotted `key.jwk` are equal on `kty`, `crv`, `x`, `y` — else `contradicted`
+   `issuer_key_differs`. This states that the holder of the key that signed O also signed R; what that key proves about
+   identity is §6 step 7 (self-asserted unless chained to the relying party's anchor), unchanged.
+5. Nothing hidden: every digest of the issuer payload (the `_sd` entries and the `{"...": d}` array placeholders, also
+   inside disclosed values) has its disclosure, in O and in R — else `not_evaluated` `undisclosed_digests` (`at`:
+   `original` or `restriction`). RFC 9901 §4.2.5: "An Issuer MAY add additional digests to the SD-JWT payload that are not
+   associated with any claim" (decoys): a verifier cannot tell a decoy from a hidden constraint, so a hidden element is
+   never assumed absent. A digest that appears more than once is counted here too (RFC 9901 §7.1 step 4: "If any digest
+   value is encountered more than once in the Issuer-signed JWT payload (directly or recursively via other Disclosures),
+   the SD-JWT MUST be rejected"): `not_evaluated` for O, `contradicted` `malformed` for R.
+6. Same form (§11.1), and each form readable: `delegate_payload` present but not a list of exactly one object is
+   `not_evaluated` `form_unsupported` (`at`: `original` / `restriction`); different forms are `not_evaluated`
+   `form_differs`.
+
+### 11.4 No broader (rules)
+
+**Principle, from AP2.** An open mandate is checked conjunctively: "Extract claims from open Mandate Content and verify the
+closed Mandate Content has these values unchanged" and "Extract each Constraint from each open Mandate Content and
+evaluate them against the closed Mandate Content based on the Constraint Type" (`agent_authorization.md`, "Verification
+and Processing Rules"; the SDK's `check_payment_constraints` / `check_checkout_constraints` collect the violations of
+every constraint, `constraints.py`). So R is no broader than O when every requirement of O is met by a requirement of R at
+least as strict: a requirement R adds can only remove closed mandates, except where a rule below says otherwise. A value of
+R canonically equal (§3) to the value of O always meets it. Integers are JSON integers (`type(x) is int`, not a boolean);
+§3.1 already refuses fractions — so the AP2 documentation examples written `100.50` / `1000.00` cannot be carried (declared).
+
+**Top-level claims of the payload** (in the `delegate_payload` form: beside `delegate_payload`; in the other form the
+payload is the Mandate Content and the content rules apply to it):
+
+- `exp`: when O has it, R has it, an integer ≤ O's (`contradicted` `time_widened`); `nbf`: when O has it, R has it, an
+  integer ≥ O's (`time_widened`). R may add either. A non-integer in R is `contradicted` `malformed`, in O `not_evaluated`
+  `original_malformed`.
+- `iss`, `sub`, `aud`, `vct`, `cnf`: present in both with canonically equal values, or absent in both (`contradicted`
+  `claim_changed`; for `cnf` `cnf_differs`: the record binds the same agent key).
+- `iat`, `jti`: not compared (a new token has its own); `iat` is the issuer's statement, never a proven time (§11.5).
+- the claim of §11.1 itself: not compared (O may be a restriction record of a third mandate).
+- any other name: RFC 7519 §4 — "all claims that are not understood by implementations MUST be ignored" — governs the
+  processing of the JWT, which is not rejected; whether such a claim narrows or widens is not known here, so a name this
+  list does not hold is matched only when it is canonically equal in O and R; otherwise `not_evaluated` `unknown_name`.
+
+**Mandate Content.** Supported `vct`: `mandate.payment.open.1` and `mandate.checkout.open.1` (`payment_mandate.md`,
+`checkout_mandate.md`). R's `vct` MUST equal O's (`contradicted` `claim_changed`). Content of any other `vct` is matched
+only when canonically equal; otherwise `not_evaluated` `vct_not_supported`.
+
+- Known keys: the properties of `open_payment_mandate.json` (`vct`, `constraints`, `cnf`, `payee`, `payment_amount`,
+  `payment_instrument`, `pisp`, `execution_date`, `risk_data`, `iat`, `exp`) and of `open_checkout_mandate.json` (`vct`,
+  `constraints`, `cnf`, `iat`, `exp`). Another key is matched only when canonically equal in both; otherwise `not_evaluated`
+  `unknown_name`.
+- `cnf`: canonically equal (`cnf_differs`). `exp`, `iat`: as at the top level.
+- Pre-set values — every other known key (`payee`, `payment_amount`, `payment_instrument`, `pisp`, `execution_date`,
+  `risk_data`): present in O → present and canonically equal in R (`contradicted` `preset_changed`; AP2 rule 2 above);
+  absent in O → R may add it (one more value the closed mandate must carry unchanged).
+- `constraints`: a list in R (`contradicted` `malformed`) and in O (`not_evaluated` `original_malformed`). For EACH
+  constraint c of O, R holds a constraint that meets it: canonically equal, or of the same `type` and within c by the table
+  below. R holds none of that type: `contradicted` `constraint_removed`; of that type but none within: `contradicted`
+  `constraint_widened` (`at`: c's path in O). c of a type outside the table: met only by an equal copy, else
+  `not_evaluated` `unknown_name`; c malformed (a type of the table with a missing required key, a wrong type, or a key
+  outside its schema): met only by an equal copy, else `not_evaluated` `original_malformed`.
+- Each constraint of R that is not an equal copy of a constraint of O: a type of the table MUST be well-formed — required
+  keys present, every key in the schema's `properties`, JSON types exact (`contradicted` `malformed`: the SDK's pydantic
+  models would coerce `"999999"` into an integer, so a mistyped bound could be read wider than it looks; a key outside the
+  schema is `not_evaluated` `unknown_name`). A type outside the table is ACCEPTED and listed in `reported`
+  (`unknown_constraint_added`): AP2 — "Any unknown Constraints MUST be treated as failing evaluation" (same section) — so
+  it can only remove closed mandates. `payment.agent_recurrence` absent from O and present in R is `not_evaluated`
+  `recurrence_added`: AP2 says it "Provides conditions for the agent to reuse this Payment Mandate multiple times" and does
+  not say whether a mandate without it may be reused, so adding it may grant reuse.
+
+| `type` (schema keys) | c' (in R) is within c (in O) when |
+|---|---|
+| `payment.amount_range` (`type`, `currency` string, `max` integer — required; `min` integer) | same `currency`; `max'` ≤ `max`; when c has `min`, c' has `min'` ≥ `min` ("If absent, there is no minimum") |
+| `payment.budget` (`type`, `currency` string, `max` integer — required) | same `currency`; `max'` ≤ `max` |
+| `payment.agent_recurrence` (`type`, `frequency` enum — required; `max_occurrences` integer) | `frequency'` no more frequent, in the order `ON_DEMAND` < `DAILY` < `WEEKLY` < `BIWEEKLY` < `MONTHLY` < `QUARTERLY` < `ANNUALLY` (this profile's reading of "sufficiently separated in time from the previous presentation to meet the `frequency` definition", `payment_mandate.md`; AP2 states no order and the SDK does not evaluate `frequency`); when c has `max_occurrences`, c' has one ≤ it |
+| `payment.allowed_payees`, `payment.allowed_payment_instruments`, `payment.allowed_pisps`, `checkout.allowed_merchants` (`type`, `allowed` list of objects — required) | every element of `allowed'` is canonically equal to an element of `allowed` (stricter than AP2's matching — `merchant_matches` compares `id`, or `name`+`website`; an element spelled differently that AP2 would match the same is `constraint_widened` here, declared) |
+| `payment.execution_date` (`type` required; `not_before`, `not_after` strings) | when c has `not_before`, c' has one ≥ it; when c has `not_after`, c' has one ≤ it. Comparable values are `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SSZ` (ASCII digits, a real calendar date and time), both of the SAME form; another form or two forms is `not_evaluated` `date_form` |
+| `payment.reference` (`type`, `conditional_transaction_id` string — required) | equal `conditional_transaction_id` |
+| `checkout.line_items` (`type`, `items` non-empty list of `{id` string, `acceptable_items` list of objects, `quantity` integer > 0`}` — required) | same number of `items`; at each position the same `id` and the same `quantity`, and every element of `acceptable_items'` canonically equal to an element of `acceptable_items`; an EMPTY `acceptable_items'` where O's is not empty is `constraint_widened` (the SDK treats an empty list as a wildcard, `max_flow_helper.py`: `req_is_wildcard = not req.acceptable_items`). An `items` entry cannot be added or removed: the constraint "is met if the maximal flow equals the total constraint `items` quantity and the total checkout `items` quantity" (`checkout_mandate.md`), so another set of entries admits other checkouts, not fewer |
+
+### 11.5 What a `verified` record proves, and what it does not (declared)
+
+Proves, within a valid pack: the key that signed O signed R; R names O by the hash of O's signed issuer JWT; under §11.4,
+every closed mandate R admits, O admits too; and — only with `time_anchor` `verified` (the TSA's certificate given,
+§3.2) — R existed by `existed_by`.
+
+Does NOT prove: that the agent, the merchant, the credential provider or any verifier RECEIVED R or applies it; that O
+stopped being valid — AP2 has no revocation, O stays a mandate a verifier that holds only O will accept within O's terms;
+the time R was signed (`iat` is the issuer's statement; only the anchor gives an upper bound, and only for the pack); who
+the key belongs to (§6 step 7). R is itself a well-formed mandate that an AP2 stack can verify on its own (it is
+narrower). Not covered: restrictions of a delegated hop (a KB-SD-JWT of the chain), closed mandates, the `payment.budget`
+and `payment.agent_recurrence` STATE (amounts already spent, uses already made: a restriction narrows the terms, it does
+not account for what O already authorised), and AP2 revisions after `e1ea56d`. AP2's matching rules are looser than the
+equalities of §11.4 in two places (allowed lists, date forms): there the profile can say `contradicted` or
+`not_evaluated` where AP2 would find the terms equivalent — never `verified` where they are broader.
