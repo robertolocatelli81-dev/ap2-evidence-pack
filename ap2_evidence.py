@@ -1693,6 +1693,422 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
     return receipt
 
 
+# ────────────────────────────────────────────────────────── restriction record (SPEC §11, DRAFT 1.7.0)
+# A profile of this repository, not of AP2: a record that names an open mandate of the same pack by the hash of its
+# issuer JWT and must be no broader than it. Closed by construction: a name or a type outside the lists of SPEC §11.4 is
+# `not_evaluated` (or, for an added constraint of an unknown type, the AP2 rule "Any unknown Constraints MUST be treated as
+# failing evaluation" — accepted and REPORTED), a hidden digest is never assumed absent, and nothing is `verified` that is
+# broader than the original or not bound to it.
+
+RESTRICTS_CLAIM = "io.github.robertolocatelli81.restricts"
+RESTRICTION_PROFILE = "io.github.robertolocatelli81.restriction/1"
+_FREQ_ORDER = ("ON_DEMAND", "DAILY", "WEEKLY", "BIWEEKLY", "MONTHLY", "QUARTERLY", "ANNUALLY")   # SPEC §11.4: least to most separated
+_OPEN_CONTENT_KEYS = {   # SPEC §11.4: the properties of open_payment_mandate.json / open_checkout_mandate.json at AP2 e1ea56d
+    "mandate.payment.open.1": ("vct", "constraints", "cnf", "payee", "payment_amount", "payment_instrument", "pisp",
+                               "execution_date", "risk_data", "iat", "exp"),
+    "mandate.checkout.open.1": ("vct", "constraints", "cnf", "iat", "exp"),
+}
+_B64URL_43 = re.compile(r"[A-Za-z0-9_-]{43}")
+
+
+def _is_int(v):
+    return type(v) is int   # a JSON integer; never a boolean (bool is an int subclass in Python)
+
+
+def _is_list_of_obj(v):
+    return isinstance(v, list) and all(isinstance(x, dict) for x in v)
+
+
+_ALLOWED_LIST = ({"allowed": _is_list_of_obj}, {})
+_CONSTRAINT_SCHEMAS = {   # type -> (required {key: predicate}, optional {key: predicate}); SPEC §11.4 table
+    "payment.amount_range": ({"currency": _is_str, "max": _is_int}, {"min": _is_int}),
+    "payment.budget": ({"currency": _is_str, "max": _is_int}, {}),
+    "payment.agent_recurrence": ({"frequency": lambda v: isinstance(v, str) and v in _FREQ_ORDER}, {"max_occurrences": _is_int}),
+    "payment.allowed_payees": _ALLOWED_LIST,
+    "payment.allowed_payment_instruments": _ALLOWED_LIST,
+    "payment.allowed_pisps": _ALLOWED_LIST,
+    "checkout.allowed_merchants": _ALLOWED_LIST,
+    "payment.execution_date": ({}, {"not_before": _is_str, "not_after": _is_str}),
+    "payment.reference": ({"conditional_transaction_id": _is_str}, {}),
+    "checkout.line_items": ({"items": lambda v: isinstance(v, list) and len(v) > 0 and all(isinstance(x, dict) for x in v)}, {}),
+}
+_LINE_ITEM_KEYS = ("acceptable_items", "id", "quantity")
+
+
+def issuer_jwt_hash(compact: str) -> str:
+    """SPEC §11.1: BASE64URL(SHA-256(ASCII of the Issuer-signed JWT)) — the `issuer_jwt_hash` of the Delegate SD-JWT draft
+    and of the AP2 SDK's compute_issuer_jwt_hash; the disclosures and the KB-JWT are not part of it."""
+    return _sha256_b64url(compact.split("~", 1)[0].encode("ascii"))
+
+
+def _digest_census(parsed: Dict) -> Tuple[int, bool]:
+    """SPEC §11.3 step 5: (digests of the issuer payload with no disclosure, a digest seen more than once). Every digest is
+    counted: the `_sd` entries and the {"...": d} placeholders, in the payload and inside every disclosed value (all of
+    them are reachable: an unreferenced disclosure already failed §6 step 2)."""
+    seen: List[str] = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            sd = node.get("_sd")
+            if isinstance(sd, list):
+                seen.extend(x for x in sd if isinstance(x, str))
+            for k, v in node.items():
+                if k != "_sd":
+                    walk(v)
+        elif isinstance(node, list):
+            for item in node:
+                if isinstance(item, dict) and set(item) == {"..."} and isinstance(item["..."], str):
+                    seen.append(item["..."])
+                else:
+                    walk(item)
+    walk(parsed["payload"])
+    for d in parsed["disclosures"]:
+        walk(_loads_segment(_b64url_decode(d), "disclosure")[-1])
+    disclosed = {_disclosure_digest(d) for d in parsed["disclosures"]}
+    return len(set(seen) - disclosed), len(seen) != len(set(seen))
+
+
+def _mandate_form(resolved: Dict) -> Tuple[Optional[str], Optional[Dict]]:
+    """SPEC §11.1 (the AP2 SDK's from_sd_jwt): `delegate_payload` holding exactly one object, else the payload itself.
+    (None, None) when `delegate_payload` is there but not a list of one object."""
+    if "delegate_payload" not in resolved:
+        return "payload", resolved
+    dp = resolved["delegate_payload"]
+    if isinstance(dp, list) and len(dp) == 1 and isinstance(dp[0], dict):
+        return "delegate_payload", dp[0]
+    return None, None
+
+
+def _constraint_shape(c) -> Tuple[str, Optional[str]]:
+    """SPEC §11.4: ("ok" | "unknown_type" | "malformed" | "unknown_name", what). A wrong type or a missing required key is
+    checked BEFORE an unknown key, so a record with both is contradicted, not merely not_evaluated."""
+    if not isinstance(c, dict) or not isinstance(c.get("type"), str):
+        return "malformed", "type"
+    schema = _CONSTRAINT_SCHEMAS.get(c["type"])
+    if schema is None:
+        return "unknown_type", c["type"]
+    req, opt = schema
+    for k, pred in req.items():
+        if k not in c or not pred(c[k]):
+            return "malformed", k
+    for k, pred in opt.items():
+        if k in c and not pred(c[k]):
+            return "malformed", k
+    if c["type"] == "checkout.line_items":
+        for i, it in enumerate(c["items"]):
+            if not (_is_str(it.get("id")) and _is_list_of_obj(it.get("acceptable_items")) and _is_int(it.get("quantity"))
+                    and it["quantity"] > 0):
+                return "malformed", f"items[{i}]"
+    unknown = sorted(k for k in c if k != "type" and k not in req and k not in opt)
+    if unknown:
+        return "unknown_name", unknown[0]
+    if c["type"] == "checkout.line_items":
+        for i, it in enumerate(c["items"]):
+            extra = sorted(k for k in it if k not in _LINE_ITEM_KEYS)
+            if extra:
+                return "unknown_name", f"items[{i}].{extra[0]}"
+    return "ok", None
+
+
+def _date_form(s: str) -> Optional[str]:
+    """SPEC §11.4 execution_date: the two comparable forms, ASCII digits, a real calendar date (and time); else None."""
+    for form, rx, fmt in (("date", r"[0-9]{4}-[0-9]{2}-[0-9]{2}", "%Y-%m-%d"),
+                          ("datetime", r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", "%Y-%m-%dT%H:%M:%SZ")):
+        if re.fullmatch(rx, s):
+            try:
+                datetime.strptime(s, fmt)
+            except ValueError:
+                return None
+            return form
+    return None
+
+
+def _subset(narrow: List, wide: List) -> bool:
+    """Every element of `narrow` canonically equal (§3) to an element of `wide`."""
+    w = {_canon(x) for x in wide}
+    return all(_canon(x) in w for x in narrow)
+
+
+def _within(t: str, o: Dict, r: Dict) -> Optional[bool]:
+    """SPEC §11.4 table: is the well-formed constraint `r` (in R) within the well-formed constraint `o` (in O), both of
+    type `t`? None = not comparable here (execution_date forms)."""
+    if t == "payment.amount_range":
+        if r["currency"] != o["currency"] or r["max"] > o["max"]:
+            return False
+        return not ("min" in o and ("min" not in r or r["min"] < o["min"]))
+    if t == "payment.budget":
+        return r["currency"] == o["currency"] and r["max"] <= o["max"]
+    if t == "payment.agent_recurrence":
+        if _FREQ_ORDER.index(r["frequency"]) < _FREQ_ORDER.index(o["frequency"]):
+            return False
+        return not ("max_occurrences" in o and ("max_occurrences" not in r or r["max_occurrences"] > o["max_occurrences"]))
+    if t in ("payment.allowed_payees", "payment.allowed_payment_instruments", "payment.allowed_pisps", "checkout.allowed_merchants"):
+        return _subset(r["allowed"], o["allowed"])
+    if t == "payment.reference":
+        return r["conditional_transaction_id"] == o["conditional_transaction_id"]
+    if t == "payment.execution_date":
+        out: Optional[bool] = True
+        for bound, later_is_narrower in (("not_before", True), ("not_after", False)):
+            if bound not in o:
+                continue
+            if bound not in r:
+                return False
+            fo, fr = _date_form(o[bound]), _date_form(r[bound])
+            if fo is None or fo != fr:
+                out = None
+                continue
+            if (r[bound] < o[bound]) if later_is_narrower else (r[bound] > o[bound]):
+                return False
+        return out
+    if t == "checkout.line_items":
+        if len(r["items"]) != len(o["items"]):
+            return False
+        for ri, oi in zip(r["items"], o["items"]):
+            if ri["id"] != oi["id"] or ri["quantity"] != oi["quantity"]:
+                return False
+            if not ri["acceptable_items"] and oi["acceptable_items"]:   # an empty list is a wildcard in the AP2 SDK
+                return False
+            if not _subset(ri["acceptable_items"], oi["acceptable_items"]):
+                return False
+        return True
+    raise AssertionError(t)   # unreachable: _within is called only on a type of _CONSTRAINT_SCHEMAS
+
+
+def evaluate_restriction(original: Dict, restriction: Dict) -> Dict:
+    """SPEC §11.3 steps 4–6 and §11.4. `original` / `restriction`: {"parsed": parse_sd_jwt(...), "resolved": the resolved
+    claims, "jwk": the snapshotted key.jwk} of two artifacts that verified in a valid pack. Returns
+    {"state", "reasons": [{"state", "reason", "at"}], "reported": [{"reason", "at"}]}."""
+    reasons: List[Dict] = []
+    reported: List[Dict] = []
+
+    def no(state, reason, at):
+        reasons.append({"state": state, "reason": reason, "at": at})
+
+    def done():
+        states = {x["state"] for x in reasons}
+        state = "contradicted" if "contradicted" in states else "not_evaluated" if states else "verified"
+        return {"state": state, "reasons": reasons, "reported": reported}
+
+    ko, kr = original["jwk"], restriction["jwk"]   # step 4: the same issuer key
+    if not (isinstance(ko, dict) and isinstance(kr, dict)) or any(ko.get(k) != kr.get(k) for k in ("kty", "crv", "x", "y")):
+        no("contradicted", "issuer_key_differs", "restriction")
+    for side, art in (("original", original), ("restriction", restriction)):   # step 5: nothing hidden
+        hidden, repeated = _digest_census(art["parsed"])
+        if repeated:
+            no("not_evaluated" if side == "original" else "contradicted", "original_malformed" if side == "original" else "malformed", side)
+        if hidden:
+            no("not_evaluated", "undisclosed_digests", side)
+    if any(x["reason"] in ("undisclosed_digests", "malformed", "original_malformed") for x in reasons):
+        return done()
+    fo, co = _mandate_form(original["resolved"])   # step 6: the same, readable form
+    fr, cr = _mandate_form(restriction["resolved"])
+    if fo is None:
+        no("not_evaluated", "form_unsupported", "original")
+    if fr is None:
+        no("not_evaluated", "form_unsupported", "restriction")
+    if fo is None or fr is None:
+        return done()
+    if fo != fr:
+        no("not_evaluated", "form_differs", "restriction")
+        return done()
+
+    def time_rule(o, r, k, at, later_is_narrower):
+        if k in o and not _is_int(o[k]):
+            no("not_evaluated", "original_malformed", "original." + at)
+        elif k in r and not _is_int(r[k]):
+            no("contradicted", "malformed", "restriction." + at)
+        elif k in o and (k not in r or (r[k] < o[k] if later_is_narrower else r[k] > o[k])):
+            no("contradicted", "time_widened", "restriction." + at)
+
+    def equal_rule(o, r, k, at, reason):
+        if (k in o) != (k in r) or (k in o and _canon(o[k]) != _canon(r[k])):
+            no("contradicted", reason, "restriction." + at)
+
+    def unknown_rule(o, r, k, at):
+        if not (k in o and k in r and _canon(o[k]) == _canon(r[k])):
+            no("not_evaluated", "unknown_name", ("original." if k in o else "restriction.") + at)
+
+    top_rules = {"exp": lambda o, r, k, at: time_rule(o, r, k, at, False),
+                 "nbf": lambda o, r, k, at: time_rule(o, r, k, at, True),
+                 "cnf": lambda o, r, k, at: equal_rule(o, r, k, at, "cnf_differs")}
+    for k in ("iss", "sub", "aud", "vct"):
+        top_rules[k] = lambda o, r, k, at: equal_rule(o, r, k, at, "claim_changed")
+    def typed_only(o, r, k, at, pred):   # iat, jti: not compared (a new token has its own), but typed (RFC 7519 §4.1.6/§4.1.7)
+        if k in o and not pred(o[k]):
+            no("not_evaluated", "original_malformed", "original." + at)
+        if k in r and not pred(r[k]):
+            no("contradicted", "malformed", "restriction." + at)
+
+    top_rules["iat"] = lambda o, r, k, at: typed_only(o, r, k, at, _is_int)
+    top_rules["jti"] = lambda o, r, k, at: typed_only(o, r, k, at, _is_str)
+    top_rules[RESTRICTS_CLAIM] = lambda o, r, k, at: None   # not compared: O may restrict a third mandate (SPEC §11.4)
+
+    def compare_keys(o, r, rules, prefix):
+        for k in sorted(set(o) | set(r)):
+            (rules.get(k) or unknown_rule)(o, r, k, prefix + k)
+
+    if fo == "delegate_payload":   # the top level beside delegate_payload; the content is compared below
+        rules = dict(top_rules, delegate_payload=lambda o, r, k, at: None)
+        compare_keys(original["resolved"], restriction["resolved"], rules, "")
+        base = "delegate_payload[0]."
+    else:
+        base = ""
+
+    vo, vr = co.get("vct"), cr.get("vct")
+    if not isinstance(vo, str) or vo not in _OPEN_CONTENT_KEYS:   # SPEC §11.4: another vct is matched only when equal
+        if _canon(co) != _canon(cr):
+            no("not_evaluated", "vct_not_supported", "original." + base + "vct")
+        return done()
+    if vr != vo:
+        no("contradicted", "claim_changed", "restriction." + base + "vct")
+        return done()
+    preset = lambda o, r, k, at: (no("contradicted", "preset_changed", "restriction." + at)   # noqa: E731
+                                  if k in o and (k not in r or _canon(o[k]) != _canon(r[k])) else None)
+    content_rules = {"vct": lambda o, r, k, at: None, "constraints": lambda o, r, k, at: None,
+                     "cnf": top_rules["cnf"], "exp": top_rules["exp"], "iat": top_rules["iat"]}
+    for k in _OPEN_CONTENT_KEYS[vo]:
+        content_rules.setdefault(k, preset)
+    if fo == "payload":   # the payload IS the content: the registered top-level names keep their rules
+        for k, f in top_rules.items():
+            content_rules.setdefault(k, f)
+    compare_keys(co, cr, content_rules, base)
+
+    oc, rc = co.get("constraints", []), cr.get("constraints", [])
+    if not isinstance(oc, list):
+        no("not_evaluated", "original_malformed", "original." + base + "constraints")
+        return done()
+    if not isinstance(rc, list):
+        no("contradicted", "malformed", "restriction." + base + "constraints")
+        return done()
+    rcanon = {_canon(x) for x in rc}
+    ocanon = {_canon(x) for x in oc}
+    shapes = [_constraint_shape(x) for x in rc]
+    for i, c in enumerate(oc):   # every requirement of O is met by one of R
+        at = f"{base}constraints[{i}]"
+        if _canon(c) in rcanon:
+            continue
+        shape, what = _constraint_shape(c)
+        if shape == "unknown_type":
+            no("not_evaluated", "unknown_name", "original." + at)
+            continue
+        if shape != "ok":
+            no("not_evaluated", "original_malformed", f"original.{at}" + (f".{what}" if what else ""))
+            continue
+        same = [(x, s) for x, s in zip(rc, shapes) if isinstance(x, dict) and x.get("type") == c["type"]]
+        if not same:
+            no("contradicted", "constraint_removed", "original." + at)
+            continue
+        verdicts = [_within(c["type"], c, x) for x, (s, _) in same if s == "ok"]
+        if True in verdicts:
+            continue
+        if any(s == "unknown_name" for _, (s, _) in same):
+            continue   # that constraint of R is not_evaluated below: it may be the one within c
+        if None in verdicts:
+            no("not_evaluated", "date_form", "original." + at)
+        else:
+            no("contradicted", "constraint_widened", "original." + at)
+    o_types = {c.get("type") for c in oc if isinstance(c, dict)}
+    for j, (x, (shape, what)) in enumerate(zip(rc, shapes)):   # every constraint R adds
+        at = f"restriction.{base}constraints[{j}]"
+        if _canon(x) in ocanon:
+            continue
+        if shape == "unknown_type":
+            reported.append({"reason": "unknown_constraint_added", "at": at})
+        elif shape == "malformed":
+            no("contradicted", "malformed", at + (f".{what}" if what else ""))
+        elif shape == "unknown_name":
+            no("not_evaluated", "unknown_name", f"{at}.{what}")
+        elif x["type"] == "payment.agent_recurrence" and "payment.agent_recurrence" not in o_types:
+            no("not_evaluated", "recurrence_added", at)
+    return done()
+
+
+def _existed_by(receipt: Dict) -> Optional[str]:
+    """SPEC §11.2: the earliest gen_time among the anchors whose binding AND TSA signature verified (None without one)."""
+    cands = [x for x in [receipt.get("rfc3161") or {}] + list(receipt.get("anchors") or [])
+             if x.get("verified") is True and x.get("tsa_verified") is True and isinstance(x.get("gen_time"), str)]
+    return min((x["gen_time"] for x in cands), key=_gt_key, default=None)
+
+
+def verify_restrictions(path: str, tsa_cert: Optional[str] = None) -> Dict:
+    """SPEC §11.2: verify the pack (§6, default policy, `tsa_cert` passed through), then evaluate every restriction record
+    in it. The pack is read ONCE: the verification and the evaluation run on the same snapshot (a private copy of the
+    parsed file), so a file swapped between two reads cannot give one verdict about two contents. Raises Ap2WriteError when
+    the copy cannot be written (no receipt), or — like verify_evidence — when a check asked for could not be run here: its
+    `receipt` is then the complete restriction receipt."""
+    import shutil
+    import tempfile
+    not_run, ev = None, None
+    try:
+        ev = read_evidence_file(path)
+    except Ap2EvidenceError as e:   # the refusal verify_evidence gives for the same file (SPEC §3.1), without a second read
+        receipt = _refusal_receipt(str(e), "malformed")
+    else:
+        try:
+            tmp = tempfile.mkdtemp(prefix="ap2-restriction-")
+        except OSError as e:
+            raise Ap2WriteError(f"cannot write the private copy of the pack: {type(e).__name__}: "
+                                f"{os.strerror(e.errno) if isinstance(e.errno, int) else e}")
+        try:
+            copy = os.path.join(tmp, "pack.json")
+            try:
+                with open(copy, "w", encoding="utf-8") as fh:
+                    # ensure_ascii=False + compact separators: never longer than the file read (an escaped emoji would be),
+                    # so a pack under the size bound stays under it; the parse is strict, so the copy means what the file meant
+                    fh.write(json.dumps(ev, ensure_ascii=False, separators=(",", ":")))
+            except OSError as e:
+                raise Ap2WriteError(f"cannot write the private copy of the pack: {type(e).__name__}: "
+                                    f"{os.strerror(e.errno) if isinstance(e.errno, int) else e}")
+            try:
+                receipt = verify_evidence(copy, tsa_cert=tsa_cert)
+            except Ap2WriteError as e:
+                if e.receipt is None:
+                    raise
+                receipt, not_run = e.receipt, e
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+    out = {"restriction_profile": RESTRICTION_PROFILE, "claim": RESTRICTS_CLAIM,
+           "admission": receipt.get("admission"), "refusal_class": receipt.get("refusal_class"), "valid": receipt.get("valid"),
+           "time_anchor": (receipt.get("states") or {}).get("time_anchor"), "existed_by": _existed_by(receipt),
+           "restrictions": [], "met": False}
+    if receipt.get("admission") == "admitted":
+        arts = []
+        for a in ev["artifacts"]:   # admitted: a list of objects with unique non-empty string names (§6 step 1)
+            try:
+                parsed = parse_sd_jwt(a["sd_jwt_compact"])
+                resolved = resolve_disclosures(parsed["payload"], parsed["disclosures"])
+                arts.append({"name": a["name"], "parsed": parsed, "resolved": resolved, "jwk": a["key"]["jwk"],
+                             "hash": issuer_jwt_hash(parsed["compact"])})
+            except Exception:  # noqa: BLE001 — an artifact that does not parse is an error of the pack, which is then not valid
+                arts.append({"name": a.get("name"), "resolved": None})
+        for r in arts:
+            if not isinstance(r["resolved"], dict) or RESTRICTS_CLAIM not in r["resolved"]:
+                continue
+            val = r["resolved"][RESTRICTS_CLAIM]
+            entry = {"in": r["name"], "restricts": val if isinstance(val, str) else None, "original": None,
+                     "same_issuer_jwt": [], "state": "not_evaluated", "reasons": [], "reported": []}
+            out["restrictions"].append(entry)
+            if receipt.get("valid") is not True:   # step 1
+                entry["reasons"] = [{"state": "not_evaluated", "reason": "pack_not_valid", "at": "restriction"}]
+                continue
+            if not isinstance(val, str) or not _B64URL_43.fullmatch(val):   # step 2
+                entry.update(state="contradicted", reasons=[{"state": "contradicted", "reason": "restricts_malformed", "at": "restriction"}])
+                continue
+            matches = [o for o in arts if o is not r and o.get("hash") == val]   # step 3
+            if not matches:
+                entry["reasons"] = [{"state": "not_evaluated", "reason": "original_not_in_pack", "at": "restriction"}]
+                continue
+            matches.sort(key=lambda o: _digest_census(o["parsed"])[0])   # stable: the fewest hidden digests, then pack order
+            o = matches[0]
+            entry["original"] = o["name"]
+            entry["same_issuer_jwt"] = sorted(m["name"] for m in matches[1:])
+            entry.update(evaluate_restriction(o, r))
+        out["met"] = bool(out["restrictions"]) and all(e["state"] == "verified" for e in out["restrictions"])
+    if not_run is not None:
+        raise Ap2WriteError(str(not_run), receipt=out)
+    return out
+
+
 # ────────────────────────────────────────────────────────── CLI
 
 EX_IOERR = 74   # 1.5.2 — sysexits.h: the outcome was computed but its receipt (or the output file) was not written whole
@@ -1923,6 +2339,9 @@ def _main(argv: Optional[List[str]] = None) -> int:
     v.add_argument("--trust-anchor", help="PEM trust anchor: validate the artifact x5c chain with openssl verify. Without it every key is self-asserted (offline, a certificate proves only that the signer wrote it) — the JS verifier cannot validate chains and reports chain_verified null (declared)")
     v.add_argument("--min-anchors", help="policy: at least N distinct anchors must verify (SPEC §3.3; --require-anchor alone is 1)")
     v.add_argument("--tsa-cert", help="PEM certificate (or chain) of the TSA: verify the token's signature and chain with openssl ts -verify (without it, the TSA is NOT verified — declared)")
+    rs = sub.add_parser("restriction", allow_abbrev=False, add_help=False)   # SPEC §11 (draft 1.7.0)
+    rs.add_argument("evidence")
+    rs.add_argument("--tsa-cert", help="PEM certificate (or chain) of the TSA, as for verify: without it `existed_by` is null")
     raw = list(sys.argv[1:] if argv is None else argv)
     # 1.1.0: one CLI grammar with the sibling verifiers — "" or a flag as a value, "--", -h/--help, a value on a boolean flag,
     # an abbreviated flag = usage (exit 2, no verdict); the file path itself must not be "" or flag-like
@@ -2034,6 +2453,30 @@ def _main(argv: Optional[List[str]] = None) -> int:
         if why is not None:   # 1.5.2: never the verdict's 0/1 when the receipt did not reach stdout whole
             return _not_written(why)
         return 0 if r["valid"] else 1
+    if a.cmd == "restriction":   # SPEC §11.2: exit 0 iff every restriction record of a valid pack is verified
+        if a.evidence == "" or a.evidence.startswith("-"):
+            p.error(f"evidence path needs a value (got {a.evidence!r})")
+        if a.tsa_cert is not None:
+            try:
+                ok = stat.S_ISREG(os.stat(a.tsa_cert).st_mode) and os.access(a.tsa_cert, os.R_OK)
+            except (OSError, ValueError):
+                ok = False
+            if not ok:
+                p.error(f"--tsa-cert: cannot read {a.tsa_cert!r} (not a readable regular file)")
+        try:
+            r = verify_restrictions(a.evidence, tsa_cert=a.tsa_cert)
+        except Ap2WriteError as e:
+            if e.receipt is None:
+                return _not_written(str(e))
+            why = _emit(json.dumps(e.receipt, indent=1))
+            if why is not None:
+                return _not_written(why)
+            _say(f"check not run here: {e}\n")
+            return EX_IOERR
+        why = _emit(json.dumps(r, indent=1))
+        if why is not None:
+            return _not_written(why)
+        return 0 if r["met"] else 1
     p.print_help(sys.stderr)   # r3: usage goes to stderr, no verdict on stdout — as every other usage path and the JS verifier
     return 2
 

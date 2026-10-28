@@ -841,7 +841,9 @@ payload is the Mandate Content and the content rules apply to it):
   `original_malformed`.
 - `iss`, `sub`, `aud`, `vct`, `cnf`: present in both with canonically equal values, or absent in both (`contradicted`
   `claim_changed`; for `cnf` `cnf_differs`: the record binds the same agent key).
-- `iat`, `jti`: not compared (a new token has its own); `iat` is the issuer's statement, never a proven time (§11.5).
+- `iat`, `jti`: not compared (a new token has its own), but typed — `iat` an integer, `jti` a string (RFC 7519 §4.1.6,
+  §4.1.7): another type is `contradicted` `malformed` in R, `not_evaluated` `original_malformed` in O. `iat` is the
+  issuer's statement, never a proven time (§11.5).
 - the claim of §11.1 itself: not compared (O may be a restriction record of a third mandate).
 - any other name: RFC 7519 §4 — "all claims that are not understood by implementations MUST be ignored" — governs the
   processing of the JWT, which is not rejected; whether such a claim narrows or widens is not known here, so a name this
@@ -882,7 +884,7 @@ only when canonically equal; otherwise `not_evaluated` `vct_not_supported`.
 | `payment.allowed_payees`, `payment.allowed_payment_instruments`, `payment.allowed_pisps`, `checkout.allowed_merchants` (`type`, `allowed` list of objects — required) | every element of `allowed'` is canonically equal to an element of `allowed` (stricter than AP2's matching — `merchant_matches` compares `id`, or `name`+`website`; an element spelled differently that AP2 would match the same is `constraint_widened` here, declared) |
 | `payment.execution_date` (`type` required; `not_before`, `not_after` strings) | when c has `not_before`, c' has one ≥ it; when c has `not_after`, c' has one ≤ it. Comparable values are `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SSZ` (ASCII digits, a real calendar date and time), both of the SAME form; another form or two forms is `not_evaluated` `date_form` |
 | `payment.reference` (`type`, `conditional_transaction_id` string — required) | equal `conditional_transaction_id` |
-| `checkout.line_items` (`type`, `items` non-empty list of `{id` string, `acceptable_items` list of objects, `quantity` integer > 0`}` — required) | same number of `items`; at each position the same `id` and the same `quantity`, and every element of `acceptable_items'` canonically equal to an element of `acceptable_items`; an EMPTY `acceptable_items'` where O's is not empty is `constraint_widened` (the SDK treats an empty list as a wildcard, `max_flow_helper.py`: `req_is_wildcard = not req.acceptable_items`). An `items` entry cannot be added or removed: the constraint "is met if the maximal flow equals the total constraint `items` quantity and the total checkout `items` quantity" (`checkout_mandate.md`), so another set of entries admits other checkouts, not fewer |
+| `checkout.line_items` (`type`, `items` non-empty list of `{id` string, `acceptable_items` list of objects, `quantity` integer > 0`}` — required) | same number of `items`; at each position the same `id` and the same `quantity`, and every element of `acceptable_items'` canonically equal to an element of `acceptable_items`; an EMPTY list on one side only is `constraint_widened`: the AP2 text matches an item "if its ID is present in the revealed `acceptable_items`" (`checkout_mandate.md`), so an empty list admits no item, while the SDK treats it as a wildcard (`max_flow_helper.py`: `req_is_wildcard = not req.acceptable_items`) — under one of the two readings the record is broader. An `items` entry cannot be added or removed: the constraint "is met if the maximal flow equals the total constraint `items` quantity and the total checkout `items` quantity" (`checkout_mandate.md`), so another set of entries admits other checkouts, not fewer |
 
 ### 11.5 What a `verified` record proves, and what it does not (declared)
 
