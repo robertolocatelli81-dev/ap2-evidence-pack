@@ -176,6 +176,12 @@ CHK2["constraints"][1]["allowed"].append(copy.deepcopy(EX_MERCHANT_2))
 CHK2["constraints"][0]["items"][0]["acceptable_items"].append({"id": "BAB1234", "title": "Red Style"})   # checkout_mandate.md example
 
 
+PRESET = copy.deepcopy(PAY)   # pre-set values (agent_authorization.md rule 2), from the closed mandate example of payment_mandate.md
+PRESET.update(payee={"id": "merchant_1", "name": "Demo Merchant", "website": "https://demo-merchant.example"},
+              payment_amount={"amount": 19900, "currency": "USD"}, payment_instrument={"id": "stub", "type": "card", "description": "Card ••••4242"},
+              risk_data={"device": "trusted-surface"})
+
+
 def ci(content, t):
     """The index of the first constraint of type t."""
     return next(i for i, c in enumerate(content["constraints"]) if isinstance(c, dict) and c.get("type") == t)
@@ -735,7 +741,8 @@ class TestGenerative(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.o_rich, cls.o_chk = issue(RICH), issue(CHK2)
+        cls.o_rich, cls.o_chk, cls.o_pre = issue(RICH), issue(CHK2), issue(PRESET)
+        cls.bases = ((RICH, cls.o_rich), (CHK2, cls.o_chk), (PRESET, cls.o_pre))
 
     def r(self, content, top=None, **kw):
         return direct(self.o_rich, restrict(self.o_rich, content, top, **kw))
@@ -771,7 +778,7 @@ class TestGenerative(unittest.TestCase):
 
     def test_an_unknown_key_at_every_level(self):
         count = 0
-        for base, o in ((RICH, self.o_rich), (CHK2, self.o_chk)):
+        for base, o in self.bases:
             for path, obj in list(_paths(base)):
                 for k in HOSTILE_KEYS:
                     if k in obj:
@@ -788,14 +795,14 @@ class TestGenerative(unittest.TestCase):
                         self.assertEqual(res["state"], exp[0], (path, k, res))
                         self.assertIn(exp, why(res), (path, k, res))
                     count += 1
-        self.assertEqual(count, 284)   # the cases this bench reaches (deterministic: no randomness here)
+        self.assertEqual(count, 404)   # the cases this bench reaches (deterministic: no randomness here)
         for k in HOSTILE_KEYS:   # the top level of the payload, beside delegate_payload
             res = direct(self.o_rich, restrict(self.o_rich, RICH, {k: 1}))
             self.assertEqual(why(res), [("not_evaluated", "unknown_name")], k)
 
     def test_every_key_of_another_type_is_never_verified(self):
         count = 0
-        for base, o in ((RICH, self.o_rich), (CHK2, self.o_chk)):
+        for base, o in self.bases:
             for path, old in list(_leaves(base)):
                 for v in HOSTILE_VALUES:
                     if _same_type(v, old):
@@ -806,10 +813,10 @@ class TestGenerative(unittest.TestCase):
                     with self.subTest(path=path, value=v):
                         self.assertNotEqual(res["state"], "verified", (path, v, res))
                     count += 1
-        self.assertEqual(count, 942)
+        self.assertEqual(count, 1334)
 
     def test_removing_any_key_is_never_verified_except_iat(self):
-        for base, o in ((RICH, self.o_rich), (CHK2, self.o_chk)):
+        for base, o in self.bases:
             for path, _old in list(_leaves(base)):
                 if isinstance(path[-1], int):
                     continue
@@ -941,6 +948,206 @@ class TestCliAndReceipt(PackCase):
         other = LocalTSA(self.d, "tsaOther")
         rec = ap2.verify_restrictions(out, tsa_cert=other.crt)
         self.assertEqual((rec["existed_by"], rec["time_anchor"]["reasons"]), (None, ["tsa_invalid"]))
+
+
+
+class TestMutantGaps(PackCase):
+    """Cases added after the first mutation run (the survivors that were gaps, not equivalents)."""
+
+    def check(self, base, mutate, expect, o_mutate=None):
+        ob = copy.deepcopy(base)
+        if o_mutate:
+            o_mutate(ob)
+        o = issue(ob)
+        r = copy.deepcopy(base)
+        mutate(r)
+        rec, e = self.run_pair(o, restrict(o, r))
+        self.assertEqual(why(e), expect, e)
+        return e
+
+    def test_line_items_shapes_in_the_record(self):
+        M = [("contradicted", "malformed")]
+        self.check(CHK2, lambda r: r["constraints"].append({"type": "checkout.line_items", "items": []}), M)
+        self.check(CHK2, lambda r: r["constraints"].append({"type": "checkout.line_items", "items": [1]}), M)
+        self.check(CHK2, lambda r: r["constraints"].append({"type": "checkout.line_items", "items": [
+            {"id": "a", "acceptable_items": [], "quantity": 0}]}), M)
+
+    def test_dates_of_an_unsupported_form_on_both_sides(self):
+        i = ci(RICH, "payment.execution_date")
+        D = [("not_evaluated", "date_form")]
+        self.check(RICH, lambda r: r["constraints"][i].update(not_after="later"), D,
+                   o_mutate=lambda o: o["constraints"][i].update(not_after="soon"))
+        self.check(RICH, lambda r: r["constraints"][i].update(not_before="2026-03-30T23:00:00Z", not_after="2026-04-02"), D,
+                   o_mutate=lambda o: o["constraints"][i].update(not_before="2026-03-31", not_after="2026-04-30"))
+
+    def test_line_items_with_one_entry_not_an_object(self):
+        good = {"id": "a", "acceptable_items": [], "quantity": 1}
+        self.check(CHK2, lambda r: r["constraints"].append({"type": "checkout.line_items", "items": [good, 1]}), [("contradicted", "malformed")])
+
+    def test_invalid_calendar_dates_on_both_sides(self):
+        i = ci(RICH, "payment.execution_date")
+        self.check(RICH, lambda r: r["constraints"][i].update(not_after="2026-02-30T00:00:00Z"), [("not_evaluated", "date_form")],
+                   o_mutate=lambda o: o["constraints"][i].update(not_after="2026-02-31T00:00:00Z"))
+
+    def test_a_window_with_one_bound(self):
+        i = ci(RICH, "payment.execution_date")
+        one = lambda c: c["constraints"][i].pop("not_before")   # noqa: E731
+        self.check(RICH, one, [], o_mutate=one)
+        self.check(RICH, lambda r: r["constraints"][i].update(not_after="2026-04-01T00:00:00Z"), [], o_mutate=one)
+
+    def test_cli_receipt_not_written_after_a_check_not_run(self):
+        import contextlib
+        import io
+        o = issue(PAY)
+        p = self.pack(("o", o), ("r", restrict(o, PAY)))
+        real = ap2.verify_evidence
+
+        def with_receipt(path, **kw):
+            raise ap2.Ap2WriteError("openssl did not answer", receipt=real(path, **kw))
+        err = io.StringIO()
+        with mock.patch.object(ap2, "verify_evidence", with_receipt), mock.patch.object(ap2, "_emit", lambda text: "stdout full"), \
+                contextlib.redirect_stderr(err):
+            rc = ap2.main(["restriction", p])
+        self.assertEqual(rc, 74)
+        self.assertIn("receipt not written: stdout full", err.getvalue())
+
+    def test_the_original_malformed(self):
+        OM = [("not_evaluated", "original_malformed")]
+        self.check(PAY, lambda r: r.update(exp=1), OM, o_mutate=lambda o: o.update(exp="1777345957"))
+        self.check(PAY, lambda r: r.update(iat=1), OM, o_mutate=lambda o: o.update(iat="1"))
+        self.check(PAY, lambda r: r.update(constraints=[]), OM, o_mutate=lambda o: o.update(constraints={"a": 1}))
+
+    def test_the_original_in_an_unsupported_form(self):
+        for dp in ([], [PAY, PAY], "x"):
+            with self.subTest(dp=dp):
+                o = K1.sign({"alg": "ES256", "typ": "example+sd-jwt", "jwk": K1.jwk}, json.dumps({"delegate_payload": dp})) + "~"
+                rec, e = self.run_pair(o, restrict(o, PAY))
+                self.assertEqual(e["reasons"], [{"state": "not_evaluated", "reason": "form_unsupported", "at": "original"}])
+
+    def test_keys_that_are_not_objects(self):
+        o = issue(PAY)
+        p = ap2.parse_sd_jwt(o)
+        art = {"parsed": p, "resolved": ap2.resolve_disclosures(p["payload"], p["disclosures"]), "jwk": None}
+        self.assertEqual(why(ap2.evaluate_restriction(art, dict(art, jwk=K1.jwk))), [("contradicted", "issuer_key_differs")])
+        self.assertEqual(why(ap2.evaluate_restriction(dict(art, jwk=K1.jwk), art)), [("contradicted", "issuer_key_differs")])
+
+    def test_one_constraint_of_the_record_unknown_another_wider(self):
+        i = ci(RICH, "payment.amount_range")
+        e = self.check(RICH, lambda r: r["constraints"].__setitem__(slice(i, i + 1), [dict(r["constraints"][i], max=10 ** 6), dict(r["constraints"][i], max=1, note="x")]),
+                       [("not_evaluated", "unknown_name")])
+        self.assertEqual(e["state"], "not_evaluated")
+
+    def test_paths_name_the_place(self):
+        n = len(PAY["constraints"])
+        e = self.check(PAY, lambda r: r["constraints"].extend([copy.deepcopy(EX_BUDGET), {"type": "payment.budget", "currency": "USD", "max": "1"}]),
+                       [("contradicted", "malformed")])
+        self.assertEqual(e["reasons"][0]["at"], f"restriction.delegate_payload[0].constraints[{n + 1}].max")
+        e = self.check(PAY, lambda r: r.update(exp=r["exp"] + 1), [("contradicted", "time_widened")])
+        self.assertEqual(e["reasons"][0]["at"], "restriction.delegate_payload[0].exp")
+
+    def test_states_of_the_early_outcomes(self):
+        o = issue(PAY)
+        rec, e = self.run_pair(o, issue(PAY, {CLAIM: 7}))
+        self.assertEqual((e["state"], e["original"]), ("contradicted", None))
+        p = self.pack(("original", o), ("restriction", restrict(o, PAY)), name="t.json")
+        with open(p, encoding="utf-8") as f:
+            ev = json.load(f)
+        ev["subject"] = "altered"
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(ev, f)
+        e = ap2.verify_restrictions(p)["restrictions"][0]
+        self.assertEqual((e["state"], e["original"], e["same_issuer_jwt"]), ("not_evaluated", None, []))
+        rec, e = self.run_pair(o, issue(PAY, {CLAIM: ap2.issuer_jwt_hash(issue(CHK))}))
+        self.assertEqual((e["state"], e["original"]), ("not_evaluated", None))
+
+    def test_a_chain_listed_backwards_is_demoted_whole(self):
+        o = issue(RICH)
+        i = ci(RICH, "payment.amount_range")
+        wide = copy.deepcopy(RICH); wide["constraints"][i]["max"] = 10 ** 6
+        r1 = restrict(o, wide); r2 = restrict(r1, wide); r3 = restrict(r2, wide)
+        rec = ap2.verify_restrictions(self.pack(("r3", r3), ("r2", r2), ("r1", r1), ("o", o)))
+        self.assertEqual([(e["in"], e["state"]) for e in rec["restrictions"]],
+                         [("r3", "not_evaluated"), ("r2", "not_evaluated"), ("r1", "contradicted")])
+
+    def test_met_needs_every_record(self):
+        o = issue(PAY)
+        wide = copy.deepcopy(PAY); wide["exp"] += 1
+        rec = ap2.verify_restrictions(self.pack(("o", o), ("good", restrict(o, PAY)), ("bad", restrict(o, wide))))
+        self.assertEqual([e["state"] for e in rec["restrictions"]], ["verified", "contradicted"])
+        self.assertFalse(rec["met"])
+
+    def test_a_check_not_run_here_without_a_receipt_propagates(self):
+        o = issue(PAY)
+        p = self.pack(("o", o), ("r", restrict(o, PAY)))
+
+        def failing(path, **kw):
+            raise ap2.Ap2WriteError("no temporary file", receipt=None)
+        with mock.patch.object(ap2, "verify_evidence", failing):
+            with self.assertRaises(ap2.Ap2WriteError) as cm:
+                ap2.verify_restrictions(p)
+        self.assertIsNone(cm.exception.receipt)
+
+    def test_cli_exit_74_paths(self):
+        import contextlib
+        import io
+        o = issue(PAY)
+        p = self.pack(("o", o), ("r", restrict(o, PAY)))
+        real = ap2.verify_evidence
+
+        def with_receipt(path, **kw):
+            raise ap2.Ap2WriteError("openssl did not answer", receipt=real(path, **kw))
+
+        def without(path, **kw):
+            raise ap2.Ap2WriteError("no temporary file", receipt=None)
+        for fake, has_receipt, line in ((with_receipt, True, "check not run here: openssl did not answer"),
+                                        (without, False, "receipt not written: no temporary file")):
+            out, err = io.StringIO(), io.StringIO()
+            with mock.patch.object(ap2, "verify_evidence", fake), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                rc = ap2.main(["restriction", p])
+            self.assertEqual(rc, 74)
+            self.assertIn(line, err.getvalue())
+            if has_receipt:
+                self.assertEqual(json.loads(out.getvalue())["restrictions"][0]["state"], "verified")
+            else:
+                self.assertEqual(out.getvalue(), "")
+        with open(os.devnull, "w") as dn, open("/dev/full", "w") as full:   # the receipt cannot be written: 74
+            r = subprocess.run([sys.executable, "-B", os.path.join(_HERE, "ap2_evidence.py"), "restriction", p], stdout=full, stderr=subprocess.PIPE, text=True, timeout=120)
+        self.assertEqual(r.returncode, 74, r.stderr)
+        self.assertIn("receipt not written", r.stderr)
+
+    def test_cli_grammar_more(self):
+        o = issue(PAY)
+        p = self.pack(("o", o), ("r", restrict(o, PAY)))
+        for argv in (["restriction", p, "--tsa-cert", self.d], ["restriction", p, "--tsa-c", p], ["restriction", p, "--tsa-cert="]):
+            with self.subTest(argv=argv):
+                r = subprocess.run([sys.executable, "-B", os.path.join(_HERE, "ap2_evidence.py"), *argv], capture_output=True, text=True, timeout=120)
+                self.assertEqual((r.returncode, r.stdout), (2, ""), r.stderr)
+
+    @unittest.skipUnless(HAVE_OPENSSL, "openssl absent: the local TSA cannot run")
+    def test_existed_by_is_the_earliest_counting_anchor_in_anchors_too(self):
+        import time
+        from test_ap2_anchors import LocalTSA
+        a, b = LocalTSA(self.d, "tsaA"), LocalTSA(self.d, "tsaB")
+        by = {"https://a.example": a, "https://b.example": b}
+        o = issue(PAY)
+        out = os.path.join(self.d, "two.json")
+
+        def stamp(digest, url, timeout=20):
+            time.sleep(1.1)   # distinct genTime seconds
+            return by[url].stamp(digest, url)
+        with mock.patch.object(ap2, "_rfc3161_stamp", stamp):   # no rfc3161_timestamp block: both tokens go to `anchors`
+            ap2.build_evidence([{"name": "o", "sd_jwt": o}, {"name": "r", "sd_jwt": restrict(o, PAY)}], out)
+            ap2.add_anchor(out, "https://a.example")
+            ap2.add_anchor(out, "https://b.example")
+        bundle = os.path.join(self.d, "bundle.pem")
+        with open(bundle, "wb") as f:
+            for t in (a, b):
+                with open(t.crt, "rb") as g:
+                    f.write(g.read())
+        rec = ap2.verify_restrictions(out, tsa_cert=bundle)
+        times = sorted(x["gen_time"] for x in ap2.verify_evidence(out, tsa_cert=bundle)["anchors"])
+        self.assertEqual(len(set(times)), 2)
+        self.assertEqual((rec["met"], rec["existed_by"]), (True, times[0]))
 
 
 if __name__ == "__main__":
