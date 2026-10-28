@@ -1695,12 +1695,15 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
 
 # ────────────────────────────────────────────────────────── restriction record (SPEC §11, DRAFT 1.7.0)
 # A profile of this repository, not of AP2: a record that names an open mandate of the same pack by the hash of its
-# issuer JWT and must be no broader than it. Closed by construction: a name or a type outside the lists of SPEC §11.4 is
+# issuer JWT — in a constraint of its own type, so that an AP2 verifier that does not know the profile fails it (AP2:
+# "Any unknown Constraints MUST be treated as failing evaluation") instead of reading a second mandate — and must be no
+# broader than it. Closed by construction: a name or a type outside the lists of SPEC §11.4 is
 # `not_evaluated` (or, for an added constraint of an unknown type, the AP2 rule "Any unknown Constraints MUST be treated as
 # failing evaluation" — accepted and REPORTED), a hidden digest is never assumed absent, and nothing is `verified` that is
 # broader than the original or not bound to it.
 
-RESTRICTS_CLAIM = "io.github.robertolocatelli81.restricts"
+RESTRICTS_CONSTRAINT = "io.github.robertolocatelli81.restricts"   # SPEC §11.1: a constraint type, in the Mandate Content
+RESTRICTS_KEYS = ("issuer_jwt_hash", "type")
 RESTRICTION_PROFILE = "io.github.robertolocatelli81.restriction/1"
 _FREQ_ORDER = ("ON_DEMAND", "DAILY", "WEEKLY", "BIWEEKLY", "MONTHLY", "QUARTERLY", "ANNUALLY")   # SPEC §11.4: least to most separated
 _OPEN_CONTENT_KEYS = {   # SPEC §11.4: the properties of open_payment_mandate.json / open_checkout_mandate.json at AP2 e1ea56d
@@ -1784,6 +1787,68 @@ def _mandate_form(resolved: Dict) -> Tuple[Optional[str], Optional[Dict]]:
     if isinstance(dp, list) and len(dp) == 1 and isinstance(dp[0], dict):
         return "delegate_payload", dp[0]
     return None, None
+
+
+def _is_ref(c) -> bool:
+    """SPEC §11.1: a constraint of this profile's type (well-formed or not: §11.3 step 2 judges its form)."""
+    return isinstance(c, dict) and c.get("type") == RESTRICTS_CONSTRAINT
+
+
+def _record_refs(resolved) -> Tuple[bool, List[Tuple[str, Dict]]]:
+    """SPEC §11.2: (the name at the top level of the payload, [(path, constraint) of this profile's type]). The Mandate
+    Content of §11.1, or — when `delegate_payload` is a list that is not exactly one object — each of its object elements."""
+    if not isinstance(resolved, dict):
+        return False, []
+    form, content = _mandate_form(resolved)
+    if form == "delegate_payload":
+        contents = [("delegate_payload[0].", content)]
+    elif form == "payload":
+        contents = [("", content)]
+    else:
+        dp = resolved.get("delegate_payload")
+        contents = [(f"delegate_payload[{i}].", x) for i, x in enumerate(dp) if isinstance(x, dict)] if isinstance(dp, list) else []
+    refs = []
+    for base, c in contents:
+        cons = c.get("constraints")
+        if isinstance(cons, list):
+            refs += [(f"{base}constraints[{j}]", x) for j, x in enumerate(cons) if _is_ref(x)]
+    return RESTRICTS_CONSTRAINT in resolved, refs
+
+
+def _ref_is_plain(parsed: Dict, ref: Dict) -> bool:
+    """SPEC §11.1/§11.3 step 2: the reference is an element, as signed, of the `constraints` list of the Mandate Content —
+    not an array-element disclosure (the holder could leave it out) and with no disclosure inside it. The raw Mandate
+    Content is found the way the resolver finds it: `delegate_payload[0]` (an object or an array-element disclosure),
+    else the payload; `constraints` a plain key or a property disclosure. Anything else is not plain."""
+    try:
+        dmap = {_disclosure_digest(d): _loads_segment(_b64url_decode(d), "disclosure") for d in parsed["disclosures"]}
+
+        def prop(obj, name):
+            if name in obj:
+                return obj[name]
+            for dg in obj.get("_sd", []) if isinstance(obj.get("_sd"), list) else []:
+                dd = dmap.get(dg)
+                if isinstance(dd, list) and len(dd) == 3 and dd[1] == name:
+                    return dd[2]
+            return None
+
+        def unwrap(el):   # an element of delegate_payload: the object, or the value of its array-element disclosure
+            if isinstance(el, dict) and set(el) == {"..."}:
+                dd = dmap.get(el["..."])
+                return dd[1] if isinstance(dd, list) and len(dd) == 2 else None
+            return el
+
+        payload = parsed["payload"]
+        dp = prop(payload, "delegate_payload")
+        contents = [payload] if dp is None else [unwrap(el) for el in dp] if isinstance(dp, list) else []
+        want = _canon(ref)
+        for content in contents:
+            cons = prop(content, "constraints") if isinstance(content, dict) else None
+            if isinstance(cons, list) and any(isinstance(x, dict) and _canon(x) == want for x in cons):
+                return True
+        return False
+    except Exception:  # noqa: BLE001 — a structure the resolver accepted but this reading cannot follow: not shown plain
+        return False
 
 
 def _constraint_shape(c) -> Tuple[str, Optional[str]]:
@@ -1949,7 +2014,6 @@ def evaluate_restriction(original: Dict, restriction: Dict) -> Dict:
 
     top_rules["iat"] = lambda o, r, k, at: typed_only(o, r, k, at, _is_int)
     top_rules["jti"] = lambda o, r, k, at: typed_only(o, r, k, at, _is_str)
-    top_rules[RESTRICTS_CLAIM] = lambda o, r, k, at: None   # not compared: O may restrict a third mandate (SPEC §11.4)
 
     def compare_keys(o, r, rules, prefix):
         for k in sorted(set(o) | set(r)):
@@ -1993,6 +2057,8 @@ def evaluate_restriction(original: Dict, restriction: Dict) -> Dict:
     shapes = [_constraint_shape(x) for x in rc]
     for i, c in enumerate(oc):   # every requirement of O is met by one of R
         at = f"{base}constraints[{i}]"
+        if _is_ref(c):   # SPEC §11.4: O's own reference to a third mandate is the chain rule's (§11.3 step 7)
+            continue
         if _canon(c) in rcanon:
             continue
         shape, what = _constraint_shape(c)
@@ -2018,7 +2084,7 @@ def evaluate_restriction(original: Dict, restriction: Dict) -> Dict:
     o_types = {c.get("type") for c in oc if isinstance(c, dict)}
     for j, (x, (shape, what)) in enumerate(zip(rc, shapes)):   # every constraint R adds
         at = f"restriction.{base}constraints[{j}]"
-        if _canon(x) in ocanon:
+        if _is_ref(x) or _canon(x) in ocanon:   # R's reference is the binding (§11.3), not a term
             continue
         if shape == "unknown_type":
             reported.append({"reason": "unknown_constraint_added", "at": at})
@@ -2075,7 +2141,7 @@ def verify_restrictions(path: str, tsa_cert: Optional[str] = None) -> Dict:
                 receipt, not_run = e.receipt, e
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
-    out = {"restriction_profile": RESTRICTION_PROFILE, "claim": RESTRICTS_CLAIM,
+    out = {"restriction_profile": RESTRICTION_PROFILE, "constraint_type": RESTRICTS_CONSTRAINT,
            "admission": receipt.get("admission"), "refusal_class": receipt.get("refusal_class"), "valid": receipt.get("valid"),
            "time_anchor": (receipt.get("states") or {}).get("time_anchor"), "existed_by": _existed_by(receipt),
            "restrictions": [], "met": False}
@@ -2090,17 +2156,27 @@ def verify_restrictions(path: str, tsa_cert: Optional[str] = None) -> Dict:
             except Exception:  # noqa: BLE001 — an artifact that does not parse is an error of the pack, which is then not valid
                 arts.append({"name": a.get("name"), "resolved": None})
         for r in arts:
-            if not isinstance(r["resolved"], dict) or RESTRICTS_CLAIM not in r["resolved"]:
+            misplaced, refs = _record_refs(r["resolved"])
+            if not misplaced and not refs:
                 continue
-            val = r["resolved"][RESTRICTS_CLAIM]
+            val = refs[0][1].get("issuer_jwt_hash") if len(refs) == 1 else None
             entry = {"in": r["name"], "restricts": val if isinstance(val, str) else None, "original": None,
                      "same_issuer_jwt": [], "state": "not_evaluated", "reasons": [], "reported": []}
             out["restrictions"].append(entry)
             if receipt.get("valid") is not True:   # step 1
                 entry["reasons"] = [{"state": "not_evaluated", "reason": "pack_not_valid", "at": "restriction"}]
                 continue
-            if not isinstance(val, str) or not _is_sha256_b64url(val):   # step 2
-                entry.update(state="contradicted", reasons=[{"state": "contradicted", "reason": "restricts_malformed", "at": "restriction"}])
+            bad = None   # step 2, in the order of SPEC §11.3
+            if misplaced:
+                bad = ("restricts_misplaced", "restriction." + RESTRICTS_CONSTRAINT)
+            elif len(refs) != 1:
+                bad = ("restricts_malformed", "restriction." + refs[1][0])
+            elif (tuple(sorted(refs[0][1])) != RESTRICTS_KEYS or not isinstance(val, str) or not _is_sha256_b64url(val)):
+                bad = ("restricts_malformed", "restriction." + refs[0][0])
+            elif not _ref_is_plain(r["parsed"], refs[0][1]):
+                bad = ("restricts_disclosable", "restriction." + refs[0][0])
+            if bad:
+                entry.update(state="contradicted", reasons=[{"state": "contradicted", "reason": bad[0], "at": bad[1]}])
                 continue
             matches = [o for o in arts if o is not r and o.get("hash") == val]   # step 3
             if not matches:

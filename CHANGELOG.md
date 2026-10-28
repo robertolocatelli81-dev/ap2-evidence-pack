@@ -1,10 +1,11 @@
 # Changelog
 
-## Unreleased (branch `restriction-record`, DRAFT, not released) — a restriction record for an open mandate
+## Unreleased (branch `restriction-in-constraint`, DRAFT, not released) — a restriction record for an open mandate
 
 AP2 at `e1ea56d` has no way to restrict or revoke a mandate once issued. SPEC §11 (draft revision 1.7.0) defines this
 repository's own profile `io.github.robertolocatelli81.restriction/1`: an SD-JWT in the same pack, signed by the same key,
-whose top-level claim `io.github.robertolocatelli81.restricts` is the `issuer_jwt_hash` of the original, carrying the same
+whose Mandate Content holds one constraint `{"type": "io.github.robertolocatelli81.restricts", "issuer_jwt_hash": H}`
+naming the original by the `issuer_jwt_hash` of its signed JWT, carrying the same
 `cnf` and terms no broader than the original under closed rules per constraint type. `ap2_evidence.py restriction <pack>
 [--tsa-cert PEM]` (library: `verify_restrictions`, `evaluate_restriction`) verifies the pack first, then each record:
 `verified` only when bound and no broader; `contradicted` when a rule fails; `not_evaluated` for what the profile cannot
@@ -28,6 +29,16 @@ an admitted receipt; a record naming its own issuer JWT needs a SHA-256 preimage
 its test (the `y` of the issuer key: a key with the same `x` and the opposite `y` passed as the same key). On 1.6.0 the 65
 tests fail (the functions do not exist) and `verify` of a pack whose record widens the amount to 10^9 says `valid: true`:
 1.6.0 records a record, it does not judge it.
+
+Second draft (2026-10-28, from a review): the reference moved from a top-level claim into a constraint of its own type.
+Measured with the AP2 SDK at `e1ea56d` (sd-jwt 0.10.4, pydantic 2.12.5): a record with the top-level claim verified ALONE
+as an ordinary mandate (`SdJwtMandate.from_sd_jwt`, `MandateClient.verify`, a full chain through `PaymentMandateChain`),
+its own `payment.budget` counted per mandate — with O's budget exhausted, R alone still admitted 50000 more minor units.
+With the constraint, the SDK refuses R where it reads a typed mandate (`ValidationError` at `constraints[n]`, payment and
+checkout) and still accepts O; AP2: "Any unknown Constraints MUST be treated as failing evaluation". New reasons
+`restricts_misplaced` (the first draft's top-level place), `restricts_disclosable` (a reference the holder could leave
+out); receipt field `claim` renamed `constraint_type`. Intended consequence: R is no longer a mandate on its own for a
+verifier that does not implement §11.
 
 Found while building it, in 1.6.0 and NOT fixed here (another change, both verifiers): a digest repeated in the issuer
 payload is accepted and its disclosure expanded twice — measured 2026-10-28, both verifiers `valid: true`, the mandate twice

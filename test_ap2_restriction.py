@@ -30,7 +30,7 @@ from cryptography.hazmat.primitives.asymmetric import ec  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature  # noqa: E402
 
 HAVE_OPENSSL = shutil.which("openssl") is not None
-CLAIM = "io.github.robertolocatelli81.restricts"
+REF = "io.github.robertolocatelli81.restricts"   # SPEC §11.1: the constraint type of the reference
 
 # AP2 e1ea56d, docs/ap2/payment_mandate.md line 351 ("Open Payment Mandate SD-JWT plus disclosures", Encoded Token), verbatim
 AP2_PAY_OPEN = (
@@ -128,9 +128,19 @@ def _hide_arrays(content, discs):
     return c
 
 
-def issue(content, top=None, key=K1, sd_arrays=True, form="delegate", decoy=False, payload_text_hook=None):
+def issue(content, top=None, key=K1, sd_arrays=True, form="delegate", decoy=False, payload_text_hook=None, hide_ref=None):
     discs = []
     c = _hide_arrays(content, discs) if sd_arrays else copy.deepcopy(content)
+    if hide_ref and isinstance(c, dict) and isinstance(c.get("constraints"), list):
+        for j, x in enumerate(c["constraints"]):
+            if isinstance(x, dict) and x.get("type") == REF:
+                if hide_ref == "element":   # the whole reference an array-element disclosure (SPEC §11.3 step 2)
+                    d = _disc(x)
+                    c["constraints"][j] = {"...": ap2._disclosure_digest(d)}
+                else:                       # one key of the reference a property disclosure
+                    d = _disc(hide_ref, x[hide_ref])
+                    c["constraints"][j] = dict({k: v for k, v in x.items() if k != hide_ref}, _sd=[ap2._disclosure_digest(d)])
+                discs.append(d)
     if form == "delegate":
         d = _disc(c)
         discs.append(d)
@@ -148,10 +158,21 @@ def issue(content, top=None, key=K1, sd_arrays=True, form="delegate", decoy=Fals
     return key.sign({"alg": "ES256", "typ": "example+sd-jwt", "jwk": key.jwk}, text) + "~" + "~".join(discs) + ("~" if discs else "~")
 
 
+def with_ref(content, value, extra=None):
+    """`content` with the reference of SPEC §11.1 appended to its `constraints` (created when absent; left alone when it
+    is not a list — such a token is then no record, and only the direct path evaluates it)."""
+    c = copy.deepcopy(content)
+    ref = dict({"type": REF, "issuer_jwt_hash": value}, **(extra or {}))
+    if isinstance(c, dict):
+        if "constraints" not in c:
+            c["constraints"] = []
+        if isinstance(c["constraints"], list):
+            c["constraints"].append(ref)
+    return c
+
+
 def restrict(orig_compact, content, top=None, **kw):
-    t = {CLAIM: ap2.issuer_jwt_hash(orig_compact)}
-    t.update(top or {})
-    return issue(content, t, **kw)
+    return issue(with_ref(content, ap2.issuer_jwt_hash(orig_compact)), top, **kw)
 
 
 def direct(orig_compact, r_compact):
@@ -259,7 +280,7 @@ class TestBinding(PackCase):
         for bad in (None, 7, True, [h], {"h": h}, "", h[:-1], h + "A", h + "=", h.replace(h[0], "+", 1) if h[0] != "+" else "/" + h[1:],
                     base64.b64encode(hashlib.sha256(o.split("~")[0].encode()).digest()).decode(), h.encode().hex()):
             with self.subTest(bad=bad):
-                rec, e = self.run_pair(o, issue(PAY, {CLAIM: bad}))
+                rec, e = self.run_pair(o, issue(with_ref(PAY, bad)))
                 self.assertEqual(why(e), [("contradicted", "restricts_malformed")])
                 self.assertEqual(e["restricts"], bad if isinstance(bad, str) else None)
 
@@ -269,7 +290,7 @@ class TestBinding(PackCase):
         alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
         bad = h[:-1] + alphabet[alphabet.index(h[-1]) ^ 1]   # same 32 bytes, a trailing bit set: §3.1 refuses the spelling
         self.assertEqual(base64.urlsafe_b64decode(bad + "="), base64.urlsafe_b64decode(h + "="))
-        rec, e = self.run_pair(o, issue(PAY, {CLAIM: bad}))
+        rec, e = self.run_pair(o, issue(with_ref(PAY, bad)))
         self.assertEqual(why(e), [("contradicted", "restricts_malformed")])
 
     def test_a_chain_is_as_strong_as_its_weakest_link(self):
@@ -297,7 +318,7 @@ class TestBinding(PackCase):
     def test_a_record_with_a_duplicate_key_is_never_evaluated(self):
         o = issue(PAY)
         p = self.pack(("original", o), ("restriction", restrict(o, PAY)))
-        dup = restrict(o, PAY, payload_text_hook=lambda t: t[:-1] + ', "%s": "%s"}' % (CLAIM, "A" * 43))   # the claim twice
+        dup = restrict(o, PAY, payload_text_hook=lambda t: t[:-1] + ', "_sd_alg": "sha-256"}')   # a key twice
         with self.assertRaises(ap2.Ap2EvidenceError):
             ap2.parse_sd_jwt(dup)
         with open(p, encoding="utf-8") as f:
@@ -315,7 +336,7 @@ class TestBinding(PackCase):
         o = issue(PAY)
         h = ap2.issuer_jwt_hash(o)
         flipped = h[:-1].swapcase() + h[-1]   # 32 other bytes, canonical spelling
-        rec, e = self.run_pair(o, issue(PAY, {CLAIM: flipped}))
+        rec, e = self.run_pair(o, issue(with_ref(PAY, flipped)))
         self.assertEqual(why(e), [("not_evaluated", "original_not_in_pack")])
 
     def test_another_key_is_contradicted(self):
@@ -414,7 +435,9 @@ class TestBinding(PackCase):
         o = issue(PAY)
         rec, e = self.run_pair(o, restrict(o, PAY, payload_text_hook=twice))
         self.assertTrue(rec["valid"])   # the pack: §6 does not see it
-        self.assertEqual(why(e), [("contradicted", "malformed")])
+        # the element repeated carries the reference twice: §11.3 step 2 (before step 5) already contradicts it
+        self.assertEqual(why(e), [("contradicted", "restricts_malformed")])
+        self.assertEqual(why(direct(o, restrict(o, PAY, payload_text_hook=twice))), [("contradicted", "malformed")])   # step 5
         o2 = issue(PAY, payload_text_hook=twice)
         rec, e = self.run_pair(o2, restrict(o2, PAY))
         self.assertEqual(why(e), [("not_evaluated", "original_malformed")])
@@ -423,12 +446,17 @@ class TestBinding(PackCase):
         o = issue(PAY)
         rec, e = self.run_pair(o, restrict(o, PAY, form="payload"))
         self.assertEqual(why(e), [("not_evaluated", "form_differs")])
-        for dp in ([], [PAY, PAY], ["x"], {}, "x", None, [[PAY]]):
+        pr = with_ref(PAY, ap2.issuer_jwt_hash(o))
+        for dp in ([pr, PAY], [PAY, pr], [pr, "x"], [pr, 7]):   # the reference in an element: a record, form_unsupported
             with self.subTest(dp=dp):
-                r = ap2.issuer_jwt_hash(o)
-                bad = K1.sign({"alg": "ES256", "typ": "example+sd-jwt", "jwk": K1.jwk}, json.dumps({CLAIM: r, "delegate_payload": dp})) + "~"
+                bad = K1.sign({"alg": "ES256", "typ": "example+sd-jwt", "jwk": K1.jwk}, json.dumps({"delegate_payload": dp})) + "~"
                 rec, e = self.run_pair(o, bad)
                 self.assertEqual(why(e), [("not_evaluated", "form_unsupported")])
+        for dp in ([], ["x"], {}, "x", None, [[pr]], pr):   # no Mandate Content that can hold the reference: not a record
+            with self.subTest(dp=dp):
+                bad = K1.sign({"alg": "ES256", "typ": "example+sd-jwt", "jwk": K1.jwk}, json.dumps({"delegate_payload": dp})) + "~"
+                rec = ap2.verify_restrictions(self.pack(("original", o), ("restriction", bad), name="nr.json"))
+                self.assertEqual((rec["valid"], rec["restrictions"], rec["met"]), (True, [], False))
 
 
 class TestRules(PackCase):
@@ -565,12 +593,19 @@ class TestRules(PackCase):
         i = ci(RICH, "payment.amount_range")
         self.check(RICH, lambda r: r["constraints"][i].update(max="5000"), [("contradicted", "constraint_widened"), ("contradicted", "malformed")])
         self.check(RICH, lambda r: r["constraints"][i].update(max=True), [("contradicted", "constraint_widened"), ("contradicted", "malformed")])
-        self.check(RICH, lambda r: r.update(constraints={"0": RICH["constraints"][0]}), [("contradicted", "malformed")])
+        # `constraints` not a list: the reference cannot be in it, so the token is no record (SPEC §11.2); the direct path
+        # still reads it as malformed
+        o = issue(RICH)
+        r = copy.deepcopy(RICH); r["constraints"] = {"0": RICH["constraints"][0]}
+        rec = ap2.verify_restrictions(self.pack(("original", o), ("restriction", restrict(o, r)), name="nl.json"))
+        self.assertEqual((rec["valid"], rec["restrictions"]), (True, []))
+        self.assertEqual(why(direct(o, restrict(o, r))), [("contradicted", "malformed")])
 
     def test_vct(self):
         self.check(PAY, lambda r: r.update(vct="mandate.checkout.open.1"), [("contradicted", "claim_changed")])
         closed = {"vct": "mandate.payment.1", "transaction_id": "t", "payment_amount": {"amount": 1, "currency": "USD"}}
-        self.check(closed, lambda r: None, [])
+        # a closed mandate has no `constraints`: the record adds one to carry the reference, so it is never an equal copy
+        self.check(closed, lambda r: None, [("not_evaluated", "vct_not_supported")])
         self.check(closed, lambda r: r["payment_amount"].update(amount=0), [("not_evaluated", "vct_not_supported")])
 
     def test_unknown_names(self):
@@ -881,8 +916,8 @@ class TestCliAndReceipt(PackCase):
         r = self.cli("restriction", ok)
         self.assertEqual(r.returncode, 0, r.stderr)
         rec = json.loads(r.stdout)
-        self.assertEqual((rec["restriction_profile"], rec["claim"], rec["met"]), ("io.github.robertolocatelli81.restriction/1", CLAIM, True))
-        self.assertEqual(set(rec), {"restriction_profile", "claim", "admission", "refusal_class", "valid", "time_anchor", "existed_by", "restrictions", "met"})
+        self.assertEqual((rec["restriction_profile"], rec["constraint_type"], rec["met"]), ("io.github.robertolocatelli81.restriction/1", REF, True))
+        self.assertEqual(set(rec), {"restriction_profile", "constraint_type", "admission", "refusal_class", "valid", "time_anchor", "existed_by", "restrictions", "met"})
         self.assertEqual(set(rec["restrictions"][0]), {"in", "restricts", "original", "same_issuer_jwt", "state", "reasons", "reported"})
         wide = copy.deepcopy(PAY); wide["exp"] += 1
         bad = self.pack(("o", o), ("r", restrict(o, wide)), name="bad.json")
@@ -1047,7 +1082,7 @@ class TestMutantGaps(PackCase):
 
     def test_states_of_the_early_outcomes(self):
         o = issue(PAY)
-        rec, e = self.run_pair(o, issue(PAY, {CLAIM: 7}))
+        rec, e = self.run_pair(o, issue(with_ref(PAY, 7)))
         self.assertEqual((e["state"], e["original"]), ("contradicted", None))
         p = self.pack(("original", o), ("restriction", restrict(o, PAY)), name="t.json")
         with open(p, encoding="utf-8") as f:
@@ -1057,7 +1092,7 @@ class TestMutantGaps(PackCase):
             json.dump(ev, f)
         e = ap2.verify_restrictions(p)["restrictions"][0]
         self.assertEqual((e["state"], e["original"], e["same_issuer_jwt"]), ("not_evaluated", None, []))
-        rec, e = self.run_pair(o, issue(PAY, {CLAIM: ap2.issuer_jwt_hash(issue(CHK))}))
+        rec, e = self.run_pair(o, issue(with_ref(PAY, ap2.issuer_jwt_hash(issue(CHK)))))
         self.assertEqual((e["state"], e["original"]), ("not_evaluated", None))
 
     def test_a_chain_listed_backwards_is_demoted_whole(self):
@@ -1219,6 +1254,104 @@ class TestSecondReview(PackCase):
         self.assertTrue(rec["valid"], rec)
         self.assertEqual(why(e), [("contradicted", "issuer_key_differs")])
         self.assertFalse(rec["met"])
+
+
+class TestReferenceAsConstraint(PackCase):
+    """SPEC §11.1 (draft change 2026-10-28): the reference is a constraint of this profile's type in the Mandate Content —
+    exactly one, exactly two keys, a plain element of the signed list — so an AP2 verifier that does not know the profile
+    fails it instead of reading a second mandate. Every other shape of the reference is contradicted, through the pack."""
+
+    def entry(self, o, r, name="rc.json"):
+        rec = ap2.verify_restrictions(self.pack(("original", o), ("restriction", r), name=name))
+        self.assertTrue(rec["valid"], rec)
+        self.assertEqual(len(rec["restrictions"]), 1, rec)
+        return rec["restrictions"][0]
+
+    def test_the_reference_lives_in_the_mandate_content_and_is_not_a_term(self):
+        o = issue(RICH)
+        r = restrict(o, RICH)
+        p = ap2.parse_sd_jwt(r)
+        res = ap2.resolve_disclosures(p["payload"], p["disclosures"])
+        self.assertNotIn(REF, res)
+        self.assertEqual(ap2._mandate_form(res)[1]["constraints"][-1], {"type": REF, "issuer_jwt_hash": ap2.issuer_jwt_hash(o)})
+        e = self.entry(o, r)
+        self.assertEqual((e["state"], e["reported"], e["restricts"]), ("verified", [], ap2.issuer_jwt_hash(o)))
+        for form in ("delegate", "payload"):
+            oo = issue(PAY, form=form)
+            self.assertEqual(self.entry(oo, restrict(oo, PAY, form=form), name=form + ".json")["state"], "verified", form)
+
+    def test_any_position_of_the_reference(self):
+        o = issue(RICH)
+        for j in range(len(RICH["constraints"]) + 1):
+            c = copy.deepcopy(RICH)
+            c["constraints"].insert(j, {"type": REF, "issuer_jwt_hash": ap2.issuer_jwt_hash(o)})
+            with self.subTest(position=j):
+                self.assertEqual(self.entry(o, issue(c), name=f"pos{j}.json")["state"], "verified")
+
+    def test_the_first_drafts_top_level_claim_is_misplaced(self):
+        o = issue(PAY)
+        h = ap2.issuer_jwt_hash(o)
+        for r in (issue(PAY, {REF: h}), restrict(o, PAY, {REF: h})):
+            with self.subTest():
+                e = self.entry(o, r, name="mis.json")
+                self.assertEqual(e["reasons"], [{"state": "contradicted", "reason": "restricts_misplaced", "at": "restriction." + REF}])
+        payload_form = issue(dict(with_ref(PAY, h), **{REF: h}), form="payload")
+        self.assertEqual(why(self.entry(o, payload_form, name="mis2.json")), [("contradicted", "restricts_misplaced")])
+
+    def test_not_exactly_one_reference(self):
+        o, o2 = issue(PAY), issue(CHK)
+        h = ap2.issuer_jwt_hash(o)
+        n = len(PAY["constraints"])
+        for second in (h, ap2.issuer_jwt_hash(o2), "x"):
+            c = with_ref(with_ref(PAY, h), second)
+            with self.subTest(second=second):
+                e = self.entry(o, issue(c), name="two.json")
+                self.assertEqual(e["reasons"], [{"state": "contradicted", "reason": "restricts_malformed",
+                                                 "at": f"restriction.delegate_payload[0].constraints[{n + 1}]"}])
+                self.assertIsNone(e["restricts"])
+
+    def test_the_reference_is_closed(self):
+        o = issue(PAY)
+        h = ap2.issuer_jwt_hash(o)
+        M = [("contradicted", "restricts_malformed")]
+        count = 0
+        for k in HOSTILE_KEYS + ["Issuer_jwt_hash", "issuer_jwt_hash ", "sd_hash"]:
+            with self.subTest(key=k):
+                self.assertEqual(why(self.entry(o, issue(with_ref(PAY, h, {k: 1})), name="k.json")), M)
+            count += 1
+        for v in HOSTILE_VALUES:
+            with self.subTest(value=v):
+                self.assertEqual(why(self.entry(o, issue(with_ref(PAY, v)), name="v.json")), M)
+            count += 1
+        c = copy.deepcopy(PAY); c["constraints"].append({"type": REF})   # the hash missing
+        self.assertEqual(why(self.entry(o, issue(c), name="m.json")), M)
+        self.assertEqual(count, len(HOSTILE_KEYS) + 3 + len(HOSTILE_VALUES))
+
+    def test_a_reference_the_holder_could_leave_out_is_contradicted(self):
+        o = issue(PAY)
+        for hide in ("element", "issuer_jwt_hash", "type"):
+            with self.subTest(hide=hide):
+                r = restrict(o, PAY, hide_ref=hide)
+                p = ap2.parse_sd_jwt(r)
+                self.assertEqual(ap2._digest_census(p), (0, False))   # fully disclosed: the resolved content is the same
+                e = self.entry(o, r, name="h.json")
+                self.assertEqual([(x["state"], x["reason"]) for x in e["reasons"]], [("contradicted", "restricts_disclosable")])
+                self.assertEqual(e["reasons"][0]["at"], f"restriction.delegate_payload[0].constraints[{len(PAY['constraints'])}]")
+        r = restrict(o, PAY, hide_ref="element")   # the holder drops it: what is left is no record at all
+        dropped = "~".join(x for x in r.split("~") if not (x and x[0] == "W" and REF in base64.urlsafe_b64decode(x + "=" * (-len(x) % 4)).decode()))
+        rec = ap2.verify_restrictions(self.pack(("original", o), ("restriction", dropped), name="drop.json"))
+        self.assertEqual((rec["valid"], rec["restrictions"]), (True, []))
+
+    def test_the_originals_own_reference_is_the_chain_rule_not_a_term(self):
+        o = issue(RICH)
+        r1 = restrict(o, RICH)
+        r2 = restrict(r1, RICH)   # r2 carries only its own reference (to r1), not r1's (to o)
+        rec = ap2.verify_restrictions(self.pack(("o", o), ("r1", r1), ("r2", r2)))
+        self.assertEqual([(e["in"], e["state"], e["original"], e["reported"]) for e in rec["restrictions"]],
+                         [("r1", "verified", "o", []), ("r2", "verified", "r1", [])])
+        r2c = issue(with_ref(with_ref(RICH, ap2.issuer_jwt_hash(o)), ap2.issuer_jwt_hash(r1)))   # both references: two
+        e = ap2.verify_restrictions(self.pack(("o", o), ("r1", r1), ("r2", r2c), name="c2.json"))["restrictions"][1]
+        self.assertEqual(why(e), [("contradicted", "restricts_malformed")])
 
 
 if __name__ == "__main__":

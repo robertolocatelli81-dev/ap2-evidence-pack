@@ -725,7 +725,7 @@ verifier from recorded inputs, never asserted without re-derivation" (§4.2). Re
 - Keys: -01 §3 requires keys to be "resolved out of band"; that is this format's `self_asserted` / `key_unresolved` →
   pinned-key rule, for the producer and for the issuer.
 
-## 11. Restriction record (profile `io.github.robertolocatelli81.restriction/1`, DRAFT revision 1.7.0, 2026-10-28)
+## 11. Restriction record (profile `io.github.robertolocatelli81.restriction/1`, DRAFT revision 1.7.0, 2026-10-28, reference as a constraint)
 
 Status: a profile of THIS repository, named in its own namespace as AP2 recommends for extensions ("It is RECOMMENDED to
 use a collision-resistant naming approach, for example via a rDNS prefix controlled by the specifying entity",
@@ -745,12 +745,30 @@ open mandate later signed narrower terms for it — and lets a verifier check th
 
 ### 11.1 The record
 
-A restriction record R is an SD-JWT artifact (§2, ES256, verified as every artifact is) whose issuer payload, after
-disclosure resolution, carries at its TOP LEVEL the claim
+A restriction record R is an SD-JWT artifact (§2, ES256, verified as every artifact is) whose Mandate Content (below), after
+disclosure resolution, holds in its `constraints` list exactly one constraint of the type of this profile:
 
-`io.github.robertolocatelli81.restricts` = BASE64URL(SHA-256(ASCII bytes of the original's Issuer-signed JWT)), no padding
+`{"type": "io.github.robertolocatelli81.restricts", "issuer_jwt_hash": H}`, H = BASE64URL(SHA-256(ASCII bytes of the
+original's Issuer-signed JWT)), no padding
 
-— the original O being another artifact of the same pack. This is the `issuer_jwt_hash` of the Delegate SD-JWT draft
+— the original O being another artifact of the same pack. The constraint has exactly these two keys, and it is a plain
+element of the list in the token as signed: not an array-element disclosure, no selectively disclosable key inside it.
+
+**Why a constraint and not a claim** (draft change of 2026-10-28; the first draft put the reference at the top level of
+the payload). An AP2 verifier that does not implement this profile ignores an unknown JWT claim (RFC 7519 §4: "all
+claims that are not understood by implementations MUST be ignored"), so it sees a record with a top-level reference as a
+second valid mandate — and AP2 counts `payment.budget` per mandate ("tracking the total amount spent using this Payment
+Mandate", `payment_mandate.md`), so O and R would each carry their own budget. Measured 2026-10-28 with the AP2 SDK at
+`e1ea56d` (sd-jwt 0.10.4, pydantic 2.12.5): such a record verifies alone (`SdJwtMandate.from_sd_jwt`, `MandateClient.verify`,
+`PaymentMandateChain.parse` + `verify`), the claim is not part of the typed mandate, and its constraints are evaluated as
+an ordinary mandate's. An unknown constraint type is different: "Any unknown Constraints MUST be treated as failing
+evaluation" (`agent_authorization.md`, "Verification and Processing Rules"), and the SDK refuses a mandate that carries
+one where it reads the mandate as a type (measured: `pydantic.ValidationError` at `constraints[n]` from
+`SdJwtMandate.from_sd_jwt`, `MandateClient.verify` with `payload_type`, `PaymentMandateChain.parse` — the `constraints`
+field of the generated `OpenPaymentMandate` / `OpenCheckoutMandate` is a closed union of the AP2 types; the untyped
+`verify_chain` checks signatures and disclosures only and returns the payloads). So a verifier that does not know this
+profile cannot use R as a mandate at all; a verifier that knows it reads R as what it is. The plain-element rule keeps it
+that way: a constraint the holder could leave undisclosed would turn R back into an ordinary mandate for such a verifier. This is the `issuer_jwt_hash` of the Delegate SD-JWT draft
 ("verify that the `issuer_jwt_hash` is present and matches the base64url encoded digest of the preceding Issuer-signed
 JWT or KB-SD-JWT+KB", section "Verification" of `draft-ietf-oauth-delegate-sd-jwt.md` at `0c1d686`) and of the AP2 SDK
 (`compute_issuer_jwt_hash`, `code/sdk/python/ap2/sdk/sdjwt/common.py` at `e1ea56d`): it commits to the signed issuer JWT
@@ -768,20 +786,24 @@ are `not_evaluated` (`form_differs`).
 ### 11.2 Evaluation and receipt
 
 `ap2_evidence.py restriction <pack> [--tsa-cert PEM]` (library: `verify_restrictions(path, tsa_cert=None)`) verifies the
-pack under §6 with the default policy (and `--tsa-cert` passed through), then evaluates every artifact whose resolved
-claims carry the claim of §11.1 at the top level. The receipt is one JSON object:
+pack under §6 with the default policy (and `--tsa-cert` passed through), then evaluates every artifact that is a
+restriction record: a constraint whose `type` is that of §11.1 in the `constraints` list of its Mandate Content (when
+`delegate_payload` is a list that is not exactly one object, of any of its object elements, so that §11.3 step 6 can name
+the form), or the name `io.github.robertolocatelli81.restricts` at the top level of its payload (the first draft's place:
+§11.3 step 2). The receipt is one JSON object:
 
 | field | meaning |
 |---|---|
 | `restriction_profile` | `"io.github.robertolocatelli81.restriction/1"` |
-| `claim` | `"io.github.robertolocatelli81.restricts"` |
+| `constraint_type` | `"io.github.robertolocatelli81.restricts"` |
 | `admission`, `refusal_class`, `valid` | the §6.9/§6 values of the pack |
 | `time_anchor` | the §6.9 `time_anchor` subject of the pack (`null` on a refusal) |
 | `existed_by` | the earliest `gen_time` among the anchors whose binding AND TSA signature verified (§3.3), else `null`. It can be set while `time_anchor` is not `verified` (another anchor of the pack failed): the proof of §11.5 needs `time_anchor` `verified` |
 | `restrictions` | one entry per restriction record, in artifact order (below) |
 | `met` | `true` iff `restrictions` is non-empty and every entry is `verified` |
 
-Each entry: `in` (the record's artifact name), `restricts` (the claim value as found, or `null` when it is not a string),
+Each entry: `in` (the record's artifact name), `restricts` (the `issuer_jwt_hash` value as found when the record has
+exactly one constraint of §11.1, or `null` when there is not exactly one or the value is not a string),
 `original` (the name of the artifact it was evaluated against, or `null`), `same_issuer_jwt` (the other artifacts with
 the same issuer JWT, sorted), `state`, `reasons`, `reported`. `reasons` lists, in evaluation order, one object
 `{"state", "reason", "at"}` per check that did not pass (`at` is a path inside the Mandate Content or the payload, or
@@ -803,8 +825,11 @@ the complete receipt on stdout, one line `check not run here:` on stderr; or the
 
 1. The pack is admitted and `valid` (§6 step 8, default policy) — else every entry is `not_evaluated` `pack_not_valid` and
    nothing else is evaluated: a record in a pack that does not verify is not evidence of anything.
-2. The claim value is a string that decodes, as strict base64url (§3.1: alphabet only, no padding, canonical trailing
-   bits), to 32 bytes — else `contradicted` `restricts_malformed`.
+2. The reference is well-formed (§11.1) — else `contradicted`, in this order: the name at the top level of the payload,
+   `restricts_misplaced`; not exactly one constraint of the type of §11.1, a key other than `type` and `issuer_jwt_hash`
+   in it, or `issuer_jwt_hash` not a string that decodes, as strict base64url (§3.1: alphabet only, no padding, canonical
+   trailing bits), to 32 bytes, `restricts_malformed`; the constraint not a plain element of the signed `constraints`
+   list (an array-element disclosure, or a disclosure inside it), `restricts_disclosable`.
 3. An artifact of the pack has an issuer JWT whose hash (§11.1) equals it — else `not_evaluated` `original_not_in_pack`.
    Several artifacts with that same issuer JWT are one signed mandate presented with different disclosures: the one with
    the fewest undisclosed digests (step 5), then the first in pack order, is O; the others are listed in `same_issuer_jwt`.
@@ -850,7 +875,6 @@ payload is the Mandate Content and the content rules apply to it):
 - `iat`, `jti`: not compared (a new token has its own), but typed — `iat` an integer, `jti` a string (RFC 7519 §4.1.6,
   §4.1.7): another type is `contradicted` `malformed` in R, `not_evaluated` `original_malformed` in O. `iat` is the
   issuer's statement, never a proven time (§11.5).
-- the claim of §11.1 itself: not compared (O may be a restriction record of a third mandate).
 - any other name: RFC 7519 §4 — "all claims that are not understood by implementations MUST be ignored" — governs the
   processing of the JWT, which is not rejected; whether such a claim narrows or widens is not known here, so a name this
   list does not hold is matched only when it is canonically equal in O and R; otherwise `not_evaluated` `unknown_name`.
@@ -867,13 +891,14 @@ only when canonically equal; otherwise `not_evaluated` `vct_not_supported`.
 - Pre-set values — every other known key (`payee`, `payment_amount`, `payment_instrument`, `pisp`, `execution_date`,
   `risk_data`): present in O → present and canonically equal in R (`contradicted` `preset_changed`; AP2 rule 2 above);
   absent in O → R may add it (one more value the closed mandate must carry unchanged).
-- `constraints`: a list in R (`contradicted` `malformed`) and in O (`not_evaluated` `original_malformed`). For EACH
-  constraint c of O, R holds a constraint that meets it: canonically equal, or of the same `type` and within c by the table
+- `constraints`: a list in R (`contradicted` `malformed`) and in O (`not_evaluated` `original_malformed`). The
+  constraints of the type of §11.1 are not compared, in R (the binding, §11.3) nor in O (O may be a restriction record of
+  a third mandate: §11.3 step 7). For EACH other constraint c of O, R holds a constraint that meets it: canonically equal, or of the same `type` and within c by the table
   below. R holds none of that type: `contradicted` `constraint_removed`; of that type but none within: `contradicted`
   `constraint_widened` (`at`: c's path in O). c of a type outside the table: met only by an equal copy, else
   `not_evaluated` `unknown_name`; c malformed (a type of the table with a missing required key, a wrong type, or a key
   outside its schema): met only by an equal copy, else `not_evaluated` `original_malformed`.
-- Each constraint of R that is not an equal copy of a constraint of O: a type of the table MUST be well-formed — required
+- Each other constraint of R that is not an equal copy of a constraint of O: a type of the table MUST be well-formed — required
   keys present, every key in the schema's `properties`, JSON types exact (`contradicted` `malformed`: the SDK's pydantic
   models would coerce `"999999"` into an integer, so a mistyped bound could be read wider than it looks; a key outside the
   schema is `not_evaluated` `unknown_name`). A type outside the table is ACCEPTED and listed in `reported`
@@ -901,8 +926,11 @@ every closed mandate R admits, O admits too; and — only with `time_anchor` `ve
 Does NOT prove: that the agent, the merchant, the credential provider or any verifier RECEIVED R or applies it; that O
 stopped being valid — AP2 has no revocation, O stays a mandate a verifier that holds only O will accept within O's terms;
 the time R was signed (`iat` is the issuer's statement; only the anchor gives an upper bound, and only for the pack); who
-the key belongs to (§6 step 7). R is itself a well-formed mandate that an AP2 stack can verify on its own (it is
-narrower). Not covered: restrictions of a delegated hop (a KB-SD-JWT of the chain), closed mandates, the `payment.budget`
+the key belongs to (§6 step 7). R is NOT a mandate on its own for an AP2 verifier that does not implement this profile:
+the constraint of §11.1 fails evaluation there by AP2's rule (§11.1, measured with the SDK at `e1ea56d`). This is intended:
+such a verifier cannot apply the restriction, so it must not count R as authority of its own; O stays what it was for it.
+How a verifier that implements this profile evaluates the constraint against a closed mandate in a payment flow is not
+defined here: this section defines it as evidence (§11.3, §11.4) only. Not covered: restrictions of a delegated hop (a KB-SD-JWT of the chain), closed mandates, the `payment.budget`
 and `payment.agent_recurrence` STATE (amounts already spent, uses already made: a restriction narrows the terms, it does
 not account for what O already authorised), and AP2 revisions after `e1ea56d`. AP2's matching rules are looser than
 the equalities of §11.4 in three places (allowed lists, date forms, the order of `checkout.line_items` entries): there the
