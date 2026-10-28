@@ -803,8 +803,8 @@ the complete receipt on stdout, one line `check not run here:` on stderr; or the
 
 1. The pack is admitted and `valid` (§6 step 8, default policy) — else every entry is `not_evaluated` `pack_not_valid` and
    nothing else is evaluated: a record in a pack that does not verify is not evidence of anything.
-2. The claim value is a string of 43 base64url characters (the length of an unpadded SHA-256) — else `contradicted`
-   `restricts_malformed`.
+2. The claim value is a string that decodes, as strict base64url (§3.1: alphabet only, no padding, canonical trailing
+   bits), to 32 bytes — else `contradicted` `restricts_malformed`.
 3. An artifact of the pack has an issuer JWT whose hash (§11.1) equals it — else `not_evaluated` `original_not_in_pack`.
    Several artifacts with that same issuer JWT are one signed mandate presented with different disclosures: the one with
    the fewest undisclosed digests (step 5), then the first in pack order, is O; the others are listed in `same_issuer_jwt`.
@@ -821,6 +821,12 @@ the complete receipt on stdout, one line `check not run here:` on stderr; or the
 6. Same form (§11.1), and each form readable: `delegate_payload` present but not a list of exactly one object is
    `not_evaluated` `form_unsupported` (`at`: `original` / `restriction`); different forms are `not_evaluated`
    `form_differs`.
+7. A chain is as strong as its weakest link: when O is itself a restriction record of the pack whose state is not
+   `verified`, R is at most `not_evaluated` (`original_not_verified`, `at`: `original`) — R may be narrower than O and
+   still broader than the mandate O claims to restrict. Applied after every record is evaluated, along the whole chain.
+
+Several records naming the same original are each evaluated against it; the profile does not order or combine them
+(each is a set of terms the issuer signed — under AP2's conjunctive evaluation a relying party can apply all of them).
 
 ### 11.4 No broader (rules)
 

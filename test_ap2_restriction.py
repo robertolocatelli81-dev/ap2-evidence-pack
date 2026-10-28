@@ -257,10 +257,58 @@ class TestBinding(PackCase):
                 self.assertEqual(why(e), [("contradicted", "restricts_malformed")])
                 self.assertEqual(e["restricts"], bad if isinstance(bad, str) else None)
 
+    def test_a_non_canonical_spelling_of_the_hash_is_malformed(self):
+        o = issue(PAY)
+        h = ap2.issuer_jwt_hash(o)
+        alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+        bad = h[:-1] + alphabet[alphabet.index(h[-1]) ^ 1]   # same 32 bytes, a trailing bit set: §3.1 refuses the spelling
+        self.assertEqual(base64.urlsafe_b64decode(bad + "="), base64.urlsafe_b64decode(h + "="))
+        rec, e = self.run_pair(o, issue(PAY, {CLAIM: bad}))
+        self.assertEqual(why(e), [("contradicted", "restricts_malformed")])
+
+    def test_a_chain_is_as_strong_as_its_weakest_link(self):
+        o = issue(RICH)
+        i = ci(RICH, "payment.amount_range")
+        wide = copy.deepcopy(RICH); wide["constraints"][i]["max"] = 10 ** 6
+        r1 = restrict(o, wide)
+        mid = copy.deepcopy(wide); mid["constraints"][i]["max"] = 50000   # narrower than r1, broader than o
+        r2 = restrict(r1, mid)
+        r3 = restrict(r2, mid)
+        rec = ap2.verify_restrictions(self.pack(("o", o), ("r1", r1), ("r2", r2), ("r3", r3)))
+        got = {e["in"]: (e["state"], why(e)) for e in rec["restrictions"]}
+        self.assertEqual(got["r1"], ("contradicted", [("contradicted", "constraint_widened")]))
+        self.assertEqual(got["r2"], ("not_evaluated", [("not_evaluated", "original_not_verified")]))
+        self.assertEqual(got["r3"], ("not_evaluated", [("not_evaluated", "original_not_verified")]))
+        self.assertFalse(rec["met"])
+        narrow = copy.deepcopy(RICH); narrow["constraints"][i]["max"] = 100
+        n1 = restrict(o, narrow)
+        n2 = restrict(n1, narrow)
+        rec = ap2.verify_restrictions(self.pack(("o", o), ("n1", n1), ("n2", n2), ("n1b", restrict(o, RICH)), name="q.json"))
+        self.assertEqual([(e["in"], e["state"], e["original"]) for e in rec["restrictions"]],
+                         [("n1", "verified", "o"), ("n2", "verified", "n1"), ("n1b", "verified", "o")])
+        self.assertTrue(rec["met"])
+
+    def test_a_record_with_a_duplicate_key_is_never_evaluated(self):
+        o = issue(PAY)
+        p = self.pack(("original", o), ("restriction", restrict(o, PAY)))
+        dup = restrict(o, PAY, payload_text_hook=lambda t: t[:-1] + ', "%s": "%s"}' % (CLAIM, "A" * 43))   # the claim twice
+        with self.assertRaises(ap2.Ap2EvidenceError):
+            ap2.parse_sd_jwt(dup)
+        with open(p, encoding="utf-8") as f:
+            ev = json.load(f)
+        ev["artifacts"][1]["sd_jwt_compact"] = dup
+        ev["evidence_digest_sha256"] = hashlib.sha256(ap2._canon({k: v for k, v in ev.items() if k not in ap2._DIGEST_EXCLUDED})).hexdigest()
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(ev, f)
+        rec = ap2.verify_restrictions(p)
+        self.assertFalse(rec["valid"])
+        self.assertEqual(rec["restrictions"], [])   # the record does not parse (§3.1): no entry, and the pack is not valid
+        self.assertFalse(rec["met"])
+
     def test_a_well_formed_value_of_another_case_names_nothing(self):
         o = issue(PAY)
         h = ap2.issuer_jwt_hash(o)
-        flipped = h.swapcase()
+        flipped = h[:-1].swapcase() + h[-1]   # 32 other bytes, canonical spelling
         rec, e = self.run_pair(o, issue(PAY, {CLAIM: flipped}))
         self.assertEqual(why(e), [("not_evaluated", "original_not_in_pack")])
 

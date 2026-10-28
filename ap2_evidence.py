@@ -1708,7 +1708,6 @@ _OPEN_CONTENT_KEYS = {   # SPEC §11.4: the properties of open_payment_mandate.j
                                "execution_date", "risk_data", "iat", "exp"),
     "mandate.checkout.open.1": ("vct", "constraints", "cnf", "iat", "exp"),
 }
-_B64URL_43 = re.compile(r"[A-Za-z0-9_-]{43}")
 
 
 def _is_int(v):
@@ -1733,6 +1732,14 @@ _CONSTRAINT_SCHEMAS = {   # type -> (required {key: predicate}, optional {key: p
     "checkout.line_items": ({"items": lambda v: isinstance(v, list) and len(v) > 0 and all(isinstance(x, dict) for x in v)}, {}),
 }
 _LINE_ITEM_KEYS = ("acceptable_items", "id", "quantity")
+
+
+def _is_sha256_b64url(v: str) -> bool:
+    """SPEC §11.3 step 2: strict base64url (§3.1) of exactly 32 bytes."""
+    try:
+        return len(_b64url_decode(v)) == 32
+    except Ap2EvidenceError:
+        return False
 
 
 def issuer_jwt_hash(compact: str) -> str:
@@ -1933,6 +1940,7 @@ def evaluate_restriction(original: Dict, restriction: Dict) -> Dict:
                  "cnf": lambda o, r, k, at: equal_rule(o, r, k, at, "cnf_differs")}
     for k in ("iss", "sub", "aud", "vct"):
         top_rules[k] = lambda o, r, k, at: equal_rule(o, r, k, at, "claim_changed")
+
     def typed_only(o, r, k, at, pred):   # iat, jti: not compared (a new token has its own), but typed (RFC 7519 §4.1.6/§4.1.7)
         if k in o and not pred(o[k]):
             no("not_evaluated", "original_malformed", "original." + at)
@@ -2048,7 +2056,7 @@ def verify_restrictions(path: str, tsa_cert: Optional[str] = None) -> Dict:
             tmp = tempfile.mkdtemp(prefix="ap2-restriction-")
         except OSError as e:
             raise Ap2WriteError(f"cannot write the private copy of the pack: {type(e).__name__}: "
-                                f"{os.strerror(e.errno) if isinstance(e.errno, int) else e}")
+                                f"{os.strerror(e.errno) if isinstance(e.errno, int) else e}") from e
         try:
             copy = os.path.join(tmp, "pack.json")
             try:
@@ -2058,7 +2066,7 @@ def verify_restrictions(path: str, tsa_cert: Optional[str] = None) -> Dict:
                     fh.write(json.dumps(ev, ensure_ascii=False, separators=(",", ":")))
             except OSError as e:
                 raise Ap2WriteError(f"cannot write the private copy of the pack: {type(e).__name__}: "
-                                    f"{os.strerror(e.errno) if isinstance(e.errno, int) else e}")
+                                    f"{os.strerror(e.errno) if isinstance(e.errno, int) else e}") from e
             try:
                 receipt = verify_evidence(copy, tsa_cert=tsa_cert)
             except Ap2WriteError as e:
@@ -2091,7 +2099,7 @@ def verify_restrictions(path: str, tsa_cert: Optional[str] = None) -> Dict:
             if receipt.get("valid") is not True:   # step 1
                 entry["reasons"] = [{"state": "not_evaluated", "reason": "pack_not_valid", "at": "restriction"}]
                 continue
-            if not isinstance(val, str) or not _B64URL_43.fullmatch(val):   # step 2
+            if not isinstance(val, str) or not _is_sha256_b64url(val):   # step 2
                 entry.update(state="contradicted", reasons=[{"state": "contradicted", "reason": "restricts_malformed", "at": "restriction"}])
                 continue
             matches = [o for o in arts if o is not r and o.get("hash") == val]   # step 3
@@ -2103,6 +2111,16 @@ def verify_restrictions(path: str, tsa_cert: Optional[str] = None) -> Dict:
             entry["original"] = o["name"]
             entry["same_issuer_jwt"] = sorted(m["name"] for m in matches[1:])
             entry.update(evaluate_restriction(o, r))
+        by_name = {e["in"]: e for e in out["restrictions"]}   # step 7: a chain is as strong as its weakest link
+        changed = True
+        while changed:
+            changed = False
+            for e in out["restrictions"]:
+                up = by_name.get(e["original"])
+                if e["state"] == "verified" and up is not None and up["state"] != "verified":
+                    e["reasons"].append({"state": "not_evaluated", "reason": "original_not_verified", "at": "original"})
+                    e["state"] = "not_evaluated"
+                    changed = True
         out["met"] = bool(out["restrictions"]) and all(e["state"] == "verified" for e in out["restrictions"])
     if not_run is not None:
         raise Ap2WriteError(str(not_run), receipt=out)
