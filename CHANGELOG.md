@@ -12,17 +12,25 @@ judge (hidden digests, names and types outside its lists, a pack that is not val
 verified). Additive: `verify`, its receipt, the twelve fields, the states and every conformance vector are unchanged; the
 JS verifier does not implement §11 (declared). Not a revocation: the original stays valid for whoever holds only it.
 
-Measured 2026-10-28 (Python 3.11, `env -u PYTHONPATH`): `test_ap2_restriction.py` 65 tests, built from the two open
-mandates of AP2's documentation decoded verbatim; 13/13 suites green (262 tests); 496 mutants of the new lines, 475
-detected, 21 not detected — each read: no-op, a value nobody reads, text, or a size bound not exercised (report in the
-branch notes). On 1.6.0 the 65 tests fail (the functions do not exist) and `verify` of a pack whose record widens the
+Measured 2026-10-28 (Python 3.11, `env -u PYTHONPATH`): `test_ap2_restriction.py` 70 tests (65 by the author, 5 added by the
+review), built from the two open mandates of AP2's documentation decoded verbatim; 13/13 suites green (267 tests); 496
+mutants of the new lines, 475 detected, 21 not detected — each read: 16 are a no-op, a value nobody reads, a message text or
+a path not exercised (the 64 MiB bound, `rmtree` errors); 2 remove a `return` after a negative reason (same `state`, more
+`reasons`; one of them crashed on a `constraints: null` of the original — two tests now pin both); 1 `<=` → `<` on
+`budget.max` (equal values are an equal copy, matched before); 1 `add_help` covered by the CLI grammar; 1 `is` → `is not` in
+a help text (report in the branch notes). Three more of the review's own mutants survived the 65 and are pinned by the 5
+tests: non-ASCII digits in a date (`\d` would read an earlier `not_before` as later), a swap of two neighbours in the
+`frequency` order, a non-object constraint of the original copied equal. On 1.6.0 the 65 tests fail (the functions do not exist) and `verify` of a pack whose record widens the
 amount to 10^9 says `valid: true`: 1.6.0 records a record, it does not judge it.
 
 Found while building it, in 1.6.0 and NOT fixed here (another change, both verifiers): a digest repeated in the issuer
 payload is accepted and its disclosure expanded twice — measured 2026-10-28, both verifiers `valid: true`, the mandate twice
 in `resolved_claims.delegate_payload` (RFC 9901 §7.1 step 4: "If any digest value is encountered more than once in the
 Issuer-signed JWT payload (directly or recursively via other Disclosures), the SD-JWT MUST be rejected"); §11 checks it on
-its own records.
+its own records. The same section, step 3.c.ii.2 ("If the claim name is _sd or ..., the SD-JWT MUST be rejected"): 1.6.0
+inserts such a disclosed claim as an ordinary one (both verifiers, measured 2026-10-28). The `sd-jwt` 0.10.4 reference library
+accepts both as well — its duplicate check covers the `_sd` arrays only, not array placeholders, and it has no reserved-name
+check (measured 2026-10-28 through the AP2 SDK at `e1ea56d`).
 
 ## 1.6.0 — 2026-10-18 — one closed field per question: admission, states, policy
 

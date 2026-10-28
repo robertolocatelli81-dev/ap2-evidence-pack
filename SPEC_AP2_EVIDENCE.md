@@ -756,8 +756,8 @@ JWT or KB-SD-JWT+KB", section "Verification" of `draft-ietf-oauth-delegate-sd-jw
 (`compute_issuer_jwt_hash`, `code/sdk/python/ap2/sdk/sdjwt/common.py` at `e1ea56d`): it commits to the signed issuer JWT
 and not to the disclosures a copy carries. (AP2's own example `payment.reference` hashes the whole compact serialization
 instead — measured 2026-10-28: `FzLoxbbtgQGYZxoSM2NJYJtkFTSsdfUBoVEQ12k7JN8` in `payment_mandate.md` is the SHA-256 of the
-open checkout example token including its disclosures and final `~`. The two forms are different values; this profile
-uses only the first.)
+open checkout example token including its disclosures and final `~` — the value the KB-JWT of the same example carries as
+`sd_hash`, `checkout_mandate.md`. The two forms are different values; this profile uses only the first.)
 
 R carries the restricted Mandate Content in the same FORM as O. The forms are those of the AP2 SDK's `from_sd_jwt`
 (`code/sdk/python/ap2/sdk/mandate.py` at `e1ea56d`): when the payload has a `delegate_payload` list, the Mandate Content
@@ -885,12 +885,12 @@ only when canonically equal; otherwise `not_evaluated` `vct_not_supported`.
 | `type` (schema keys) | c' (in R) is within c (in O) when |
 |---|---|
 | `payment.amount_range` (`type`, `currency` string, `max` integer — required; `min` integer) | same `currency`; `max'` ≤ `max`; when c has `min`, c' has `min'` ≥ `min` ("If absent, there is no minimum") |
-| `payment.budget` (`type`, `currency` string, `max` integer — required) | same `currency`; `max'` ≤ `max` |
+| `payment.budget` (`type`, `currency` string, `max` — required; `max` is `number` in the schema, read here as an integer by the rule above — the AP2 SDK takes it in major units, `int(self.constraint.max * 100)`, `constraints.py`, unlike `amount_range`; the same unit on both sides keeps the comparison sound) | same `currency`; `max'` ≤ `max` |
 | `payment.agent_recurrence` (`type`, `frequency` enum — required; `max_occurrences` integer) | `frequency'` no more frequent, in the order `ON_DEMAND` < `DAILY` < `WEEKLY` < `BIWEEKLY` < `MONTHLY` < `QUARTERLY` < `ANNUALLY` (this profile's reading of "sufficiently separated in time from the previous presentation to meet the `frequency` definition", `payment_mandate.md`; AP2 states no order and the SDK does not evaluate `frequency`); when c has `max_occurrences`, c' has one ≤ it |
 | `payment.allowed_payees`, `payment.allowed_payment_instruments`, `payment.allowed_pisps`, `checkout.allowed_merchants` (`type`, `allowed` list of objects — required) | every element of `allowed'` is canonically equal to an element of `allowed` (stricter than AP2's matching — `merchant_matches` compares `id`, or `name`+`website`; an element spelled differently that AP2 would match the same is `constraint_widened` here, declared) |
 | `payment.execution_date` (`type` required; `not_before`, `not_after` strings) | when c has `not_before`, c' has one ≥ it; when c has `not_after`, c' has one ≤ it. Comparable values are `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SSZ` (ASCII digits, a real calendar date and time), both of the SAME form; another form or two forms is `not_evaluated` `date_form` |
 | `payment.reference` (`type`, `conditional_transaction_id` string — required) | equal `conditional_transaction_id` |
-| `checkout.line_items` (`type`, `items` non-empty list of `{id` string, `acceptable_items` list of objects, `quantity` integer > 0`}` — required) | same number of `items`; at each position the same `id` and the same `quantity`, and every element of `acceptable_items'` canonically equal to an element of `acceptable_items`; an EMPTY list on one side only is `constraint_widened`: the AP2 text matches an item "if its ID is present in the revealed `acceptable_items`" (`checkout_mandate.md`), so an empty list admits no item, while the SDK treats it as a wildcard (`max_flow_helper.py`: `req_is_wildcard = not req.acceptable_items`) — under one of the two readings the record is broader. An `items` entry cannot be added or removed: the constraint "is met if the maximal flow equals the total constraint `items` quantity and the total checkout `items` quantity" (`checkout_mandate.md`), so another set of entries admits other checkouts, not fewer |
+| `checkout.line_items` (`type`, `items` non-empty list of `{id` string, `acceptable_items` list of objects, `quantity` integer > 0`}` — required) | same number of `items`; at each position (the list is compared in ORDER: a reordered `items` is `constraint_widened` here where AP2's maximal flow would find it equivalent, declared) the same `id` and the same `quantity`, and every element of `acceptable_items'` canonically equal to an element of `acceptable_items`; an EMPTY list on one side only is `constraint_widened`: the AP2 text matches an item "if its ID is present in the revealed `acceptable_items`" (`checkout_mandate.md`), so an empty list admits no item, while the SDK treats it as a wildcard (`max_flow_helper.py`: `req_is_wildcard = not req.acceptable_items`) — under one of the two readings the record is broader. An `items` entry cannot be added or removed: the constraint "is met if the maximal flow equals the total constraint `items` quantity and the total checkout `items` quantity" (`checkout_mandate.md`), so another set of entries admits other checkouts, not fewer |
 
 ### 11.5 What a `verified` record proves, and what it does not (declared)
 
@@ -904,6 +904,7 @@ the time R was signed (`iat` is the issuer's statement; only the anchor gives an
 the key belongs to (§6 step 7). R is itself a well-formed mandate that an AP2 stack can verify on its own (it is
 narrower). Not covered: restrictions of a delegated hop (a KB-SD-JWT of the chain), closed mandates, the `payment.budget`
 and `payment.agent_recurrence` STATE (amounts already spent, uses already made: a restriction narrows the terms, it does
-not account for what O already authorised), and AP2 revisions after `e1ea56d`. AP2's matching rules are looser than the
-equalities of §11.4 in two places (allowed lists, date forms): there the profile can say `contradicted` or
-`not_evaluated` where AP2 would find the terms equivalent — never `verified` where they are broader.
+not account for what O already authorised), and AP2 revisions after `e1ea56d`. AP2's matching rules are looser than
+the equalities of §11.4 in three places (allowed lists, date forms, the order of `checkout.line_items` entries): there the
+profile can say `contradicted` or `not_evaluated` where AP2 would find the terms equivalent — never `verified` where they
+are broader.

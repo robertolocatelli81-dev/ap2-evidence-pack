@@ -1124,6 +1124,58 @@ class TestMutantGaps(PackCase):
                 self.assertEqual((r.returncode, r.stdout), (2, ""), r.stderr)
 
     @unittest.skipUnless(HAVE_OPENSSL, "openssl absent: the local TSA cannot run")
+    # NEMESIS 2026-10-28 — four gaps the mutation run left open (mutants 300, and three of the reviewer's own)
+    def test_the_original_constraints_not_iterable_is_original_malformed_not_a_crash(self):
+        """Mutant 300 (`return done()` removed after `original_malformed` on a non-list `constraints` of O) crashed on null/5/true;
+        the suite had only an iterable `{"a": 1}`."""
+        for v in (None, 5, True, "abc", {"a": 1}):
+            o = copy.deepcopy(RICH); o["constraints"] = v
+            oc = issue(o)
+            with self.subTest(constraints=v):
+                self.assertEqual(why(direct(oc, restrict(oc, RICH))), [("not_evaluated", "original_malformed")])
+
+    def test_dates_with_non_ascii_digits_are_another_form_in_both_forms(self):
+        """SPEC §11.4: ASCII digits. With `\\d` the regex and strptime accept Arabic-Indic / fullwidth digits, and a string
+        comparison then reads an EARLIER not_before as later (verified where it is broader)."""
+        base = copy.deepcopy(RICH); i = ci(base, "payment.execution_date")
+        for form, nb, na in (("date", "2026-03-31", "2026-04-30"), ("datetime", "2026-03-31T00:00:00Z", "2026-04-30T23:59:59Z")):
+            o = copy.deepcopy(base); o["constraints"][i].update(not_before=nb, not_after=na); oc = issue(o)
+            for digits in ("\u0662\u0660\u0662\u0666", "\uff12\uff10\uff12\uff16"):   # ٢٠٢٦ and ２０２６
+                r = copy.deepcopy(o); r["constraints"][i]["not_before"] = digits + nb[4:].replace("31", "30")
+                with self.subTest(form=form, digits=digits):
+                    res = direct(oc, restrict(oc, r))
+                    self.assertEqual(why(res), [("not_evaluated", "date_form")], res)
+
+    def test_frequency_order_every_adjacent_pair(self):
+        """SPEC §11.4: the whole order, pair by pair (a swap of two neighbours survived the author's tests)."""
+        order = ("ON_DEMAND", "DAILY", "WEEKLY", "BIWEEKLY", "MONTHLY", "QUARTERLY", "ANNUALLY")
+        self.assertEqual(ap2._FREQ_ORDER, order)
+        base = copy.deepcopy(RICH); i = ci(base, "payment.agent_recurrence")
+        for a, b in zip(order, order[1:]):
+            o = copy.deepcopy(base); o["constraints"][i]["frequency"] = b; oc = issue(o)
+            r = copy.deepcopy(o); r["constraints"][i]["frequency"] = a
+            with self.subTest(more_frequent=a, original=b):
+                self.assertEqual(why(direct(oc, restrict(oc, r))), [("contradicted", "constraint_widened")])
+            o = copy.deepcopy(base); o["constraints"][i]["frequency"] = a; oc = issue(o)
+            r = copy.deepcopy(o); r["constraints"][i]["frequency"] = b
+            with self.subTest(less_frequent=b, original=a):
+                self.assertEqual(direct(oc, restrict(oc, r))["state"], "verified")
+
+    def test_a_constraint_of_the_original_that_is_not_an_object_copied_equal(self):
+        """An equal copy meets any constraint of O, an object or not (a shortcut by `type` would crash on a string)."""
+        o = copy.deepcopy(RICH); o["constraints"] += ["x", 5, None, ["y"]]; oc = issue(o)
+        self.assertEqual(direct(oc, restrict(oc, copy.deepcopy(o)))["state"], "verified")
+        r = copy.deepcopy(o); r["constraints"].remove("x")
+        self.assertEqual(why(direct(oc, restrict(oc, r))), [("not_evaluated", "original_malformed")])
+
+    def test_a_changed_vct_ends_the_evaluation(self):
+        """Mutant 283 (`return done()` removed after `claim_changed` on `vct`): same state, but the receipt would then also list
+        the content rules. The receipt lists exactly one reason."""
+        r = copy.deepcopy(RICH); r["vct"] = "mandate.checkout.open.1"; r["constraints"][ci(r, "payment.amount_range")]["max"] = 10**9
+        o = issue(RICH)
+        res = direct(o, restrict(o, r))
+        self.assertEqual([(x["state"], x["reason"]) for x in res["reasons"]], [("contradicted", "claim_changed")])
+
     def test_existed_by_is_the_earliest_counting_anchor_in_anchors_too(self):
         import time
         from test_ap2_anchors import LocalTSA
