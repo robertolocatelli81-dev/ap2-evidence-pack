@@ -1415,5 +1415,56 @@ class TestReferenceAsConstraintReview(PackCase):
         self.assertEqual((rec["restrictions"], rec["met"]), ([], False))
 
 
+class TestThirdReview(PackCase):
+    """Third review of the constraint form (2026-10-28): `delegate_payload` itself a property disclosure (the holder could
+    leave the whole content out — with a mandate signed at the top level beside it, what is left verifies in the SDK's
+    typed path as an ordinary mandate), `_sd` / `_sd_alg` keys inside the reference (nothing to leave out, still not the
+    signed element), and a `delegate_payload` that is not a list (no Mandate Content: no record)."""
+
+    def sign(self, top):
+        return K1.sign({"alg": "ES256", "typ": "example+sd-jwt", "jwk": K1.jwk}, json.dumps(top))
+
+    def test_delegate_payload_as_a_property_disclosure_is_not_plain(self):
+        wide = copy.deepcopy(PAY)
+        narrow = copy.deepcopy(PAY); narrow["constraints"][ci(PAY, "payment.amount_range")]["max"] = 100
+        d_o = _disc(wide)
+        o = self.sign(dict(wide, delegate_payload=[{"...": ap2._disclosure_digest(d_o)}])) + "~" + d_o + "~"
+        h = ap2.issuer_jwt_hash(o)
+        # beside it at the top level: a mandate, nothing, a mandate whose `constraints` hold an equal copy of the reference
+        for top in (wide, {}, with_ref(wide, h)):
+            d_r = _disc("delegate_payload", [with_ref(narrow, h)])
+            r = self.sign(dict(top, _sd=[ap2._disclosure_digest(d_r)])) + "~" + d_r + "~"
+            with self.subTest(top_level=sorted(top)):
+                self.assertEqual(ap2._digest_census(ap2.parse_sd_jwt(r)), (0, False))   # fully disclosed as packed
+                rec = ap2.verify_restrictions(self.pack(("original", o), ("restriction", r), name="dp.json"))
+                self.assertTrue(rec["valid"])
+                self.assertEqual(rec["restrictions"][0]["reasons"], [{"state": "contradicted", "reason": "restricts_disclosable",
+                                                                      "at": f"restriction.delegate_payload[0].constraints[{len(PAY['constraints'])}]"}])
+        d_r = _disc(with_ref(narrow, h))   # control: the plain key, the content an array-element disclosure
+        r = self.sign(dict(wide, delegate_payload=[{"...": ap2._disclosure_digest(d_r)}])) + "~" + d_r + "~"
+        rec = ap2.verify_restrictions(self.pack(("original", o), ("restriction", r), name="dp2.json"))
+        self.assertEqual((rec["restrictions"][0]["state"], rec["met"]), ("verified", True))
+
+    def test_sd_keys_inside_the_reference_are_not_plain(self):
+        o = issue(PAY)
+        for extra in ({"_sd": []}, {"_sd_alg": "sha-256"}, {"_sd": [], "_sd_alg": "sha-256"}):
+            with self.subTest(extra=extra):
+                r = issue(with_ref(PAY, ap2.issuer_jwt_hash(o), extra))
+                self.assertEqual(ap2._digest_census(ap2.parse_sd_jwt(r)), (0, False))   # nothing to leave out
+                e = self.run_pair(o, r)[1]
+                self.assertEqual(why(e), [("contradicted", "restricts_disclosable")])
+                self.assertEqual(e["restricts"], ap2.issuer_jwt_hash(o))
+
+    def test_a_delegate_payload_that_is_not_a_list_holds_no_mandate_content(self):
+        o = issue(PAY)
+        c = with_ref(PAY, ap2.issuer_jwt_hash(o))
+        for dp in ("x", 7, None, {}, {"0": c}, True):
+            with self.subTest(dp=dp):
+                rec = ap2.verify_restrictions(self.pack(("original", o), ("restriction", self.sign(dict(c, delegate_payload=dp)) + "~"), name="nl.json"))
+                self.assertEqual((rec["valid"], rec["restrictions"], rec["met"]), (True, [], False))
+        # control: without `delegate_payload` the same payload IS the Mandate Content — a record, in the other form than O
+        self.assertEqual(why(self.run_pair(o, self.sign(c) + "~")[1]), [("not_evaluated", "form_differs")])
+
+
 if __name__ == "__main__":
     unittest.main()

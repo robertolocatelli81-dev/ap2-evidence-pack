@@ -40,9 +40,14 @@ checkout) and still accepts O; AP2: "Any unknown Constraints MUST be treated as 
 out); receipt field `claim` renamed `constraint_type`. Intended consequence: R is no longer a mandate on its own for a
 verifier that does not implement §11. Where the SDK does not read a typed mandate (`verify_chain`, `sd_jwt.verify`,
 `MandateClient.verify` without `payload_type`) R passes like any token, and no constraint of any open mandate is
-evaluated there (SPEC §11.1).
-Measured on this draft (Python 3.9 / 3.11 / 3.13, `env -u PYTHONPATH`): `test_ap2_restriction.py` 81 tests, 13/13 suites
-green (278 tests on 3.11); `sdk_crosscheck --hostile` 0 of 177 disagreements. The counts in the paragraph above are the
+evaluated there (SPEC §11.1): a closed mandate chained to R passes those paths as one chained to O.
+Third review (2026-10-28): `delegate_payload` must be a plain key of the payload — as a property disclosure, with a
+mandate signed at the top level beside it, the token minus that one disclosure verified in the SDK's typed path as an
+ordinary mandate while §11 said `verified`; now `restricts_disclosable`. SPEC §11.1 says that `constraints` may be a
+property disclosure and why (the field is required), that `_sd` / `_sd_alg` inside the reference are
+`restricts_disclosable`, and that a `delegate_payload` that is not a list makes no record; 3 tests.
+Measured on this draft (Python 3.9 / 3.11 / 3.13, `env -u PYTHONPATH`): `test_ap2_restriction.py` 84 tests, 13/13 suites
+green (281 tests on 3.11); `sdk_crosscheck --hostile` 0 of 177 disagreements. The counts in the paragraph above are the
 first draft's.
 
 Found while building it, in 1.6.0 and NOT fixed here (another change, both verifiers): a digest repeated in the issuer

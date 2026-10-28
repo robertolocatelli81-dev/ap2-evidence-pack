@@ -1818,8 +1818,11 @@ def _record_refs(resolved) -> Tuple[bool, List[Tuple[str, Dict]]]:
 def _ref_is_plain(parsed: Dict, ref: Dict) -> bool:
     """SPEC §11.1/§11.3 step 2: the reference is an element, as signed, of the `constraints` list of the Mandate Content —
     not an array-element disclosure (the holder could leave it out) and with no disclosure inside it. The raw Mandate
-    Content is found the way the resolver finds it: `delegate_payload[0]` (an object or an array-element disclosure),
-    else the payload; `constraints` a plain key or a property disclosure. Anything else is not plain."""
+    Content is found the way the resolver finds it: `delegate_payload`, a PLAIN key of the payload (as a property
+    disclosure the holder could leave the whole content out — measured with the SDK at e1ea56d: with a mandate signed at
+    the top level beside it, what is left verifies as an ordinary typed mandate), holding `delegate_payload[0]` (an object
+    or an array-element disclosure), else the payload; `constraints` a plain key or a property disclosure (a mandate
+    without `constraints` is no typed mandate: the field is required). Anything else is not plain."""
     try:
         dmap = {_disclosure_digest(d): _loads_segment(_b64url_decode(d), "disclosure") for d in parsed["disclosures"]}
 
@@ -1839,7 +1842,10 @@ def _ref_is_plain(parsed: Dict, ref: Dict) -> bool:
             return el
 
         payload = parsed["payload"]
-        dp = prop(payload, "delegate_payload")
+        if any(isinstance(dmap.get(dg), list) and len(dmap[dg]) == 3 and dmap[dg][1] == "delegate_payload"
+               for dg in (payload.get("_sd") if isinstance(payload.get("_sd"), list) else [])):
+            return False   # `delegate_payload` itself a property disclosure: the holder could leave the whole content out
+        dp = payload.get("delegate_payload")
         contents = [payload] if dp is None else [unwrap(el) for el in dp] if isinstance(dp, list) else []
         want = _canon(ref)
         for content in contents:

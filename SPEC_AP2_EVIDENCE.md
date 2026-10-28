@@ -752,7 +752,14 @@ disclosure resolution, holds in its `constraints` list exactly one constraint of
 original's Issuer-signed JWT)), no padding
 
 — the original O being another artifact of the same pack. The constraint has exactly these two keys, and it is a plain
-element of the list in the token as signed: not an array-element disclosure, no selectively disclosable key inside it.
+element of the list in the token as signed: not an array-element disclosure, no selectively disclosable key inside it, no
+`_sd` / `_sd_alg` key inside it (the signed element IS the resolved constraint). `constraints` itself MAY be a property
+disclosure: a mandate without it is no typed mandate (`constraints` is required in `open_payment_mandate.json` /
+`open_checkout_mandate.json`; measured 2026-10-28 with the SDK at `e1ea56d`: the token with that disclosure left out is
+refused at `constraints`). In the `delegate_payload` form, `delegate_payload` MUST be a plain key of the payload: as a
+property disclosure the holder could leave the whole content out, and with a mandate signed at the top level beside it the
+token minus that one disclosure verifies in the SDK's typed path as an ordinary `OpenPaymentMandate` with the top-level
+terms (measured, same commit).
 
 **Why a constraint and not a claim** (draft change of 2026-10-28; the first draft put the reference at the top level of
 the payload). An AP2 verifier that does not implement this profile ignores an unknown JWT claim (RFC 7519 §4: "all
@@ -769,9 +776,12 @@ field of the generated `OpenPaymentMandate` / `OpenCheckoutMandate` is a closed 
 does not read the open mandate as a type — `sd_jwt.verify`, `verify_chain` / `MandateClient.verify` without
 `payload_type`, which check signatures, disclosures, key binding and time claims and return the payloads, and the
 sample roles that validate only the closed hop (`credentials_provider_agent`, `merchant_agent`) — R passes like any
-token and no constraint of any open mandate is evaluated there (measured, same commit). So a verifier that does not know this
-profile cannot use R as a mandate at all; a verifier that knows it reads R as what it is. The plain-element rule keeps it
-that way: a constraint the holder could leave undisclosed would turn R back into an ordinary mandate for such a verifier. This is the `issuer_jwt_hash` of the Delegate SD-JWT draft
+token and no constraint of any open mandate is evaluated there (measured, same commit: a closed mandate chained to R
+passes `verify_chain` and the sample roles' path exactly as one chained to O — those paths evaluate no mandate's terms, O's
+included). So a verifier that does not know this profile cannot EVALUATE R as a mandate: where it evaluates the
+constraints of an open mandate, R fails; where it does not, it applies no mandate's terms. A verifier that knows the
+profile reads R as what it is. The plain-element rule keeps it that way: a constraint the holder could leave undisclosed
+would turn R back into an ordinary mandate for such a verifier. This is the `issuer_jwt_hash` of the Delegate SD-JWT draft
 ("verify that the `issuer_jwt_hash` is present and matches the base64url encoded digest of the preceding Issuer-signed
 JWT or KB-SD-JWT+KB", section "Verification" of `draft-ietf-oauth-delegate-sd-jwt.md` at `0c1d686`) and of the AP2 SDK
 (`compute_issuer_jwt_hash`, `code/sdk/python/ap2/sdk/sdjwt/common.py` at `e1ea56d`): it commits to the signed issuer JWT
@@ -781,9 +791,12 @@ open checkout example token including its disclosures and final `~` — the valu
 `sd_hash`, `checkout_mandate.md`. The two forms are different values; this profile uses only the first.)
 
 R carries the restricted Mandate Content in the same FORM as O. The forms are those of the AP2 SDK's `from_sd_jwt`
-(`code/sdk/python/ap2/sdk/mandate.py` at `e1ea56d`): when the payload has a `delegate_payload` list, the Mandate Content
-is its one element, which MUST be an object (the SDK requires exactly one disclosed item); otherwise the payload itself
-is the Mandate Content. A record is evaluated only against the Mandate Content it carries; R and O in different forms
+(`code/sdk/python/ap2/sdk/mandate.py` at `e1ea56d`): when the payload has no `delegate_payload`, the payload itself is the
+Mandate Content; when it has one, it MUST be a list of exactly one object, and that object is the Mandate Content (the
+SDK requires exactly one disclosed item). A `delegate_payload` of another shape is `form_unsupported` (§11.3 step 6); one
+that is not a list at all holds no Mandate Content for §11.2, so such a token is no record here (the SDK at `e1ea56d`
+reads such a payload itself as the mandate — `from_sd_jwt`, `isinstance(delegate_payload, list)`; stricter here, declared).
+A record is evaluated only against the Mandate Content it carries; R and O in different forms
 are `not_evaluated` (`form_differs`).
 
 ### 11.2 Evaluation and receipt
@@ -832,7 +845,8 @@ the complete receipt on stdout, one line `check not run here:` on stderr; or the
    `restricts_misplaced`; not exactly one constraint of the type of §11.1, a key other than `type` and `issuer_jwt_hash`
    in it, or `issuer_jwt_hash` not a string that decodes, as strict base64url (§3.1: alphabet only, no padding, canonical
    trailing bits), to 32 bytes, `restricts_malformed`; the constraint not a plain element of the signed `constraints`
-   list (an array-element disclosure, or a disclosure inside it), `restricts_disclosable`.
+   list (an array-element disclosure, a disclosure or an `_sd` / `_sd_alg` key inside it, or `delegate_payload` itself a
+   property disclosure: §11.1), `restricts_disclosable`.
 3. An artifact of the pack has an issuer JWT whose hash (§11.1) equals it — else `not_evaluated` `original_not_in_pack`.
    Several artifacts with that same issuer JWT are one signed mandate presented with different disclosures: the one with
    the fewest undisclosed digests (step 5), then the first in pack order, is O; the others are listed in `same_issuer_jwt`.
@@ -929,8 +943,9 @@ every closed mandate R admits, O admits too; and — only with `time_anchor` `ve
 Does NOT prove: that the agent, the merchant, the credential provider or any verifier RECEIVED R or applies it; that O
 stopped being valid — AP2 has no revocation, O stays a mandate a verifier that holds only O will accept within O's terms;
 the time R was signed (`iat` is the issuer's statement; only the anchor gives an upper bound, and only for the pack); who
-the key belongs to (§6 step 7). R is NOT a mandate on its own for an AP2 verifier that does not implement this profile:
-the constraint of §11.1 fails evaluation there by AP2's rule (§11.1, measured with the SDK at `e1ea56d`). This is intended:
+the key belongs to (§6 step 7). R is NOT a mandate on its own for an AP2 verifier that does not implement this profile
+and evaluates constraints: the constraint of §11.1 fails evaluation there by AP2's rule (§11.1, measured with the SDK at
+`e1ea56d`; a path that evaluates no constraint passes a closed mandate under R as under O, §11.1). This is intended:
 such a verifier cannot apply the restriction, so it must not count R as authority of its own; O stays what it was for it.
 How a verifier that implements this profile evaluates the constraint against a closed mandate in a payment flow is not
 defined here: this section defines it as evidence (§11.3, §11.4) only. Not covered: restrictions of a delegated hop (a KB-SD-JWT of the chain), closed mandates, the `payment.budget`
