@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased (branch `restriction-record`, DRAFT, not released) — a restriction record for an open mandate
+
+AP2 at `e1ea56d` has no way to restrict or revoke a mandate once issued. SPEC §11 (draft revision 1.7.0) defines this
+repository's own profile `io.github.robertolocatelli81.restriction/1`: an SD-JWT in the same pack, signed by the same key,
+whose top-level claim `io.github.robertolocatelli81.restricts` is the `issuer_jwt_hash` of the original, carrying the same
+`cnf` and terms no broader than the original under closed rules per constraint type. `ap2_evidence.py restriction <pack>
+[--tsa-cert PEM]` (library: `verify_restrictions`, `evaluate_restriction`) verifies the pack first, then each record:
+`verified` only when bound and no broader; `contradicted` when a rule fails; `not_evaluated` for what the profile cannot
+judge (hidden digests, names and types outside its lists, a pack that is not valid, a chain whose earlier link is not
+verified). Additive: `verify`, its receipt, the twelve fields, the states and every conformance vector are unchanged; the
+JS verifier does not implement §11 (declared). Not a revocation: the original stays valid for whoever holds only it.
+
+Measured 2026-10-28 (Python 3.11, `env -u PYTHONPATH`): `test_ap2_restriction.py` 65 tests, built from the two open
+mandates of AP2's documentation decoded verbatim; 13/13 suites green (262 tests); 496 mutants of the new lines, 475
+detected, 21 not detected — each read: no-op, a value nobody reads, text, or a size bound not exercised (report in the
+branch notes). On 1.6.0 the 65 tests fail (the functions do not exist) and `verify` of a pack whose record widens the
+amount to 10^9 says `valid: true`: 1.6.0 records a record, it does not judge it.
+
+Found while building it, in 1.6.0 and NOT fixed here (another change, both verifiers): a digest repeated in the issuer
+payload is accepted and its disclosure expanded twice — measured 2026-10-28, both verifiers `valid: true`, the mandate twice
+in `resolved_claims.delegate_payload` (RFC 9901 §7.1 step 4: "If any digest value is encountered more than once in the
+Issuer-signed JWT payload (directly or recursively via other Disclosures), the SD-JWT MUST be rejected"); §11 checks it on
+its own records.
+
 ## 1.6.0 — 2026-10-18 — one closed field per question: admission, states, policy
 
 A relying party (a dispute provider, an auditor) used to read the verdict off twelve booleans and their combinations, and
