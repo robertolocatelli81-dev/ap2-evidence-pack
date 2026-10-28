@@ -793,9 +793,11 @@ open checkout example token including its disclosures and final `~` — the valu
 R carries the restricted Mandate Content in the same FORM as O. The forms are those of the AP2 SDK's `from_sd_jwt`
 (`code/sdk/python/ap2/sdk/mandate.py` at `e1ea56d`): when the payload has no `delegate_payload`, the payload itself is the
 Mandate Content; when it has one, it MUST be a list of exactly one object, and that object is the Mandate Content (the
-SDK requires exactly one disclosed item). A `delegate_payload` of another shape is `form_unsupported` (§11.3 step 6); one
-that is not a list at all holds no Mandate Content for §11.2, so such a token is no record here (the SDK at `e1ea56d`
-reads such a payload itself as the mandate — `from_sd_jwt`, `isinstance(delegate_payload, list)`; stricter here, declared).
+SDK requires exactly one disclosed item). A `delegate_payload` list of another shape is `form_unsupported` (§11.3 step 6)
+— for O, and for R when one of its object elements holds the reference (§11.2); a list with no object element holding it
+(empty, or of other values) makes no record, and the payload's own `constraints` are not read in this form. One that is
+not a list at all holds no Mandate Content for §11.2, so such a token is no record here (the SDK at `e1ea56d` reads such a
+payload itself as the mandate — `from_sd_jwt`, `isinstance(delegate_payload, list)`; stricter here, declared).
 A record is evaluated only against the Mandate Content it carries; R and O in different forms
 are `not_evaluated` (`form_differs`).
 

@@ -1465,6 +1465,41 @@ class TestThirdReview(PackCase):
         # control: without `delegate_payload` the same payload IS the Mandate Content — a record, in the other form than O
         self.assertEqual(why(self.run_pair(o, self.sign(c) + "~")[1]), [("not_evaluated", "form_differs")])
 
+    def test_the_guard_reads_the_top_level_sd_in_every_position_and_nothing_nested(self):
+        """Cross review (2026-10-29): the `delegate_payload` disclosure is found in the payload's `_sd` whatever its position
+        among other property disclosures (mutant `any` -> non-empty `all` lived), and a disclosure named `delegate_payload`
+        INSIDE the Mandate Content is not the form's key (mutant iterating every disclosure lived): there it is an unknown
+        name of §11.4. And a `delegate_payload` list with no object element holding the reference makes no record."""
+        wide = copy.deepcopy(PAY)
+        narrow = copy.deepcopy(PAY); narrow["constraints"][ci(PAY, "payment.amount_range")]["max"] = 100
+        d_o = _disc(wide)
+        o = self.sign(dict(wide, delegate_payload=[{"...": ap2._disclosure_digest(d_o)}])) + "~" + d_o + "~"
+        h = ap2.issuer_jwt_hash(o)
+        at = f"restriction.delegate_payload[0].constraints[{len(PAY['constraints'])}]"
+        for pos in (0, 1):   # the `delegate_payload` disclosure first / second in `_sd`; the reference copied at the top level too
+            d_r = _disc("delegate_payload", [with_ref(narrow, h)]); d_x = _disc("foo", "x")
+            sd = [ap2._disclosure_digest(d_r), ap2._disclosure_digest(d_x)]
+            if pos:
+                sd.reverse()
+            r = self.sign(dict(with_ref(wide, h), _sd=sd)) + "~" + d_x + "~" + d_r + "~"
+            with self.subTest(position=pos):
+                rec = ap2.verify_restrictions(self.pack(("original", o), ("restriction", r), name=f"sd{pos}.json"))
+                self.assertTrue(rec["valid"])
+                self.assertEqual(rec["restrictions"][0]["reasons"], [{"state": "contradicted", "reason": "restricts_disclosable", "at": at}])
+        d_n = _disc("delegate_payload", "x")
+        c = with_ref(narrow, h); c["_sd"] = [ap2._disclosure_digest(d_n)]
+        r = self.sign(dict(wide, delegate_payload=[c])) + "~" + d_n + "~"
+        rec = ap2.verify_restrictions(self.pack(("original", o), ("restriction", r), name="nested.json"))
+        self.assertTrue(rec["valid"])
+        self.assertEqual(rec["restrictions"][0]["reasons"],
+                         [{"state": "not_evaluated", "reason": "unknown_name", "at": "restriction.delegate_payload[0].delegate_payload"}])
+        for dp in ([], [5], ["x"], [{}], [[with_ref(narrow, h)]]):   # no object element holds the reference: no record
+            with self.subTest(dp=dp):
+                rec = ap2.verify_restrictions(self.pack(("original", o), ("restriction", self.sign(dict(with_ref(wide, h), delegate_payload=dp)) + "~"), name="nr.json"))
+                self.assertEqual((rec["valid"], rec["restrictions"], rec["met"]), (True, [], False))
+        rec = ap2.verify_restrictions(self.pack(("original", o), ("restriction", self.sign(dict(wide, delegate_payload=[with_ref(narrow, h), 5])) + "~"), name="fu.json"))
+        self.assertEqual(why(rec["restrictions"][0]), [("not_evaluated", "form_unsupported")])   # control: an object element holds it
+
 
 if __name__ == "__main__":
     unittest.main()
