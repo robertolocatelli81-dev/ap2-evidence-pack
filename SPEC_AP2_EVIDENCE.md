@@ -759,7 +759,13 @@ disclosure: a mandate without it is no typed mandate (`constraints` is required 
 refused at `constraints`). In the `delegate_payload` form, `delegate_payload` MUST be a plain key of the payload: as a
 property disclosure the holder could leave the whole content out, and with a mandate signed at the top level beside it the
 token minus that one disclosure verifies in the SDK's typed path as an ordinary `OpenPaymentMandate` with the top-level
-terms (measured, same commit).
+terms (measured, same commit). The same disclosure in O gives O two readings — the pack's (the content, every disclosure
+present: §11.3 step 5) and the one its holder can present without it (the top-level terms; measured 2026-10-29, same
+SDK: a top-level `max` of 10, and of 1000000, beside a content with `max` 20000 — the token minus that disclosure is
+accepted with the top-level value, narrower or wider than the content) — and a verdict against one reading says nothing
+about the other: R is then `not_evaluated` (`original_disclosable`, §11.3 step 6). The SDK issues `delegate_payload` as a
+plain key holding an array-element disclosure (`sd_jwt.create`, `selectively_disclosable_claims`; measured, same
+commit): the property-disclosure form is hand-built.
 
 **Why a constraint and not a claim** (draft change of 2026-10-28; the first draft put the reference at the top level of
 the payload). An AP2 verifier that does not implement this profile ignores an unknown JWT claim (RFC 7519 §4: "all
@@ -794,10 +800,12 @@ R carries the restricted Mandate Content in the same FORM as O. The forms are th
 (`code/sdk/python/ap2/sdk/mandate.py` at `e1ea56d`): when the payload has no `delegate_payload`, the payload itself is the
 Mandate Content; when it has one, it MUST be a list of exactly one object, and that object is the Mandate Content (the
 SDK requires exactly one disclosed item). A `delegate_payload` list of another shape is `form_unsupported` (§11.3 step 6)
-— for O, and for R when one of its object elements holds the reference (§11.2); a list with no object element holding it
-(empty, or of other values) makes no record, and the payload's own `constraints` are not read in this form. One that is
-not a list at all holds no Mandate Content for §11.2, so such a token is no record here (the SDK at `e1ea56d` reads such a
-payload itself as the mandate — `from_sd_jwt`, `isinstance(delegate_payload, list)`; stricter here, declared).
+— for O, and for R when one of its object elements holds the reference (§11.2) and §11.3 step 2 passed (two references, or
+a malformed one, are `restricts_malformed` first); a list with no object element holding it (empty, or of other values)
+makes no record, and the payload's own `constraints` are not read in this form. One that is not a list at all holds no
+Mandate Content for §11.2, so such a token is no record here (the SDK at `e1ea56d` reads such a payload itself as the
+mandate — `from_sd_jwt`, `isinstance(delegate_payload, list)`; stricter here, declared). In both cases the name of §11.2 at
+the top level of the payload still makes a record (`restricts_misplaced`).
 A record is evaluated only against the Mandate Content it carries; R and O in different forms
 are `not_evaluated` (`form_differs`).
 
@@ -833,7 +841,7 @@ The words are those of §6.9 with this meaning here: **`verified`** — R is bou
 §11.4, no broader than O; **`contradicted`** — a rule of §11.3/§11.4 is not met (R is not shown bound to O, or not shown
 within it under that rule; a rule stricter than AP2 can contradict a record AP2 would find equivalent — declared in
 §11.4); **`not_evaluated`** — this profile cannot judge (the pack is not valid, the original is not in the pack, hidden
-content, a name or a type outside the closed lists of §11.4). Nothing else is `verified`; a record is NEVER `verified`
+content, an original with two readings, a name or a type outside the closed lists of §11.4). Nothing else is `verified`; a record is NEVER `verified`
 when it is broader than O or not bound to it.
 
 Exit: `0` iff `met`; `1` otherwise (refusal included); `2` usage; `74` as §6.10 (a check asked for could not be run here:
@@ -862,9 +870,10 @@ the complete receipt on stdout, one line `check not run here:` on stderr; or the
    never assumed absent. A digest that appears more than once is counted here too (RFC 9901 §7.1 step 4: "If any digest
    value is encountered more than once in the Issuer-signed JWT payload (directly or recursively via other Disclosures),
    the SD-JWT MUST be rejected"): `not_evaluated` for O, `contradicted` `malformed` for R.
-6. Same form (§11.1), and each form readable: `delegate_payload` present but not a list of exactly one object is
-   `not_evaluated` `form_unsupported` (`at`: `original` / `restriction`); different forms are `not_evaluated`
-   `form_differs`.
+6. Same form (§11.1), and each form readable: first, O's `delegate_payload` a property disclosure of its payload (O has
+   two readings, §11.1) is `not_evaluated` `original_disclosable` (`at`: `original`) and nothing further is evaluated;
+   then `delegate_payload` present but not a list of exactly one object is `not_evaluated` `form_unsupported` (`at`:
+   `original` / `restriction`); different forms are `not_evaluated` `form_differs`.
 7. A chain is as strong as its weakest link: when O is itself a restriction record of the pack whose state is not
    `verified`, R is at most `not_evaluated` (`original_not_verified`, `at`: `original`) — R may be narrower than O and
    still broader than the mandate O claims to restrict. Applied after every record is evaluated, along the whole chain.

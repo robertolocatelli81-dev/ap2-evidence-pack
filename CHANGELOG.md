@@ -48,10 +48,14 @@ ordinary mandate while §11 said `verified`; now `restricts_disclosable`. SPEC �
 property disclosure and why (the field is required), that `_sd` / `_sd_alg` inside the reference are
 `restricts_disclosable`, and that a `delegate_payload` that is not a list makes no record; 3 tests. Cross review
 (2026-10-29): the guard reads the payload's own `_sd`, in every position, and nothing nested (a disclosure named
-`delegate_payload` inside the Mandate Content is an unknown name there, not the form's key); a `delegate_payload` list
-with no object element holding the reference makes no record (SPEC §11.1); 1 test.
-Measured on this draft (Python 3.9 / 3.11 / 3.13, `env -u PYTHONPATH`): `test_ap2_restriction.py` 85 tests, 13/13 suites
-green (282 tests on 3.11); `sdk_crosscheck --hostile` 0 of 177 disagreements. The counts in the paragraph above are the
+`delegate_payload` inside a delegated Mandate Content is an unknown name there, not the form's key); a `delegate_payload`
+list with no object element holding the reference makes no record (SPEC §11.1); 1 test. Second cross review (2026-10-29):
+an original whose `delegate_payload` is a property disclosure has two readings — the pack's content and, without that
+disclosure, the terms signed at the top level (SDK typed path, measured: a top-level `max` of 10 and of 1000000 beside a
+content of 20000; before, `verified` against the content alone) — now `not_evaluated` `original_disclosable` (SPEC
+§11.1, §11.3 step 6); one guard, `_dp_disclosed`, for R's step 2 and O's step 6; 1 test.
+Measured on this draft (Python 3.9 / 3.11 / 3.13, `env -u PYTHONPATH`): `test_ap2_restriction.py` 86 tests, 13/13 suites
+green (283 tests on 3.11); `sdk_crosscheck --hostile` 0 of 177 disagreements. The counts in the paragraph above are the
 first draft's.
 
 Found while building it, in 1.6.0 and NOT fixed here (another change, both verifiers): a digest repeated in the issuer

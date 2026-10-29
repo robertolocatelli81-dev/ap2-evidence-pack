@@ -1815,6 +1815,22 @@ def _record_refs(resolved) -> Tuple[bool, List[Tuple[str, Dict]]]:
     return RESTRICTS_CONSTRAINT in resolved, refs
 
 
+def _dp_disclosed(parsed: Dict) -> bool:
+    """SPEC §11.1: `delegate_payload` is a property disclosure of the payload — a digest of the payload's own `_sd`, in any
+    position, whose disclosure is named so (nothing nested: a disclosure of that name inside the Mandate Content is a name
+    of the content). The holder could then leave the whole Mandate Content out — measured with the SDK at e1ea56d: with
+    terms signed at the top level beside it, the token minus that disclosure verifies in the typed path as an ordinary
+    mandate with the top-level terms. For R this is `restricts_disclosable` (§11.3 step 2); for O, which then has two
+    readings, `original_disclosable` (§11.3 step 6)."""
+    payload = parsed.get("payload") if isinstance(parsed, dict) else None
+    sd = payload.get("_sd") if isinstance(payload, dict) else None
+    if not isinstance(sd, list):
+        return False
+    dmap = {_disclosure_digest(d): _loads_segment(_b64url_decode(d), "disclosure") for d in parsed["disclosures"]}
+    return any(isinstance(dg, str) and isinstance(dmap.get(dg), list) and len(dmap[dg]) == 3 and dmap[dg][1] == "delegate_payload"
+               for dg in sd)
+
+
 def _ref_is_plain(parsed: Dict, ref: Dict) -> bool:
     """SPEC §11.1/§11.3 step 2: the reference is an element, as signed, of the `constraints` list of the Mandate Content —
     not an array-element disclosure (the holder could leave it out) and with no disclosure inside it. The raw Mandate
@@ -1842,8 +1858,7 @@ def _ref_is_plain(parsed: Dict, ref: Dict) -> bool:
             return el
 
         payload = parsed["payload"]
-        if any(isinstance(dmap.get(dg), list) and len(dmap[dg]) == 3 and dmap[dg][1] == "delegate_payload"
-               for dg in (payload.get("_sd") if isinstance(payload.get("_sd"), list) else [])):
+        if _dp_disclosed(parsed):
             return False   # `delegate_payload` itself a property disclosure: the holder could leave the whole content out
         dp = payload.get("delegate_payload")
         contents = [payload] if dp is None else [unwrap(el) for el in dp] if isinstance(dp, list) else []
@@ -1977,6 +1992,9 @@ def evaluate_restriction(original: Dict, restriction: Dict) -> Dict:
         if hidden:
             no("not_evaluated", "undisclosed_digests", side)
     if any(x["reason"] in ("undisclosed_digests", "malformed", "original_malformed") for x in reasons):
+        return done()
+    if _dp_disclosed(original["parsed"]):   # step 6, first: O with `delegate_payload` a property disclosure has two readings (§11.1)
+        no("not_evaluated", "original_disclosable", "original")
         return done()
     fo, co = _mandate_form(original["resolved"])   # step 6: the same, readable form
     fr, cr = _mandate_form(restriction["resolved"])

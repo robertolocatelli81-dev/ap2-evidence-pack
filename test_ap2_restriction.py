@@ -1468,8 +1468,8 @@ class TestThirdReview(PackCase):
     def test_the_guard_reads_the_top_level_sd_in_every_position_and_nothing_nested(self):
         """Cross review (2026-10-29): the `delegate_payload` disclosure is found in the payload's `_sd` whatever its position
         among other property disclosures (mutant `any` -> non-empty `all` lived), and a disclosure named `delegate_payload`
-        INSIDE the Mandate Content is not the form's key (mutant iterating every disclosure lived): there it is an unknown
-        name of §11.4. And a `delegate_payload` list with no object element holding the reference makes no record."""
+        INSIDE a delegated Mandate Content is not the form's key (mutant iterating every disclosure lived): there it is an
+        unknown name of §11.4 (in the payload form the Mandate Content IS the payload: that disclosure is the form's key). And a `delegate_payload` list with no object element holding the reference makes no record."""
         wide = copy.deepcopy(PAY)
         narrow = copy.deepcopy(PAY); narrow["constraints"][ci(PAY, "payment.amount_range")]["max"] = 100
         d_o = _disc(wide)
@@ -1493,12 +1493,58 @@ class TestThirdReview(PackCase):
         self.assertTrue(rec["valid"])
         self.assertEqual(rec["restrictions"][0]["reasons"],
                          [{"state": "not_evaluated", "reason": "unknown_name", "at": "restriction.delegate_payload[0].delegate_payload"}])
+        d_x = _disc("foo", "x")   # the same, with an `_sd` of the payload holding another name: still nothing nested is read
+        r = self.sign(dict(wide, delegate_payload=[c], _sd=[ap2._disclosure_digest(d_x)])) + "~" + d_x + "~" + d_n + "~"
+        rec = ap2.verify_restrictions(self.pack(("original", o), ("restriction", r), name="nested2.json"))
+        self.assertEqual([(x["state"], x["reason"], x["at"]) for x in rec["restrictions"][0]["reasons"]],
+                         [("not_evaluated", "unknown_name", "restriction.foo"),
+                          ("not_evaluated", "unknown_name", "restriction.delegate_payload[0].delegate_payload")])
         for dp in ([], [5], ["x"], [{}], [[with_ref(narrow, h)]]):   # no object element holds the reference: no record
             with self.subTest(dp=dp):
                 rec = ap2.verify_restrictions(self.pack(("original", o), ("restriction", self.sign(dict(with_ref(wide, h), delegate_payload=dp)) + "~"), name="nr.json"))
                 self.assertEqual((rec["valid"], rec["restrictions"], rec["met"]), (True, [], False))
         rec = ap2.verify_restrictions(self.pack(("original", o), ("restriction", self.sign(dict(wide, delegate_payload=[with_ref(narrow, h), 5])) + "~"), name="fu.json"))
         self.assertEqual(why(rec["restrictions"][0]), [("not_evaluated", "form_unsupported")])   # control: an object element holds it
+
+    def test_an_original_whose_delegate_payload_is_a_property_disclosure_has_two_readings(self):
+        """Second cross review (2026-10-29): O with `delegate_payload` a property disclosure and terms signed at the top level
+        beside it can be presented by its holder without that disclosure as a mandate with the top-level terms (SDK typed
+        path, measured) — narrower (10) or wider (10^6) than the content (20000) — so R is `not_evaluated`
+        `original_disclosable` at `original` (§11.3 step 6, before the form: the disclosed value may be no content at all),
+        after step 5 (a hidden digest in O comes first) and after R's own step 2. Control: with `delegate_payload` a plain
+        key the top level cannot be reached by leaving a disclosure out, and R is `verified` against the content."""
+        wide = copy.deepcopy(PAY)
+        narrow = copy.deepcopy(PAY); narrow["constraints"][ci(PAY, "payment.amount_range")]["max"] = 100
+        want = [{"state": "not_evaluated", "reason": "original_disclosable", "at": "original"}]
+        tops = {}
+        for top_max in (10, 1000000):
+            top = tops[top_max] = copy.deepcopy(PAY); top["constraints"][ci(PAY, "payment.amount_range")]["max"] = top_max
+            for val in ([wide], "x"):   # a readable content, and no content at all: the disclosure is judged before the form
+                d_dp = _disc("delegate_payload", val)
+                o = self.sign(dict(top, _sd=[ap2._disclosure_digest(d_dp)])) + "~" + d_dp + "~"
+                r = self.sign(dict(top, delegate_payload=[with_ref(narrow, ap2.issuer_jwt_hash(o))])) + "~"
+                with self.subTest(top_max=top_max, value=val):
+                    rec = ap2.verify_restrictions(self.pack(("original", o), ("restriction", r), name="two.json"))
+                    self.assertTrue(rec["valid"])
+                    self.assertEqual(rec["restrictions"][0]["reasons"], want)
+                    self.assertEqual((rec["restrictions"][0]["state"], rec["met"]), ("not_evaluated", False))
+        top = tops[10]
+        d_dp = _disc("delegate_payload", [wide])   # step 5 first: a decoy digest in O's `_sd` beside the disclosure
+        o = self.sign(dict(top, _sd=[ap2._disclosure_digest(d_dp), _b64u(hashlib.sha256(b"decoy").digest())])) + "~" + d_dp + "~"
+        r = self.sign(dict(top, delegate_payload=[with_ref(narrow, ap2.issuer_jwt_hash(o))])) + "~"
+        rec = ap2.verify_restrictions(self.pack(("original", o), ("restriction", r), name="decoy.json"))
+        self.assertEqual(rec["restrictions"][0]["reasons"], [{"state": "not_evaluated", "reason": "undisclosed_digests", "at": "original"}])
+        d_dp = _disc("delegate_payload", [wide])   # R's own step 2 first: R with the same disclosure and the reference at the top
+        o = self.sign(dict(top, _sd=[ap2._disclosure_digest(d_dp)])) + "~" + d_dp + "~"
+        d_r = _disc("delegate_payload", [with_ref(narrow, ap2.issuer_jwt_hash(o))])
+        r = self.sign(dict(with_ref(top, ap2.issuer_jwt_hash(o)), _sd=[ap2._disclosure_digest(d_r)])) + "~" + d_r + "~"
+        rec = ap2.verify_restrictions(self.pack(("original", o), ("restriction", r), name="both.json"))
+        self.assertEqual(why(rec["restrictions"][0]), [("contradicted", "restricts_disclosable")])
+        d_el = _disc(wide)   # control: a plain key holding an array-element disclosure, the narrower top level unreachable
+        o = self.sign(dict(top, delegate_payload=[{"...": ap2._disclosure_digest(d_el)}])) + "~" + d_el + "~"
+        r = self.sign(dict(top, delegate_payload=[with_ref(narrow, ap2.issuer_jwt_hash(o))])) + "~"
+        rec = ap2.verify_restrictions(self.pack(("original", o), ("restriction", r), name="plain.json"))
+        self.assertEqual((rec["restrictions"][0]["state"], rec["restrictions"][0]["reasons"], rec["met"]), ("verified", [], True))
 
 
 if __name__ == "__main__":
