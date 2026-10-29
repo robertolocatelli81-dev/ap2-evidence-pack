@@ -53,9 +53,15 @@ list with no object element holding the reference makes no record (SPEC §11.1);
 an original whose `delegate_payload` is a property disclosure has two readings — the pack's content and, without that
 disclosure, the terms signed at the top level (SDK typed path, measured: a top-level `max` of 10 and of 1000000 beside a
 content of 20000; before, `verified` against the content alone) — now `not_evaluated` `original_disclosable` (SPEC
-§11.1, §11.3 step 6); one guard, `_dp_disclosed`, for R's step 2 and O's step 6; 1 test.
-Measured on this draft (Python 3.9 / 3.11 / 3.13, `env -u PYTHONPATH`): `test_ap2_restriction.py` 86 tests, 13/13 suites
-green (283 tests on 3.11); `sdk_crosscheck --hostile` 0 of 177 disagreements. The counts in the paragraph above are the
+§11.1, §11.3 step 6); one guard, `_dp_disclosed`, for R's step 2 and O's step 6; 1 test. Third cross review (2026-10-29):
+SPEC §11.1 says what makes O's two readings (the token minus the disclosure is another set of signed terms) and, with
+§11.5, that a presentation of O with array elements left out is not one (the SDK reads the content of the documentation's
+open payment mandate, re-signed, minus its `allowed` payee as admitting no payee: measured, declared, the verdict is about
+the signed terms); for O
+`form_unsupported` is stated after step 6's first clause; 1 test (`constraints` a property disclosure in the payload form
+is plain on both sides: a mutant reading that name as the form's key lived; step 4 listed before step 6).
+Measured on this draft (Python 3.9 / 3.11 / 3.13, `env -u PYTHONPATH`): `test_ap2_restriction.py` 87 tests, 13/13 suites
+green (284 tests on 3.11); `sdk_crosscheck --hostile` 0 of 177 disagreements. The counts in the paragraph above are the
 first draft's.
 
 Found while building it, in 1.6.0 and NOT fixed here (another change, both verifiers): a digest repeated in the issuer

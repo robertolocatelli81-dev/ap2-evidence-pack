@@ -1546,6 +1546,39 @@ class TestThirdReview(PackCase):
         rec = ap2.verify_restrictions(self.pack(("original", o), ("restriction", r), name="plain.json"))
         self.assertEqual((rec["restrictions"][0]["state"], rec["restrictions"][0]["reasons"], rec["met"]), ("verified", [], True))
 
+    def test_constraints_as_a_property_disclosure_of_the_payload_is_plain_on_both_sides(self):
+        """Third cross review (2026-10-29): in the payload form the payload's own `_sd` may hold `constraints` (SPEC §11.1:
+        `constraints` MAY be a property disclosure — the typed mandate requires it) and the guard reads only the name
+        `delegate_payload` there: R is `verified` (mutant `in ("delegate_payload", "constraints")` lived), and so is an O
+        built the same way. Control: the disclosure named `delegate_payload` beside it is `restricts_disclosable` in R and
+        `original_disclosable` in O; with R signed by another key, step 4 is listed before step 6 (§11.3, in this order)."""
+        wide = copy.deepcopy(PAY)
+        narrow = copy.deepcopy(PAY); narrow["constraints"][ci(PAY, "payment.amount_range")]["max"] = 100
+        o = self.sign(wide) + "~"
+        rc = with_ref(narrow, ap2.issuer_jwt_hash(o)); d_c = _disc("constraints", rc.pop("constraints"))
+        r = self.sign(dict(rc, _sd=[ap2._disclosure_digest(d_c)])) + "~" + d_c + "~"
+        rec = ap2.verify_restrictions(self.pack(("original", o), ("restriction", r), name="pc_r.json"))
+        self.assertEqual((rec["valid"], rec["restrictions"][0]["state"], rec["restrictions"][0]["reasons"], rec["met"]), (True, "verified", [], True))
+        oc = copy.deepcopy(wide); d_oc = _disc("constraints", oc.pop("constraints"))
+        o2 = self.sign(dict(oc, _sd=[ap2._disclosure_digest(d_oc)])) + "~" + d_oc + "~"
+        r2 = self.sign(with_ref(narrow, ap2.issuer_jwt_hash(o2))) + "~"
+        rec = ap2.verify_restrictions(self.pack(("original", o2), ("restriction", r2), name="pc_o.json"))
+        self.assertEqual((rec["restrictions"][0]["state"], rec["restrictions"][0]["reasons"], rec["met"]), ("verified", [], True))
+        d_dp = _disc("delegate_payload", [with_ref(narrow, ap2.issuer_jwt_hash(o))])   # control: the other name beside `constraints` in the same `_sd`
+        r3 = self.sign(dict(rc, _sd=[ap2._disclosure_digest(d_c), ap2._disclosure_digest(d_dp)])) + "~" + d_c + "~" + d_dp + "~"
+        rec = ap2.verify_restrictions(self.pack(("original", o), ("restriction", r3), name="pc_r3.json"))
+        self.assertEqual(why(rec["restrictions"][0]), [("contradicted", "restricts_disclosable")])
+        d_dp2 = _disc("delegate_payload", [wide])
+        o3 = self.sign(dict(oc, _sd=[ap2._disclosure_digest(d_oc), ap2._disclosure_digest(d_dp2)])) + "~" + d_oc + "~" + d_dp2 + "~"
+        r4 = self.sign(with_ref(narrow, ap2.issuer_jwt_hash(o3))) + "~"
+        rec = ap2.verify_restrictions(self.pack(("original", o3), ("restriction", r4), name="pc_o3.json"))
+        self.assertEqual(rec["restrictions"][0]["reasons"], [{"state": "not_evaluated", "reason": "original_disclosable", "at": "original"}])
+        r5 = K2.sign({"alg": "ES256", "typ": "example+sd-jwt", "jwk": K2.jwk}, json.dumps(with_ref(narrow, ap2.issuer_jwt_hash(o3)))) + "~"   # step 4 before step 6, both listed
+        rec = ap2.verify_restrictions(self.pack(("original", o3), ("restriction", r5), name="pc_o3k2.json"))
+        self.assertEqual([(x["reason"], x["at"]) for x in rec["restrictions"][0]["reasons"]],
+                         [("issuer_key_differs", "restriction"), ("original_disclosable", "original")])
+        self.assertEqual(rec["restrictions"][0]["state"], "contradicted")
+
 
 if __name__ == "__main__":
     unittest.main()

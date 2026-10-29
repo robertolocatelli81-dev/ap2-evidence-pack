@@ -763,7 +763,14 @@ terms (measured, same commit). The same disclosure in O gives O two readings —
 present: §11.3 step 5) and the one its holder can present without it (the top-level terms; measured 2026-10-29, same
 SDK: a top-level `max` of 10, and of 1000000, beside a content with `max` 20000 — the token minus that disclosure is
 accepted with the top-level value, narrower or wider than the content) — and a verdict against one reading says nothing
-about the other: R is then `not_evaluated` (`original_disclosable`, §11.3 step 6). The SDK issues `delegate_payload` as a
+about the other: R is then `not_evaluated` (`original_disclosable`, §11.3 step 6). What makes the two readings is that
+the token minus that disclosure is read as ANOTHER set of signed terms (the top level), not as the content with fewer
+elements: a presentation of O that leaves out elements of a selectively disclosable array (`allowed`, `acceptable_items`:
+AP2's `x-selectively-disclosable-array`, the form of the documentation's tokens) is the content as signed with those
+elements undisclosed — the SDK applies the elements shown (measured 2026-10-29, same SDK: the content of the open payment
+mandate of `payment_mandate.md`, re-signed in the same form, minus its one `allowed` payee is accepted with `allowed: []`,
+and `check_payment_constraints` then refuses the payee it admitted with the disclosure) — and is not a second set of signed terms: the verdict is about the
+signed terms with every disclosure present (§11.3 step 5; declared in §11.5). The SDK issues `delegate_payload` as a
 plain key holding an array-element disclosure (`sd_jwt.create`, `selectively_disclosable_claims`; measured, same
 commit): the property-disclosure form is hand-built.
 
@@ -800,7 +807,7 @@ R carries the restricted Mandate Content in the same FORM as O. The forms are th
 (`code/sdk/python/ap2/sdk/mandate.py` at `e1ea56d`): when the payload has no `delegate_payload`, the payload itself is the
 Mandate Content; when it has one, it MUST be a list of exactly one object, and that object is the Mandate Content (the
 SDK requires exactly one disclosed item). A `delegate_payload` list of another shape is `form_unsupported` (§11.3 step 6)
-— for O, and for R when one of its object elements holds the reference (§11.2) and §11.3 step 2 passed (two references, or
+— for O when its `delegate_payload` is a plain key (a property disclosure is `original_disclosable` first: step 6), and for R when one of its object elements holds the reference (§11.2) and §11.3 step 2 passed (two references, or
 a malformed one, are `restricts_malformed` first); a list with no object element holding it (empty, or of other values)
 makes no record, and the payload's own `constraints` are not read in this form. One that is not a list at all holds no
 Mandate Content for §11.2, so such a token is no record here (the SDK at `e1ea56d` reads such a payload itself as the
@@ -954,7 +961,10 @@ every closed mandate R admits, O admits too; and — only with `time_anchor` `ve
 Does NOT prove: that the agent, the merchant, the credential provider or any verifier RECEIVED R or applies it; that O
 stopped being valid — AP2 has no revocation, O stays a mandate a verifier that holds only O will accept within O's terms;
 the time R was signed (`iat` is the issuer's statement; only the anchor gives an upper bound, and only for the pack); who
-the key belongs to (§6 step 7). R is NOT a mandate on its own for an AP2 verifier that does not implement this profile
+the key belongs to (§6 step 7); what a holder of O shows: the verdict is about O's signed terms with every disclosure
+present (§11.3 step 5), and a presentation of O with elements of a selectively disclosable array left out is read by the
+SDK with the elements shown — narrower (`allowed`: no payee admitted) or wider (`acceptable_items`: a wildcard, §11.4) than
+the signed terms (§11.1, measured). R is NOT a mandate on its own for an AP2 verifier that does not implement this profile
 and evaluates constraints: the constraint of §11.1 fails evaluation there by AP2's rule (§11.1, measured with the SDK at
 `e1ea56d`; a path that evaluates no constraint passes a closed mandate under R as under O, §11.1). This is intended:
 such a verifier cannot apply the restriction, so it must not count R as authority of its own; O stays what it was for it.
