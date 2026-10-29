@@ -141,7 +141,8 @@ class TestBenchCanFail(_Base):
 
 class TestSdJwtProcessingRules(_Base):
     """RFC 9901 §7.1 steps 4 and 3.c.ii.2 (1.7.0, SPEC §6 step 2) — on 1.6.0 and on the §11 draft (54dd18e) every token below
-    that must be rejected resolved with no error (measured 2026-10-28 and 2026-10-29, both verifiers)."""
+    that must be rejected resolved with no error, except "twice in one _sd", which both refused for the collision of the
+    claim inserted twice, not for the rule (measured 2026-10-28 and 2026-10-29, both verifiers)."""
 
     def _token(self, payload, discs):
         return _sign_jwt(self.sk, {"alg": "ES256", "typ": "ap2-mandate+sd-jwt", "jwk": self.jwk}, payload) + "~" + "~".join(discs) + "~"
