@@ -784,7 +784,7 @@ Mandate", `payment_mandate.md`), so O and R would each carry their own budget. M
 an ordinary mandate's. An unknown constraint type is different: "Any unknown Constraints MUST be treated as failing
 evaluation" (`agent_authorization.md`, "Verification and Processing Rules"), and the SDK refuses a mandate that carries
 one where it reads the mandate as a type (measured: `pydantic.ValidationError` at `constraints[n]` from
-`SdJwtMandate.from_sd_jwt`, `MandateClient.verify` with `payload_type`, `PaymentMandateChain.parse` — the `constraints`
+`SdJwtMandate.from_sd_jwt`, `MandateClient.verify` with `payload_type` on a single token (on a chain `payload_type` is not applied: the hops come back as payloads), `PaymentMandateChain.parse` — the `constraints`
 field of the generated `OpenPaymentMandate` / `OpenCheckoutMandate` is a closed union of the AP2 types). Where the SDK
 does not read the open mandate as a type — `sd_jwt.verify`, `verify_chain` / `MandateClient.verify` without
 `payload_type` on a chain (on a single token it raises `ValueError`), which check signatures, disclosures, key binding and time claims and return the payloads, and the
