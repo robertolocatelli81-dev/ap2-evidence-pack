@@ -1,0 +1,59 @@
+{
+ "description": "An object disclosure whose claim name is `_sd`. RFC 9901 §7.1 step 3.c.ii.2: \"If the claim name is _sd or ..., the SD-JWT MUST be rejected\". Measured 2026-10-28 on 1.6.0: both verifiers valid: true, `_sd` inserted as an ordinary claim of resolved_claims. 1.7.0 (SPEC §6 step 2): that artifact's error.",
+ "normative": {
+  "anchors_verified": 0,
+  "bindings_ok": false,
+  "digest_ok": true,
+  "policy_ok": true,
+  "pq_protected": false,
+  "producer_ok": null,
+  "producer_present": false,
+  "producer_trusted": null,
+  "rfc3161_claimed": false,
+  "rfc3161_verified": null,
+  "self_asserted_only": true,
+  "valid": false
+ },
+ "policy": {},
+ "states": {
+  "admission": "admitted",
+  "policy": {
+   "met": true,
+   "unmet": []
+  },
+  "refusal_class": null,
+  "subjects": {
+   "holder_binding": {
+    "reasons": [
+     "not_present"
+    ],
+    "state": "not_evaluated"
+   },
+   "issuer_identity": {
+    "reasons": [
+     "not_present"
+    ],
+    "state": "not_evaluated"
+   },
+   "producer_signature": {
+    "reasons": [
+     "not_present"
+    ],
+    "state": "not_evaluated"
+   },
+   "sealed_content": {
+    "reasons": [
+     "artifact_invalid"
+    ],
+    "state": "contradicted"
+   },
+   "time_anchor": {
+    "reasons": [
+     "not_present"
+    ],
+    "state": "not_evaluated"
+   }
+  }
+ },
+ "vector": "sd_claim_name_reserved"
+}

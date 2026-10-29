@@ -80,14 +80,18 @@ function resolveDisclosures(payload, disclosures) {
   for (const d of disclosures) { let arr; try { arr = jsonOf(b64uDecode(d)); } catch (e) { throw new Refused("malformed disclosure: " + e.message); }
     if (!Array.isArray(arr) || ![2, 3].includes(arr.length)) throw new Refused("disclosure must be [salt,name,value] or [salt,value]");
     const dig = b64u(sha256(Buffer.from(d, "ascii"))); if (byDigest.has(dig)) throw new Refused("duplicate disclosure digest"); byDigest.set(dig, arr); }
-  const used = new Set();
+  const used = new Set(); const seen = new Set();
+  // 1.7.0 — SPEC §6 step 2: a digest value encountered more than once (an `_sd` entry or an array placeholder, in the payload or inside a disclosed
+  // value, matched or decoy) is refused at the second encounter, before anything under it is resolved (RFC 9901 §7.1 step 4; up to 1.6.0 a
+  // repeated placeholder expanded the mandate twice); a disclosed claim named `_sd` or `...` is refused (§7.1 step 3.c.ii.2; up to 1.6.0 inserted as a claim)
+  function meet(dig) { if (seen.has(dig)) throw new Refused("digest encountered more than once in the issuer payload (RFC 9901 §7.1 step 4, rejected fail-closed)"); seen.add(dig); }
   function walk(node) {
     if (node !== null && typeof node === "object" && !Array.isArray(node)) { const out = Object.create(null);
       for (const k of Object.keys(node)) { if (k === "_sd" || k === "_sd_alg") continue; out[k] = walk(node[k]); }
       const sd = "_sd" in node ? node._sd : []; if (!Array.isArray(sd) || sd.some((x) => typeof x !== "string")) throw new Refused("_sd must be a list of digest strings");
-      for (const dig of sd) { if (byDigest.has(dig)) { const arr = byDigest.get(dig); if (arr.length !== 3) throw new Refused("object disclosure must be [salt,name,value]"); if (typeof arr[1] !== "string") throw new Refused("disclosed claim name must be a string"); if (arr[1] in out) throw new Refused("disclosed claim collides"); out[arr[1]] = walk(arr[2]); used.add(dig); } }
+      for (const dig of sd) { meet(dig); if (byDigest.has(dig)) { const arr = byDigest.get(dig); if (arr.length !== 3) throw new Refused("object disclosure must be [salt,name,value]"); if (typeof arr[1] !== "string") throw new Refused("disclosed claim name must be a string"); if (arr[1] === "_sd" || arr[1] === "...") throw new Refused("disclosed claim name is reserved (RFC 9901 §7.1 step 3.c.ii.2, rejected fail-closed)"); if (arr[1] in out) throw new Refused("disclosed claim collides"); out[arr[1]] = walk(arr[2]); used.add(dig); } }
       return out; }
-    if (Array.isArray(node)) { const out = []; for (const item of node) { if (item !== null && typeof item === "object" && !Array.isArray(item) && Object.keys(item).length === 1 && "..." in item) { const dig = item["..."]; if (typeof dig !== "string") throw new Refused("array disclosure placeholder must be a digest string"); if (byDigest.has(dig)) { const arr = byDigest.get(dig); if (arr.length !== 2) throw new Refused("array disclosure must be [salt,value]"); out.push(walk(arr[1])); used.add(dig); } } else out.push(walk(item)); } return out; }
+    if (Array.isArray(node)) { const out = []; for (const item of node) { if (item !== null && typeof item === "object" && !Array.isArray(item) && Object.keys(item).length === 1 && "..." in item) { const dig = item["..."]; if (typeof dig !== "string") throw new Refused("array disclosure placeholder must be a digest string"); meet(dig); if (byDigest.has(dig)) { const arr = byDigest.get(dig); if (arr.length !== 2) throw new Refused("array disclosure must be [salt,value]"); out.push(walk(arr[1])); used.add(dig); } } else out.push(walk(item)); } return out; }
     return node;
   }
   const resolved = walk(payload); for (const dig of byDigest.keys()) if (!used.has(dig)) throw new Refused("disclosure(s) match no digest");

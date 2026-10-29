@@ -78,6 +78,7 @@ PROFILE_31 = ("invalid base64url segment", "must be exactly 32 bytes", "exact AS
 # algorithm prescribes; rejecting it is this format's stricter choice. The two are not the same finding.
 RFC_VERIFIER_MUST = ("match no digest", "disclosure must be [salt", "duplicate disclosure digest",
                      "disclosed claim name must be a string", "collides", "malformed disclosure",
+                     "encountered more than once", "is reserved",   # 1.7.0: §7.1 step 4 and step 3.c.ii.2
                      # §7.1 step 2.d: "Check that the _sd_alg claim value is understood and the hash algorithm is
                      # deemed secure according to the Holder or Verifier's policy". That IS a verifier step, so an unsupported _sd_alg does not belong below.
                      "_sd_alg")
@@ -93,6 +94,17 @@ DECLARED = {
         "every run of this bench, against the installed sd-jwt through the AP2 SDK: it accepts the presentation and "
         "returns a payload with the claim dropped. No forged claim passes — the divergence is the verdict, not the "
         "content.",
+    "sd_digest_repeated.json:payment":
+        'RFC 9901 §7.1 step 4: "If any digest value is encountered more than once in the Issuer-signed JWT payload '
+        '(directly or recursively via other Disclosures), the SD-JWT MUST be rejected." The vector repeats an ARRAY '
+        "placeholder (`{\"...\": d}` twice in `delegate_payload`). Measured 2026-10-28 and 2026-10-29 against sd-jwt 0.10.4 "
+        "through the AP2 SDK: its `_duplicate_hash_check` (verifier.py, `_unpack_disclosed_claims`) covers the `_sd` arrays "
+        "of objects, not array elements, so it accepts the presentation and returns the mandate twice; the same digest in "
+        "two `_sd` arrays (vector sd_digest_repeated_sd) it refuses, as this format does. This format refuses both (1.7.0).",
+    "sd_claim_name_reserved.json:intent":
+        'RFC 9901 §7.1 step 3.c.ii.2: "If the claim name is _sd or ..., the SD-JWT MUST be rejected." Measured 2026-10-28 '
+        "and 2026-10-29 against sd-jwt 0.10.4 through the AP2 SDK: it has no such check and inserts `_sd` as an ordinary "
+        "claim. This format refuses (1.7.0).",
 }
 
 # The direction "we accept, the third stack refuses" is never bucketed by a reason string. It can be DECLARED only per

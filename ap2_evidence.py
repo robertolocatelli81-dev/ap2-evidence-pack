@@ -330,10 +330,16 @@ def _disclosure_digest(disclosure_b64: str) -> str:
     return _sha256_b64url(disclosure_b64.encode("ascii"))
 
 
-def resolve_disclosures(payload: Dict, disclosures: List[str]) -> Dict:
+def resolve_disclosures(payload: Dict, disclosures: List[str], census: Optional[Dict] = None) -> Dict:
     """Replace _sd digests / '...' array placeholders with the disclosed claims.
     Fail-closed: duplicate digests, malformed disclosures, or disclosures that match
-    nothing are ERRORS (per SD-JWT processing rules), never silently ignored."""
+    nothing are ERRORS (per SD-JWT processing rules), never silently ignored.
+    1.7.0 (SPEC §6 step 2): a digest value encountered more than once — in an `_sd` array or as an array placeholder, in
+    the payload or inside a disclosed value, matched or not — is an error at the second encounter, before anything under
+    it is resolved (RFC 9901 §7.1 step 4; up to 1.6.0 a repeated placeholder expanded the mandate twice, `valid: true`);
+    a disclosed claim named `_sd` or `...` is an error (§7.1 step 3.c.ii.2; up to 1.6.0 inserted as an ordinary claim).
+    `census`, when a dict, receives `encountered` (every digest value met, in order) and `matched` (those with a
+    disclosure): SPEC §11.3 step 5 reads its hidden digests from here, so the two sections share one census."""
     # 1.1.0 r2: the SHAPE of the SD-JWT fields is imposed (present-with-null is not absent — `dict.get(k, default)` and
     # JS `??` disagreed): `_sd_alg` absent or exactly "sha-256"; `_sd` absent or a list of strings; `{"...": x}` with x a string
     if "_sd_alg" in payload and payload["_sd_alg"] != "sha-256":
@@ -351,6 +357,15 @@ def resolve_disclosures(payload: Dict, disclosures: List[str]) -> Dict:
             raise Ap2EvidenceError("duplicate disclosure digest (rejected fail-closed)")
         by_digest[dig] = (d, arr)
     used = set()
+    encountered: List[str] = []   # 1.7.0: every digest value met, matched or decoy (RFC 9901 §7.1 step 4 says "encountered")
+    seen = set()
+
+    def meet(dig):
+        if dig in seen:
+            raise Ap2EvidenceError(f"digest {dig[:12]!r}… encountered more than once in the issuer payload "
+                                   "(RFC 9901 §7.1 step 4, rejected fail-closed)")
+        seen.add(dig)
+        encountered.append(dig)
 
     def walk(node):
         if isinstance(node, dict):
@@ -363,12 +378,15 @@ def resolve_disclosures(payload: Dict, disclosures: List[str]) -> Dict:
             if not isinstance(sd, list) or any(not isinstance(x, str) for x in sd):
                 raise Ap2EvidenceError("_sd must be a list of digest strings")
             for dig in sd:
+                meet(dig)
                 if dig in by_digest:
                     d, arr = by_digest[dig]
                     if len(arr) != 3:
                         raise Ap2EvidenceError("object disclosure must be [salt,name,value]")
                     if not isinstance(arr[1], str):
                         raise Ap2EvidenceError("disclosed claim name must be a string")
+                    if arr[1] in ("_sd", "..."):
+                        raise Ap2EvidenceError(f"disclosed claim name {arr[1]!r} is reserved (RFC 9901 §7.1 step 3.c.ii.2, rejected fail-closed)")
                     if arr[1] in out:
                         raise Ap2EvidenceError(f"disclosed claim {arr[1]!r} collides")
                     out[arr[1]] = walk(arr[2])
@@ -381,6 +399,7 @@ def resolve_disclosures(payload: Dict, disclosures: List[str]) -> Dict:
                     dig = item["..."]
                     if not isinstance(dig, str):
                         raise Ap2EvidenceError("array disclosure placeholder must be a digest string")
+                    meet(dig)
                     if dig in by_digest:
                         d, arr = by_digest[dig]
                         if len(arr) != 2:
@@ -398,6 +417,9 @@ def resolve_disclosures(payload: Dict, disclosures: List[str]) -> Dict:
     if unused:
         raise Ap2EvidenceError(f"{len(unused)} disclosure(s) match no digest in the "
                                "payload (rejected fail-closed)")
+    if census is not None:
+        census["encountered"] = encountered
+        census["matched"] = used
     return resolved
 
 
@@ -1693,7 +1715,7 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
     return receipt
 
 
-# ────────────────────────────────────────────────────────── restriction record (SPEC §11, DRAFT 1.7.0)
+# ────────────────────────────────────────────────────────── restriction record (SPEC §11, 1.7.0)
 # A profile of this repository, not of AP2: a record that names an open mandate of the same pack by the hash of its
 # issuer JWT — in a constraint of its own type, so that an AP2 verifier that does not know the profile fails it (AP2:
 # "Any unknown Constraints MUST be treated as failing evaluation") instead of reading a second mandate — and must be no
@@ -1751,31 +1773,14 @@ def issuer_jwt_hash(compact: str) -> str:
     return _sha256_b64url(compact.split("~", 1)[0].encode("ascii"))
 
 
-def _digest_census(parsed: Dict) -> Tuple[int, bool]:
-    """SPEC §11.3 step 5: (digests of the issuer payload with no disclosure, a digest seen more than once). Every digest is
-    counted: the `_sd` entries and the {"...": d} placeholders, in the payload and inside every disclosed value (all of
-    them are reachable: an unreferenced disclosure already failed §6 step 2)."""
-    seen: List[str] = []
-
-    def walk(node):
-        if isinstance(node, dict):
-            sd = node.get("_sd")
-            if isinstance(sd, list):
-                seen.extend(x for x in sd if isinstance(x, str))
-            for k, v in node.items():
-                if k != "_sd":
-                    walk(v)
-        elif isinstance(node, list):
-            for item in node:
-                if isinstance(item, dict) and set(item) == {"..."} and isinstance(item["..."], str):
-                    seen.append(item["..."])
-                else:
-                    walk(item)
-    walk(parsed["payload"])
-    for d in parsed["disclosures"]:
-        walk(_loads_segment(_b64url_decode(d), "disclosure")[-1])
-    disclosed = {_disclosure_digest(d) for d in parsed["disclosures"]}
-    return len(set(seen) - disclosed), len(seen) != len(set(seen))
+def _digest_census(parsed: Dict) -> int:
+    """SPEC §11.3 step 5: the digests of the issuer payload with no disclosure — the `_sd` entries and the {"...": d}
+    placeholders, in the payload and inside every disclosed value — counted by the §6 step 2 resolver itself (one census
+    for the two sections). Raises Ap2EvidenceError on what §6 step 2 refuses, a digest encountered more than once among it
+    (1.7.0; up to the 2026-10-28 draft this function kept a census of its own, because the 1.6.0 resolver did not)."""
+    c: Dict = {}
+    resolve_disclosures(parsed["payload"], parsed["disclosures"], census=c)
+    return len(set(c["encountered"]) - c["matched"])
 
 
 def _mandate_form(resolved: Dict) -> Tuple[Optional[str], Optional[Dict]]:
@@ -1986,9 +1991,11 @@ def evaluate_restriction(original: Dict, restriction: Dict) -> Dict:
     if not (isinstance(ko, dict) and isinstance(kr, dict)) or any(ko.get(k) != kr.get(k) for k in ("kty", "crv", "x", "y")):
         no("contradicted", "issuer_key_differs", "restriction")
     for side, art in (("original", original), ("restriction", restriction)):   # step 5: nothing hidden
-        hidden, repeated = _digest_census(art["parsed"])
-        if repeated:
+        try:
+            hidden = _digest_census(art["parsed"])
+        except Ap2EvidenceError:   # what §6 step 2 refuses (a repeated digest among it): reachable only by a direct call
             no("not_evaluated" if side == "original" else "contradicted", "original_malformed" if side == "original" else "malformed", side)
+            continue
         if hidden:
             no("not_evaluated", "undisclosed_digests", side)
     if any(x["reason"] in ("undisclosed_digests", "malformed", "original_malformed") for x in reasons):
@@ -2206,7 +2213,7 @@ def verify_restrictions(path: str, tsa_cert: Optional[str] = None) -> Dict:
             if not matches:
                 entry["reasons"] = [{"state": "not_evaluated", "reason": "original_not_in_pack", "at": "restriction"}]
                 continue
-            matches.sort(key=lambda o: _digest_census(o["parsed"])[0])   # stable: the fewest hidden digests, then pack order
+            matches.sort(key=lambda o: _digest_census(o["parsed"]))   # stable: the fewest hidden digests, then pack order
             o = matches[0]
             entry["original"] = o["name"]
             entry["same_issuer_jwt"] = sorted(m["name"] for m in matches[1:])
@@ -2457,7 +2464,7 @@ def _main(argv: Optional[List[str]] = None) -> int:
     v.add_argument("--trust-anchor", help="PEM trust anchor: validate the artifact x5c chain with openssl verify. Without it every key is self-asserted (offline, a certificate proves only that the signer wrote it) — the JS verifier cannot validate chains and reports chain_verified null (declared)")
     v.add_argument("--min-anchors", help="policy: at least N distinct anchors must verify (SPEC §3.3; --require-anchor alone is 1)")
     v.add_argument("--tsa-cert", help="PEM certificate (or chain) of the TSA: verify the token's signature and chain with openssl ts -verify (without it, the TSA is NOT verified — declared)")
-    rs = sub.add_parser("restriction", allow_abbrev=False, add_help=False)   # SPEC §11 (draft 1.7.0)
+    rs = sub.add_parser("restriction", allow_abbrev=False, add_help=False)   # SPEC §11 (1.7.0)
     rs.add_argument("evidence")
     rs.add_argument("--tsa-cert", help="PEM certificate (or chain) of the TSA, as for verify: without it `existed_by` is null")
     raw = list(sys.argv[1:] if argv is None else argv)

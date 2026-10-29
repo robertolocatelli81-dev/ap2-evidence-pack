@@ -214,7 +214,7 @@ class TestOfficialExamples(unittest.TestCase):
         self.assertEqual(hashlib.sha256(AP2_CHK_OPEN.encode()).hexdigest(), AP2_CHK_OPEN_SHA256)
         for tok, vct in ((AP2_PAY_OPEN, "mandate.payment.open.1"), (AP2_CHK_OPEN, "mandate.checkout.open.1")):
             p = ap2.parse_sd_jwt(tok)
-            self.assertEqual(ap2._digest_census(p), (0, False))
+            self.assertEqual(ap2._digest_census(p), 0)
             res = ap2.resolve_disclosures(p["payload"], p["disclosures"])
             self.assertEqual(ap2._mandate_form(res)[0], "delegate_payload")
             self.assertEqual(ap2._mandate_form(res)[1]["vct"], vct)
@@ -231,7 +231,7 @@ class TestOfficialExamples(unittest.TestCase):
             c = issue(content)
             p = ap2.parse_sd_jwt(c)
             self.assertEqual(ap2._mandate_form(ap2.resolve_disclosures(p["payload"], p["disclosures"]))[1], content)
-            self.assertEqual(ap2._digest_census(p), (0, False))
+            self.assertEqual(ap2._digest_census(p), 0)
 
 
 class PackCase(unittest.TestCase):
@@ -427,20 +427,28 @@ class TestBinding(PackCase):
         self.assertEqual((e["state"], e["original"], e["same_issuer_jwt"]), ("verified", "full", ["partial"]))
 
     def test_a_repeated_digest_is_never_verified(self):
-        """RFC 9901 §7.1 step 4 — the 1.6.0 resolver does not reject it (measured), so the profile checks it itself."""
+        """RFC 9901 §7.1 step 4 — 1.7.0: §6 step 2 refuses the artifact (the 1.6.0 resolver did not, measured 2026-10-28), so
+        such a pack is never built; the profile's step 5 reads the resolver's census and, called directly, says malformed."""
         def twice(text):
             pl = json.loads(text)
             pl["delegate_payload"].append(dict(pl["delegate_payload"][0]))
             return json.dumps(pl)
         o = issue(PAY)
-        rec, e = self.run_pair(o, restrict(o, PAY, payload_text_hook=twice))
-        self.assertTrue(rec["valid"])   # the pack: §6 does not see it
-        # the element repeated carries the reference twice: §11.3 step 2 (before step 5) already contradicts it
-        self.assertEqual(why(e), [("contradicted", "restricts_malformed")])
-        self.assertEqual(why(direct(o, restrict(o, PAY, payload_text_hook=twice))), [("contradicted", "malformed")])   # step 5
+        r_twice = restrict(o, PAY, payload_text_hook=twice)
+        with self.assertRaisesRegex(ap2.Ap2EvidenceError, "more than once"):
+            self.pack(("original", o), ("restriction", r_twice))
         o2 = issue(PAY, payload_text_hook=twice)
-        rec, e = self.run_pair(o2, restrict(o2, PAY))
-        self.assertEqual(why(e), [("not_evaluated", "original_malformed")])
+        with self.assertRaisesRegex(ap2.Ap2EvidenceError, "more than once"):
+            self.pack(("original", o2), ("restriction", restrict(o2, PAY)))
+        self.assertFalse(os.path.exists(os.path.join(self.d, "p.json")))
+        with self.assertRaisesRegex(ap2.Ap2EvidenceError, "more than once"):
+            ap2._digest_census(ap2.parse_sd_jwt(r_twice))
+        # the direct call (bypassing §6): step 5, before `resolved` is read
+        art = lambda c: {"parsed": ap2.parse_sd_jwt(c), "resolved": None, "jwk": K1.jwk}   # noqa: E731
+        self.assertEqual(why(ap2.evaluate_restriction(art(o), art(r_twice))), [("contradicted", "malformed")])
+        self.assertEqual(why(ap2.evaluate_restriction(art(o2), art(restrict(o2, PAY)))), [("not_evaluated", "original_malformed")])
+        # positive control of the census: the same tokens without the repeat have no hidden digest
+        self.assertEqual((ap2._digest_census(ap2.parse_sd_jwt(o)), ap2._digest_census(ap2.parse_sd_jwt(restrict(o, PAY)))), (0, 0))
 
     def test_forms(self):
         o = issue(PAY)
@@ -1333,7 +1341,7 @@ class TestReferenceAsConstraint(PackCase):
             with self.subTest(hide=hide):
                 r = restrict(o, PAY, hide_ref=hide)
                 p = ap2.parse_sd_jwt(r)
-                self.assertEqual(ap2._digest_census(p), (0, False))   # fully disclosed: the resolved content is the same
+                self.assertEqual(ap2._digest_census(p), 0)   # fully disclosed: the resolved content is the same
                 e = self.entry(o, r, name="h.json")
                 self.assertEqual([(x["state"], x["reason"]) for x in e["reasons"]], [("contradicted", "restricts_disclosable")])
                 self.assertEqual(e["reasons"][0]["at"], f"restriction.delegate_payload[0].constraints[{len(PAY['constraints'])}]")
@@ -1400,7 +1408,7 @@ class TestReferenceAsConstraintReview(PackCase):
             c["_sd"] = digests if order == "constraints_first" else digests[::-1]
             r = issue(c, sd_arrays=False) + dc + "~" + de + "~"
             with self.subTest(order=order):
-                self.assertEqual(ap2._digest_census(ap2.parse_sd_jwt(r)), (0, False))
+                self.assertEqual(ap2._digest_census(ap2.parse_sd_jwt(r)), 0)
                 e = self.entry(o, r, "pd.json")["restrictions"][0]
                 self.assertEqual((e["state"], e["reasons"], e["restricts"]), ("verified", [], h))
         c = with_ref(PAY, h)   # the reference an array-element disclosure inside that disclosed list: still not plain
@@ -1435,7 +1443,7 @@ class TestThirdReview(PackCase):
             d_r = _disc("delegate_payload", [with_ref(narrow, h)])
             r = self.sign(dict(top, _sd=[ap2._disclosure_digest(d_r)])) + "~" + d_r + "~"
             with self.subTest(top_level=sorted(top)):
-                self.assertEqual(ap2._digest_census(ap2.parse_sd_jwt(r)), (0, False))   # fully disclosed as packed
+                self.assertEqual(ap2._digest_census(ap2.parse_sd_jwt(r)), 0)   # fully disclosed as packed
                 rec = ap2.verify_restrictions(self.pack(("original", o), ("restriction", r), name="dp.json"))
                 self.assertTrue(rec["valid"])
                 self.assertEqual(rec["restrictions"][0]["reasons"], [{"state": "contradicted", "reason": "restricts_disclosable",
@@ -1450,7 +1458,7 @@ class TestThirdReview(PackCase):
         for extra in ({"_sd": []}, {"_sd_alg": "sha-256"}, {"_sd": [], "_sd_alg": "sha-256"}):
             with self.subTest(extra=extra):
                 r = issue(with_ref(PAY, ap2.issuer_jwt_hash(o), extra))
-                self.assertEqual(ap2._digest_census(ap2.parse_sd_jwt(r)), (0, False))   # nothing to leave out
+                self.assertEqual(ap2._digest_census(ap2.parse_sd_jwt(r)), 0)   # nothing to leave out
                 e = self.run_pair(o, r)[1]
                 self.assertEqual(why(e), [("contradicted", "restricts_disclosable")])
                 self.assertEqual(e["restricts"], ap2.issuer_jwt_hash(o))

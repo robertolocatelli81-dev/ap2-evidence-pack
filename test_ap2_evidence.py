@@ -139,6 +139,81 @@ class TestBenchCanFail(_Base):
                               jwks_url="http://insecure.example/jwks.json")
 
 
+class TestSdJwtProcessingRules(_Base):
+    """RFC 9901 §7.1 steps 4 and 3.c.ii.2 (1.7.0, SPEC §6 step 2) — on 1.6.0 and on the §11 draft (54dd18e) every token below
+    that must be rejected resolved with no error (measured 2026-10-28 and 2026-10-29, both verifiers)."""
+
+    def _token(self, payload, discs):
+        return _sign_jwt(self.sk, {"alg": "ES256", "typ": "ap2-mandate+sd-jwt", "jwk": self.jwk}, payload) + "~" + "~".join(discs) + "~"
+
+    def _resolve(self, payload, discs):
+        p = ap2.parse_sd_jwt(self._token(payload, discs))
+        return ap2.resolve_disclosures(p["payload"], p["disclosures"])
+
+    def test_a_placeholder_repeated_in_an_array_is_rejected(self):
+        d = _disclosure("s1", None, {"vct": "x"}); dig = ap2._disclosure_digest(d)
+        tok = self._token({"delegate_payload": [{"...": dig}, {"...": dig}], "_sd_alg": "sha-256"}, [d])
+        p = ap2.parse_sd_jwt(tok)
+        with self.assertRaisesRegex(ap2.Ap2EvidenceError, "more than once"):
+            ap2.resolve_disclosures(p["payload"], p["disclosures"])
+        with self.assertRaisesRegex(ap2.Ap2EvidenceError, "more than once"):
+            ap2.build_evidence([{"name": "m", "sd_jwt": tok}], self.out)
+        self.assertFalse(os.path.exists(self.out))
+        # positive control: once is the AP2 delegate form, resolved
+        self.assertEqual(self._resolve({"delegate_payload": [{"...": dig}], "_sd_alg": "sha-256"}, [d])["delegate_payload"], [{"vct": "x"}])
+
+    def test_a_digest_repeated_in_every_form_is_rejected(self):
+        d = _disclosure("s2", "note", 1); dig = ap2._disclosure_digest(d)
+        decoy = _b64u(hashlib.sha256(b"decoy").digest())
+        inner = _disclosure("s3", "inner", {"_sd": [dig]}); gi = ap2._disclosure_digest(inner)
+        forms = {"two objects": ({"_sd": [dig], "extra": {"_sd": [dig]}, "_sd_alg": "sha-256"}, [d]),
+                 "twice in one _sd": ({"_sd": [dig, dig], "_sd_alg": "sha-256"}, [d]),
+                 "a decoy twice": ({"_sd": [dig, decoy], "x": {"_sd": [decoy]}, "_sd_alg": "sha-256"}, [d]),
+                 "a decoy in _sd and as a placeholder": ({"_sd": [decoy], "arr": [{"...": decoy}], "_sd_alg": "sha-256"}, []),
+                 "a placeholder in two arrays": ({"a": [{"...": decoy}], "b": [{"...": decoy}], "_sd_alg": "sha-256"}, []),
+                 "via another disclosure": ({"_sd": [dig, gi], "_sd_alg": "sha-256"}, [d, inner])}
+        for name, (payload, discs) in forms.items():
+            with self.subTest(form=name), self.assertRaisesRegex(ap2.Ap2EvidenceError, "more than once"):
+                self._resolve(payload, discs)
+        # positive controls: distinct digests at two levels, and one decoy, are resolved
+        d2 = _disclosure("s4", "note2", 2); inner2 = _disclosure("s5", "inner", {"_sd": [ap2._disclosure_digest(d2)]})
+        self.assertEqual(self._resolve({"iss": "w", "_sd": [ap2._disclosure_digest(inner2), decoy], "_sd_alg": "sha-256"}, [inner2, d2]),
+                         {"iss": "w", "inner": {"note2": 2}})
+
+    def test_the_second_encounter_stops_before_resolving_under_it(self):
+        # the repeat is refused where it is met, not after a full walk: a repeated digest whose disclosure is itself malformed
+        # below (a 3-element disclosure referenced as an array element) names the repeat, never the shape underneath
+        d = _disclosure("s6", "k", {"deep": [{"...": "x"}]}); dig = ap2._disclosure_digest(d)
+        with self.assertRaisesRegex(ap2.Ap2EvidenceError, "more than once"):
+            self._resolve({"_sd": [dig], "a": {"_sd": [dig]}, "_sd_alg": "sha-256"}, [d])
+
+    def test_a_disclosed_claim_named_sd_or_dots_is_rejected_at_every_level(self):
+        for name in ("_sd", "..."):
+            d = _disclosure("s7", name, ["zzz"])
+            with self.subTest(name=name, level="top"), self.assertRaisesRegex(ap2.Ap2EvidenceError, "reserved"):
+                self._resolve({"iss": "w", "_sd": [ap2._disclosure_digest(d)], "_sd_alg": "sha-256"}, [d])
+            outer = _disclosure("s8", "inner", {"_sd": [ap2._disclosure_digest(d)]})
+            with self.subTest(name=name, level="nested"), self.assertRaisesRegex(ap2.Ap2EvidenceError, "reserved"):
+                self._resolve({"iss": "w", "_sd": [ap2._disclosure_digest(outer)], "_sd_alg": "sha-256"}, [outer, d])
+        # positive controls: a name that merely starts like it, and `_sd_alg` (not in §7.1 step 3.c.ii.2), are claims
+        for name in ("_sdx", "_sd_alg", ".."):
+            d = _disclosure("s9", name, 1)
+            with self.subTest(name=name):
+                self.assertEqual(self._resolve({"iss": "w", "_sd": [ap2._disclosure_digest(d)], "_sd_alg": "sha-256"}, [d]), {"iss": "w", name: 1})
+
+    def test_the_census_is_the_resolvers(self):
+        # SPEC §11.3 step 5 reads hidden digests from the same walk: encountered minus matched, decoys inside a disclosed value too
+        d = _disclosure("s10", "k", 1); decoy = _b64u(hashlib.sha256(b"decoy2").digest())
+        inner = _disclosure("s11", "inner", {"_sd": [decoy]})
+        c = {}
+        p = ap2.parse_sd_jwt(self._token({"_sd": [ap2._disclosure_digest(d), ap2._disclosure_digest(inner)], "_sd_alg": "sha-256"}, [d, inner]))
+        ap2.resolve_disclosures(p["payload"], p["disclosures"], census=c)
+        self.assertEqual(sorted(c["encountered"]), sorted([ap2._disclosure_digest(d), ap2._disclosure_digest(inner), decoy]))
+        self.assertEqual(c["matched"], {ap2._disclosure_digest(d), ap2._disclosure_digest(inner)})
+        self.assertEqual(ap2._digest_census(p), 1)
+        self.assertEqual(ap2.resolve_disclosures(p["payload"], p["disclosures"]), {"k": 1, "inner": {}})   # census=None: unchanged
+
+
 class TestPositive(_Base):
     def test_parse_and_resolve_roundtrip(self):
         parsed = ap2.parse_sd_jwt(self.intent)

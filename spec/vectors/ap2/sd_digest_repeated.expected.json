@@ -1,0 +1,59 @@
+{
+ "description": "The AP2 `delegate_payload` form (one array disclosure) with the same placeholder digest twice in the signed payload. RFC 9901 §7.1 step 4: \"If any digest value is encountered more than once in the Issuer-signed JWT payload (directly or recursively via other Disclosures), the SD-JWT MUST be rejected\". Measured 2026-10-28 on 1.6.0: both verifiers valid: true, the mandate twice in resolved_claims. 1.7.0 (SPEC §6 step 2): that artifact's error, the pack is not valid.",
+ "normative": {
+  "anchors_verified": 0,
+  "bindings_ok": false,
+  "digest_ok": true,
+  "policy_ok": true,
+  "pq_protected": false,
+  "producer_ok": null,
+  "producer_present": false,
+  "producer_trusted": null,
+  "rfc3161_claimed": false,
+  "rfc3161_verified": null,
+  "self_asserted_only": true,
+  "valid": false
+ },
+ "policy": {},
+ "states": {
+  "admission": "admitted",
+  "policy": {
+   "met": true,
+   "unmet": []
+  },
+  "refusal_class": null,
+  "subjects": {
+   "holder_binding": {
+    "reasons": [
+     "not_present"
+    ],
+    "state": "not_evaluated"
+   },
+   "issuer_identity": {
+    "reasons": [
+     "not_present"
+    ],
+    "state": "not_evaluated"
+   },
+   "producer_signature": {
+    "reasons": [
+     "not_present"
+    ],
+    "state": "not_evaluated"
+   },
+   "sealed_content": {
+    "reasons": [
+     "artifact_invalid"
+    ],
+    "state": "contradicted"
+   },
+   "time_anchor": {
+    "reasons": [
+     "not_present"
+    ],
+    "state": "not_evaluated"
+   }
+  }
+ },
+ "vector": "sd_digest_repeated"
+}

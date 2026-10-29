@@ -1,9 +1,12 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Copyright 2026 Roberto Locatelli -->
 
-# ap2-evidence-pack — normative format v1.0 (2026-09-05), specification revision 1.6.0 (2026-10-18)
+# ap2-evidence-pack — normative format v1.0 (2026-09-05), specification revision 1.7.0 (2026-10-29)
 
-> Draft on branch `restriction-record` (2026-10-28, NOT released): §11, a restriction record profile. §1–§10 are unchanged by it.
+> Revision 1.7.0 (2026-10-29): §6 step 2 refuses an artifact whose issuer payload encounters a digest value more than once
+> and one whose disclosure carries a claim named `_sd` or `...` (RFC 9901 §7.1 steps 4 and 3.c.ii.2 — up to 1.6.0 both
+> verifiers accepted them, measured 2026-10-28; three vectors added, §7); §11, the restriction record profile. §1–§5 and
+> §8–§10 are unchanged.
 
 Status: **proposed format** (no standards body; normative for this repository), defined by the conformance vectors in
 `spec/vectors/ap2/` (each `<name>.json` pack + `<name>.expected.json`
@@ -293,7 +296,17 @@ flags: `require_producer`, `require_pq`, `require_anchor`, and `min_anchors` (1.
    protected header (`crit` → RFC 7515 §4.1.11, unknown parameters ignored and reported); verify the ES256 signature with
    the snapshotted JWK over the JWS signing input; resolve disclosures
    fail-closed (unmatched, duplicate, or malformed disclosure → reject — for an UNMATCHED
-   disclosure this is RFC 9901 §7.1 step 5 verbatim, "the SD-JWT MUST be rejected"; for an `_sd`
+   disclosure this is RFC 9901 §7.1 step 5 verbatim, "the SD-JWT MUST be rejected"; 1.7.0, a digest value encountered
+   more than once while resolving — in an `_sd` array or as a `{"...": d}` array placeholder, in the payload or inside a
+   disclosed value, whether or not a disclosure matches it (a decoy counts) — → reject at the second encounter, before
+   anything under it is resolved, RFC 9901 §7.1 step 4 verbatim, "If any digest value is encountered more than once in
+   the Issuer-signed JWT payload (directly or recursively via other Disclosures), the SD-JWT MUST be rejected" (vectors
+   `sd_digest_repeated`, `sd_digest_repeated_sd`; up to 1.6.0 both verifiers expanded a repeated array placeholder twice,
+   `valid: true`, the mandate twice in `resolved_claims.delegate_payload`, measured 2026-10-28); 1.7.0, a disclosure
+   matched from an `_sd` array whose claim name is `_sd` or `...`, at any level, → reject, §7.1 step 3.c.ii.2 verbatim,
+   "If the claim name is _sd or ..., the SD-JWT MUST be rejected" (vector `sd_claim_name_reserved`; up to 1.6.0 both
+   verifiers inserted it as an ordinary claim, measured 2026-10-28) — the name `_sd_alg` is not in that rule and a
+   disclosure so named stays an ordinary claim (§7.1 step 3.f removes only the payload's own `_sd_alg`); for an `_sd`
    that is not an array of digest strings and for an array placeholder whose value is not a digest
    string, §4.2.4.1 and §4.2.4.2 address the MUST to the Issuer and §7.1 gives the verifier no rejection
    step of its own — §7.1 step 3.b collects only well-formed shapes and step 3.e removes every `_sd`
@@ -474,7 +487,10 @@ openssl ABSENT is neither: as in 1.5.x the field is `null` (`tsa_verified`, `cha
 Run every `spec/vectors/ap2/<name>.json` under the policy in
 `<name>.expected.json` and reproduce the `normative` block exactly
 (`run_ap2_conformance.py` does this for the reference; exit 0 = conformant).
-The set contains forty-two vectors (1.6.0: + 13, one for each cell of the §6.9 table the earlier vectors did not reach:
+The set contains forty-five vectors (1.7.0: + 3, the SD-JWT processing rules of §6 step 2 that 1.6.0 did not enforce —
+`sd_digest_repeated`, the same array placeholder twice in `delegate_payload`; `sd_digest_repeated_sd`, the same object
+digest in the `_sd` of two objects; `sd_claim_name_reserved`, a disclosed claim named `_sd` — all three an artifact error,
+`sealed_content` `contradicted` `artifact_invalid`, no producer block, so no backend dependence; 1.6.0: + 13, one for each cell of the §6.9 table the earlier vectors did not reach:
 `holder_kb_signature_invalid`, `holder_sd_hash_mismatch`, `holder_key_unknown` — valid —, `sealed_binding_mismatch`,
 `time_token_missing`, `time_tsa_verified` and `time_tsa_invalid` — anchor_valid's bytes under `tsa_cert` —,
 `producer_backend_missing`, `producer_trust_set_complete`, `issuer_x5c_no_anchor` — valid —, `issuer_x5c_ca_certified`,
@@ -485,7 +501,7 @@ a real RFC 3161 token from a probe TSA whose certificate ships beside it; since 
 ignore, `kb_jwt_valid`, a holder-bound mandate whose KB-JWT verifies, and `key_jwk_member_ignored`,
 a snapshotted JWK with an unregistered member; since 1.5.0 `anchors_two_valid`, two distinct anchors
 under `min_anchors` 2, and `anchors_only`, an anchor carried only in `anchors`) and twenty-two
-REJECTs (stripped-signature downgrade, valid-but-unpinned producer, digest mismatch,
+REJECTs — twenty-five with the three of 1.7.0 — (stripped-signature downgrade, valid-but-unpinned producer, digest mismatch,
 anchor required-but-missing, anchor claimed-but-invalid, a real token for another digest; since
 1.4.0: an unknown key at the top level, inside `rfc3161_timestamp`, inside an artifact entry and
 inside a producer-signature entry — since 1.6.0 both refusals of class `unknown_member` —, a `crit` header parameter the verifier does not understand, and
@@ -725,12 +741,12 @@ verifier from recorded inputs, never asserted without re-derivation" (§4.2). Re
 - Keys: -01 §3 requires keys to be "resolved out of band"; that is this format's `self_asserted` / `key_unresolved` →
   pinned-key rule, for the producer and for the issuer.
 
-## 11. Restriction record (profile `io.github.robertolocatelli81.restriction/1`, DRAFT revision 1.7.0, 2026-10-28, reference as a constraint)
+## 11. Restriction record (profile `io.github.robertolocatelli81.restriction/1`, revision 1.7.0, 2026-10-29, reference as a constraint)
 
 Status: a profile of THIS repository, named in its own namespace as AP2 recommends for extensions ("It is RECOMMENDED to
 use a collision-resistant naming approach, for example via a rDNS prefix controlled by the specifying entity",
 `docs/ap2/agent_authorization.md` at google-agentic-commerce/AP2 `e1ea56db72a6385bce3e5c1112b3a56ce60acb43`). It is not
-part of AP2 and AP2 has not reviewed it. Draft: not released, not in a conformance vector, and the JS verifier does not
+part of AP2 and AP2 has not reviewed it. Released with 1.7.0; not in a conformance vector, and the JS verifier does not
 implement it (declared). §1–§10 are unchanged: a pack that carries a restriction record is built, sealed and verified
 exactly as any other pack, and its twelve fields and states do not depend on this section.
 
@@ -874,9 +890,12 @@ the complete receipt on stdout, one line `check not run here:` on stderr; or the
    inside disclosed values) has its disclosure, in O and in R — else `not_evaluated` `undisclosed_digests` (`at`:
    `original` or `restriction`). RFC 9901 §4.2.5: "An Issuer MAY add additional digests to the SD-JWT payload that are not
    associated with any claim" (decoys): a verifier cannot tell a decoy from a hidden constraint, so a hidden element is
-   never assumed absent. A digest that appears more than once is counted here too (RFC 9901 §7.1 step 4: "If any digest
-   value is encountered more than once in the Issuer-signed JWT payload (directly or recursively via other Disclosures),
-   the SD-JWT MUST be rejected"): `not_evaluated` for O, `contradicted` `malformed` for R.
+   never assumed absent. The census is the resolver's of §6 step 2 (one rule, one implementation): the digests it
+   encounters minus the disclosures it matches. A digest encountered more than once is therefore that artifact's error
+   under §6 step 2 (RFC 9901 §7.1 step 4), the pack is not valid and step 1 ends the evaluation; a caller that reaches
+   this step with such a token directly (`evaluate_restriction`, bypassing §6) gets `not_evaluated` `original_malformed`
+   for O, `contradicted` `malformed` for R. Up to the draft of 2026-10-28 this step kept a census of its own because the
+   1.6.0 resolver did not reject a repeated digest.
 6. Same form (§11.1), and each form readable: first, O's `delegate_payload` a property disclosure of its payload (O has
    two readings, §11.1) is `not_evaluated` `original_disclosable` (`at`: `original`) and nothing further is evaluated;
    then `delegate_payload` present but not a list of exactly one object is `not_evaluated` `form_unsupported` (`at`:
