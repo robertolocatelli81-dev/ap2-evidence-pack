@@ -20,8 +20,9 @@ pack that was built by `build_evidence` from well-formed tokens; a pack sealed a
 as before): a 1.6.0 verifier says `valid: true` on all three. The names `_sd_alg`, `_sdx`, `..` stay ordinary claims
 in both verifiers: a disclosed `_sd_alg` is kept as a claim at every level and a plain `_sd_alg` below the top level is
 dropped, as `sd-jwt` 0.10.4 does (measured 2026-10-29: `{"sub": {"_sd_alg": "sha-512", "k": 1}}` → `{"sub": {"k": 1}}` in
-both). That is this format's declared reading (SPEC §6 step 2); RFC 9901 §7.1 read literally refuses such a disclosure
-where a plain `_sd_alg` is at the level of its `_sd` key (step 3.c.ii.3) and otherwise removes it at the top level (step 3.f). The `sd-jwt`
+both). That is this format's declared reading (SPEC §6 step 2); RFC 9901 §7.1 read literally does not give the same
+result in every case (for one, where a plain `_sd_alg` is at the level of the disclosure's `_sd` key, step 3.c.ii.3
+rejects the SD-JWT). The `sd-jwt`
 0.10.4 reference library through the AP2 SDK at `e1ea56d` (measured 2026-10-28 and 2026-10-29) accepts the repeated array
 placeholder (its `_duplicate_hash_check` in `verifier.py` covers the `_sd` arrays only — the same digest in two `_sd` arrays
 it refuses, "Duplicate hash found in SD-JWT") and has no reserved-name check; both are declared divergences of
