@@ -39,7 +39,7 @@ checkout) and still accepts O; AP2: "Any unknown Constraints MUST be treated as 
 `restricts_misplaced` (the first draft's top-level place), `restricts_disclosable` (a reference the holder could leave
 out); receipt field `claim` renamed `constraint_type`. Intended consequence: R is no longer a mandate on its own for a
 verifier that does not implement §11. Where the SDK does not read a typed mandate (`verify_chain`, `sd_jwt.verify`,
-`MandateClient.verify` without `payload_type`) R passes like any token, and no constraint of any open mandate is
+`MandateClient.verify` without `payload_type` on a chain) R passes like any token, and no constraint of any open mandate is
 evaluated there (SPEC §11.1): a closed mandate chained to R passes `verify_chain` and the sample roles' path as one
 chained to O (`sd_jwt.verify` reads one token, not a chain: R alone passes it as O alone does).
 Third review (2026-10-28): `delegate_payload` must be a plain key of the payload — as a property disclosure, with a

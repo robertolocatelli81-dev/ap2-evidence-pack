@@ -787,7 +787,7 @@ one where it reads the mandate as a type (measured: `pydantic.ValidationError` a
 `SdJwtMandate.from_sd_jwt`, `MandateClient.verify` with `payload_type`, `PaymentMandateChain.parse` — the `constraints`
 field of the generated `OpenPaymentMandate` / `OpenCheckoutMandate` is a closed union of the AP2 types). Where the SDK
 does not read the open mandate as a type — `sd_jwt.verify`, `verify_chain` / `MandateClient.verify` without
-`payload_type`, which check signatures, disclosures, key binding and time claims and return the payloads, and the
+`payload_type` on a chain (on a single token it raises `ValueError`), which check signatures, disclosures, key binding and time claims and return the payloads, and the
 sample roles that validate only the closed hop (`credentials_provider_agent`, `merchant_agent`) — R passes like any
 token and no constraint of any open mandate is evaluated there (measured, same commit: a closed mandate chained to R
 passes `verify_chain` and the sample roles' path exactly as one chained to O — those paths evaluate no mandate's terms, O's
