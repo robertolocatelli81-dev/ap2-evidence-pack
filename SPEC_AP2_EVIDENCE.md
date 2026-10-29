@@ -1,8 +1,12 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Copyright 2026 Roberto Locatelli -->
 
-# ap2-evidence-pack — normative format v1.0 (2026-09-05), specification revision 1.7.0 (2026-10-29)
+# ap2-evidence-pack — normative format v1.0 (2026-09-05), specification revision 1.7.1 (2026-10-29)
 
+> Revision 1.7.1 (2026-10-29): §6 step 2 refuses an artifact whose resolved claims nest deeper than 512, the bound of
+> §3.1 (`disclosures_too_deep`; up to 1.7.0 nothing bounded them, measured 2026-10-29; one vector added, §7); §3.1: a
+> producer does not write a pack the profile refuses. §1, §2, §4, §5 and §8–§11 are unchanged.
+>
 > Revision 1.7.0 (2026-10-29): §6 step 2 refuses an artifact whose issuer payload encounters a digest value more than once
 > and one whose disclosure carries a claim named `_sd` or `...` (RFC 9901 §7.1 steps 4 and 3.c.ii.2 — up to 1.6.0 both
 > verifiers accepted them, measured 2026-10-28; three vectors added, §7); §11, the restriction record profile. §1–§5 and
@@ -149,6 +153,16 @@ JWK `x`/`y` exactly 32 bytes each (RFC 7518 §6.2.1); `key.provenance_class` in 
 `rfc3161_timestamp.anchored` a boolean; `producer_signatures.signatures[].sig_alg` a
 string (any other type is a FAIL entry). A violation inside an artifact is that
 artifact's error (the pack is not `valid`); a violation of a top-level shape is a refusal.
+
+1.7.1: the depth bound applies to the claims RESOLVED from an SD-JWT as well (§6 step 2): each JSON text of a token can be
+within the profile while a chain of disclosures, each nested in the one before, resolves into claims as deep as the chain.
+A producer MUST NOT write a pack this profile refuses: the reference `build` checks the pack under this profile — its
+canonical form, and the size of the file it would write — before it asks any TSA, checks the size again with the TSA
+blocks, and refuses (exit 1, one line `{"error": …}` on stderr, no file) what `verify` would refuse; `stamp` and
+`sign_evidence` check the size of the pack with the block they add and refuse, the pack unchanged, one over 64 MiB. Up to
+1.7.0 they wrote such packs — measured 2026-10-29: `build`, claims resolved 510 to 988 deep (510 to 990 on Python 3.13), a
+`--key` JWK with a member nested 600 deep or a member that is a float, a pack of 116 670 431 bytes (a token with one 50 MB
+disclosure); `stamp` and `sign_evidence`, a pack 200 bytes under the bound taken to 67 109 963 and 67 116 150 bytes.
 
 ### 3.2 RFC 3161 token check (NORMATIVE when `anchored`)
 
@@ -315,7 +329,13 @@ flags: `require_producer`, `require_pq`, `require_anchor`, and `min_anchors` (1.
    step of its own — §7.1 step 3.b collects only well-formed shapes and step 3.e removes every `_sd`
    key — so refusing is this format's stricter choice, measured 23/09/2026 against the `sd-jwt` reference
    implementation, which drops a malformed `_sd` (`{}`, `[1]`), keeps `{"...": [1]}` as an ordinary array
-   element of its verified payload, and refuses `_sd: null` as this format does); the
+   element of its verified payload, and refuses `_sd: null` as this format does); 1.7.1, resolved claims that nest
+   deeper than 512 — the bound of §3.1, counted as §3.1 counts a JSON text: the payload object is at depth 1 and every
+   object or array inside it, disclosed or not, one deeper than its parent — → reject (`disclosures_too_deep`), whatever
+   the depth of each JSON text the claims come from (vector `sd_disclosures_too_deep`, a chain of 513 object disclosures;
+   up to 1.7.0 nothing bounded the resolved claims: on a chain of 1500 or 20000 disclosures the reference reported the
+   artifact's error as `RecursionError: maximum recursion depth exceeded`, and the JS verifier, on 20000, as `Maximum call
+   stack size exceeded`, measured 2026-10-29; RFC 9901 sets no such bound, so this is this format's stricter choice); the
    canonical form of the resolved claims MUST equal the recorded
    `resolved_claims`; re-verify the KB-JWT when the issuer payload carries
    `cnf.jwk` (its ES256 signature under `cnf.jwk`, AND its `sd_hash` equal to BASE64URL(SHA-256) of
@@ -490,7 +510,9 @@ openssl ABSENT is neither: as in 1.5.x the field is `null` (`tsa_verified`, `cha
 Run every `spec/vectors/ap2/<name>.json` under the policy in
 `<name>.expected.json` and reproduce the `normative` block exactly
 (`run_ap2_conformance.py` does this for the reference; exit 0 = conformant).
-The set contains forty-five vectors (1.7.0: + 3, the SD-JWT processing rules of §6 step 2 that 1.6.0 did not enforce —
+The set contains forty-six vectors (1.7.1: + 1, `sd_disclosures_too_deep`, the depth bound of §6 step 2 — an
+artifact error, `sealed_content` `contradicted` `artifact_invalid`, no producer block, so no backend dependence; a 1.7.0
+verifier reports `issuer_identity` `self_asserted` on it, measured 2026-10-29; 1.7.0: + 3, the SD-JWT processing rules of §6 step 2 that 1.6.0 did not enforce —
 `sd_digest_repeated`, the same array placeholder twice in `delegate_payload`; `sd_digest_repeated_sd`, the same object
 digest in the `_sd` of two objects; `sd_claim_name_reserved`, a disclosed claim named `_sd` — all three an artifact error,
 `sealed_content` `contradicted` `artifact_invalid`, no producer block, so no backend dependence; 1.6.0: + 13, one for each cell of the §6.9 table the earlier vectors did not reach:
@@ -504,7 +526,7 @@ a real RFC 3161 token from a probe TSA whose certificate ships beside it; since 
 ignore, `kb_jwt_valid`, a holder-bound mandate whose KB-JWT verifies, and `key_jwk_member_ignored`,
 a snapshotted JWK with an unregistered member; since 1.5.0 `anchors_two_valid`, two distinct anchors
 under `min_anchors` 2, and `anchors_only`, an anchor carried only in `anchors`) and twenty-two
-REJECTs — twenty-five with the three of 1.7.0 — (stripped-signature downgrade, valid-but-unpinned producer, digest mismatch,
+REJECTs — twenty-five with the three of 1.7.0, twenty-six with the one of 1.7.1 — (stripped-signature downgrade, valid-but-unpinned producer, digest mismatch,
 anchor required-but-missing, anchor claimed-but-invalid, a real token for another digest; since
 1.4.0: an unknown key at the top level, inside `rfc3161_timestamp`, inside an artifact entry and
 inside a producer-signature entry — since 1.6.0 both refusals of class `unknown_member` —, a `crit` header parameter the verifier does not understand, and

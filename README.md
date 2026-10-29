@@ -179,13 +179,13 @@ The format is defined by `SPEC_AP2_EVIDENCE.md` plus the test vectors in
 `spec/vectors/ap2/` — seven ACCEPTs (`valid_signed`, the positive control; `anchor_valid`,
 a real RFC 3161 token from a probe TSA whose certificate ships beside it; and, since 1.4.0,
 `header_param_ignored`, `kb_jwt_valid`, `key_jwk_member_ignored`; since 1.5.0 `anchors_two_valid` and `anchors_only`)
-and twenty-five REJECTs
+and twenty-six REJECTs
 (stripped-signature downgrade, valid-but-unpinned producer key, digest mismatch, time
 anchor required-but-missing, time anchor claimed-but-invalid, a real token issued for
 another digest; since 1.4.0 an unknown key at the top level / inside the anchor block / inside
 an artifact entry / inside a producer-signature entry, a `crit` nobody understands, and a
 KB-JWT without `typ: kb+jwt`; since 1.5.0 seven `anchors` cases of SPEC §3.3, the three refusals pinned to their exact
-text; since 1.5.4 three producer blocks that do not verify, SPEC §5; since 1.7.0 three SD-JWT processing-rule vectors, named below); since 1.6.0 thirteen more vectors, seven of them
+text; since 1.5.4 three producer blocks that do not verify, SPEC §5; since 1.7.0 three SD-JWT processing-rule vectors, and since 1.7.1 one on the depth of the resolved claims, named below); since 1.6.0 thirteen more vectors, seven of them
 `valid: true` and six `valid: false`, one for each cell of
 the SPEC §6.9 states table the others did not reach (`holder_*`, `sealed_binding_mismatch`, `time_*`, `producer_*`,
 `issuer_x5c_*`; five of them under `--tsa-cert` or `--trust-anchor`, which need openssl), and every expected file carries
@@ -193,7 +193,10 @@ the `states` block a verifier must reproduce; the three 1.7.0 REJECTs are `sd_di
 `sd_digest_repeated_sd` and `sd_claim_name_reserved` (SPEC §6 step 2, RFC 9901 §7.1 steps 4 and 3.c.ii.2: on 1.6.0 all three
 were `valid: true` in both verifiers, measured 2026-10-28 — a repeated array placeholder expanded the mandate twice into
 `resolved_claims`, a disclosed claim named `_sd` was inserted as an ordinary claim; a 1.6.0 verifier is not conformant to
-1.7.0 on those three). 1.6.0 changes the twelve fields of two vectors (an unknown key inside an
+1.7.0 on those three); the 1.7.1 REJECT is `sd_disclosures_too_deep`, a chain of 513 object disclosures whose resolved
+claims nest one level deeper than the 512 of SPEC §3.1 (SPEC §6 step 2: that artifact's error, `disclosures_too_deep`; a
+1.7.0 verifier reports `issuer_identity` `self_asserted` on it, the expected `not_present`, measured 2026-10-29 in both
+verifiers). 1.6.0 changes the twelve fields of two vectors (an unknown key inside an
 artifact entry or a producer-signature entry is now a refusal, SPEC §9.1): a verifier conformant to 1.5.x is not
 conformant to 1.6.0 on those two. An independent verifier
 claims conformance by reproducing each vector's `normative` block under its declared
@@ -208,8 +211,8 @@ python3 spec/vectors/ap2/run_ap2_conformance.py   # exit 0 = conformant
 
 | Implementation | Runtime / deps | Status |
 |---|---|---|
-| `ap2_evidence.py` | Python 3 + `cryptography`; `openssl` for `--tsa-cert` / `--trust-anchor` | reference — conformant 45/45 (1.7.0); ACVP ML-DSA-65 sigVer 9/9 |
-| `verifiers/js/ap2-verify.mjs` | Node with OpenSSL ≥ 3.5 for ML-DSA-65 (measured: Node 22.23.2 / OpenSSL 3.5.7 locally, Node 24 in CI), `node:crypto` only; on an older build ML-DSA-65 is SKIP = incomplete, never a pass, and the ML-DSA vectors are not measured (the JS conformance test skips, it does not pass); no TSA signature check — `tsa_verified` null, `time_anchor` `instrument_failure`; no x5c chain validation — `--trust-anchor` is a usage error (1.6.0) | independent — conformant on 39/45 (1.7.0) on every normative field, the `report` and the `states` block, through `run_ap2_conformance.run(verify_fn=…)` (`test_ap2_conformance.py`); the 6 vectors whose `requires` lists openssl are SKIP (1.6.0: the five under `tsa_cert` / `trust_anchor`, and `anchor_invalid`, which the differential oracle runs in both verifiers) |
+| `ap2_evidence.py` | Python 3 + `cryptography`; `openssl` for `--tsa-cert` / `--trust-anchor` | reference — conformant 46/46 (1.7.1); ACVP ML-DSA-65 sigVer 9/9 |
+| `verifiers/js/ap2-verify.mjs` | Node with OpenSSL ≥ 3.5 for ML-DSA-65 (measured: Node 22.23.2 / OpenSSL 3.5.7 locally, Node 24 in CI), `node:crypto` only; on an older build ML-DSA-65 is SKIP = incomplete, never a pass, and the ML-DSA vectors are not measured (the JS conformance test skips, it does not pass); no TSA signature check — `tsa_verified` null, `time_anchor` `instrument_failure`; no x5c chain validation — `--trust-anchor` is a usage error (1.6.0) | independent — conformant on 40/46 (1.7.1) on every normative field, the `report` and the `states` block, through `run_ap2_conformance.run(verify_fn=…)` (`test_ap2_conformance.py`); the 6 vectors whose `requires` lists openssl are SKIP (1.6.0: the five under `tsa_cert` / `trust_anchor`, and `anchor_invalid`, which the differential oracle runs in both verifiers) |
 
 **Closed schema (1.4.0, SPEC §9; 1.4.1).** Measured on 1.3.0 on 2026-10-10: a key nobody had defined, written inside
 `rfc3161_timestamp`, `producer_signatures` or a `signatures[i]` entry, was `valid: true` in both verifiers with nothing in
@@ -279,6 +282,8 @@ REJECT to everything is caught; through 1.2.0 this sentence said more than the o
 controls, and two verifiers refusing one alike were an agreement — measured by ablation on 25/09/2026, see CHANGELOG). The CA-issued `x5c` leaf under `--trust-anchor`, the only case
 where `self_asserted_only` is false, is one of the hostile files, not one of those three — this sentence said
 otherwise through 1.1.2:
+Re-measured 2026-10-29 on 1.7.1: **189 cases, 0 disagreements, of which 12 are declared divergences** (`49 vector runs +
+117 hostile files + 4 positive controls + 19 CLI cases = 189`: the 1.7.1 vector, an artifact error alike in both verifiers).
 Re-measured 2026-10-29 on 1.7.0: **188 cases, 0 disagreements, of which 12 are declared divergences** (`48 vector runs +
 117 hostile files + 4 positive controls + 19 CLI cases = 188`: the three 1.7.0 vectors, refused alike by both verifiers).
 Re-measured 2026-10-18 on 1.6.0, which also compares `admission`, `refusal_class`, the state and reasons of every subject
@@ -366,6 +371,10 @@ it prints the SDK commit and the `sd-jwt` version it actually loaded rather than
 AP2_SDK_PATH=/path/to/AP2/code/sdk/python python3 verifiers/sdk_crosscheck.py --hostile
 ```
 
+Re-measured 2026-10-29 on 1.7.1 (same SDK commit, `sd-jwt` 0.10.4, Python 3.11): 164 packs seen, 42 refused before the
+mandate layer, **181 artifacts compared, 122 claim-sets compared, 0 undeclared disagreements**; the new vector
+`sd_disclosures_too_deep` is accepted by the third stack (RFC 9901 sets no depth bound) and counted with the refusals
+under this repository's §3.1 profile, declared stricter.
 Re-measured 2026-10-29 on 1.7.0 (same SDK commit, `sd-jwt` 0.10.4, Python 3.11), vectors plus the hostile corpus: 163 packs
 seen, 42 refused before the mandate layer, **180 artifacts compared, 122 claim-sets compared, 0 undeclared disagreements**;
 two new declared divergences in the direction "we refuse, the third stack accepts", each with its clause in the bench:
@@ -444,7 +453,7 @@ the third stack has no notion of (key provenance, the `resolved_claims` the file
 closed objects of SPEC §9.1) have no
 third-stack opinion at all; **2 more artifacts** carry a key block that is not a key (`null`, or a `jwk` that is a
 list), so there was nothing to hand over and they are counted on their own line rather than vanishing from the
-denominator; **6 artifacts** are refused under the §3.1 profile this repository
+denominator; **7 artifacts** (1.7.1: + `sd_disclosures_too_deep`; 6 up to 1.7.0) are refused under the §3.1 profile this repository
 declares stricter than the RFC; on **7 packs** the KB-JWT's `aud`/`nonce` cannot be read, so its binding could not be
 compared (where they can be read they are passed through, so the third stack checks the key-binding signature and its
 `sd_hash` too — feeding a token its own `aud`/`nonce` validates them against nothing, which is what the sealed scope
@@ -491,6 +500,7 @@ python3 test_ap2_closed_schema_gaps.py # closed schema: the cases the generative
 python3 test_ap2_anchors.py            # 1.5.0: stamp / build --tsa repeated with a real local TSA, anchor identity, the earliest gen_time, --min-anchors in both verifiers
 python3 test_ap2_sd_rules.py           # 1.7.0: RFC 9901 §7.1 steps 4 and 3.c.ii.2 proved generatively — random payloads with digests in every position, planted repeats and reserved names, both verifiers (red on 1.6.0)
 python3 test_ap2_restriction.py        # 1.7.0: SPEC §11, the restriction record profile (the two open mandates of AP2's documentation, decoded verbatim)
+python3 test_ap2_depth.py              # 1.7.1: generated chains of nested disclosures around 512 and 1000 levels, up to 20000 — library, build, both verifiers; the 64 MiB bound at the byte for build, and stamp and sign_evidence on a pack 200 bytes under it (red on 1.7.0)
 python3 verifiers/schema_mutants.py --full   # the release measurement (16 503 mutations in 1.5.0); --py-root/--js point it at an older checkout = positive control
 python3 verifiers/differential_oracle.py   # Python vs Node on every vector, hostile file and CLI case (needs node)
 verifiers/lax_python_ablation.sh           # the strict layers removed from a copy of the reference -> the suite must be red

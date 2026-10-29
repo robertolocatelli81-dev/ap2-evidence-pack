@@ -71,7 +71,8 @@ UNCAUGHT = ("JSONDecodeError", "AttributeError", "TypeError", "KeyError", "Index
 # A ValueError is ambiguous: the library raises one deliberately ("No holder public key in SD-JWT") and Python raises
 # one when a tuple unpack fails, which is a crash. The message separates them.
 PROFILE_31 = ("invalid base64url segment", "must be exactly 32 bytes", "exact ASCII compact serialization",
-              "duplicate JSON key", "starts with a B", "not valid JSON/base64url")      # SPEC §3.1, declared stricter than RFC
+              "duplicate JSON key", "starts with a B", "not valid JSON/base64url",      # SPEC §3.1, declared stricter than RFC
+              "disclosures_too_deep")   # 1.7.1: the §3.1 bound of 512 on the resolved claims (SPEC §6 step 2); RFC 9901 sets no bound
 # RFC 9901 puts a MUST on the VERIFIER in §7.1 step 5, and MUSTs on the STRUCTURE in §4.2.4.1 and §4.2.4.2 that its own
 # verification algorithm then does not enforce: §7.1 step 3.b collects only well-formed `_sd` arrays and
 # `{"...": string}` objects, and step 3.e removes every `_sd` key. So ignoring a malformed one is what the RFC's

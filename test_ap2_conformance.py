@@ -28,7 +28,7 @@ class TestAp2ConformanceVectors(unittest.TestCase):
         r = rc.run()
         self.assertTrue(r["conformant"], r)
         statuses = {x["vector"]: x["status"] for x in r["results"]}
-        self.assertEqual(len(statuses), 45, statuses)   # 1.7.0: + 3 SD-JWT processing-rule vectors (SPEC §6 step 2, RFC 9901 §7.1 steps 3.c.ii.2 and 4); 1.1.0: + anchor_valid (real token, probe TSA) and anchor_wrong_digest; 1.4.0: + 9 closed-schema vectors (SPEC §9); 1.5.0: + 9 anchors vectors (SPEC §3.3); 1.5.4: + 3 producer-block vectors (SPEC §5); 1.6.0: + 13 states vectors (SPEC §6.9)
+        self.assertEqual(len(statuses), 46, statuses)   # 1.7.1: + sd_disclosures_too_deep (SPEC §6 step 2, the depth of the resolved claims); 1.7.0: + 3 SD-JWT processing-rule vectors (SPEC §6 step 2, RFC 9901 §7.1 steps 3.c.ii.2 and 4); 1.1.0: + anchor_valid (real token, probe TSA) and anchor_wrong_digest; 1.4.0: + 9 closed-schema vectors (SPEC §9); 1.5.0: + 9 anchors vectors (SPEC §3.3); 1.5.4: + 3 producer-block vectors (SPEC §5); 1.6.0: + 13 states vectors (SPEC §6.9)
         self.assertEqual(statuses.get("kb_jwt_valid"), "PASS", statuses)   # 1.4.0: the KB-JWT positive control
         # the set must contain the positive control — an always-reject verifier must fail
         self.assertEqual(statuses.get("valid_signed"), "PASS", statuses)
@@ -371,7 +371,7 @@ class TestAp2ConformanceVectors(unittest.TestCase):
             return json.loads(out.stdout)
         r = rc.run(verify_fn=js_verify, backends={"ml-dsa-65": True}, tools={"openssl": False})   # the probe above: this Node checks ML-DSA-65; it calls no openssl
         self.assertTrue(r["conformant"], r)
-        self.assertEqual(len(r["results"]), 45)   # 1.7.0: + 3 SD-JWT processing-rule vectors; 1.5.0: + 9 anchors vectors; 1.5.4: + 3 producer-block vectors; 1.6.0: + 13 states vectors
+        self.assertEqual(len(r["results"]), 46)   # 1.7.1: + sd_disclosures_too_deep; 1.7.0: + 3 SD-JWT processing-rule vectors; 1.5.0: + 9 anchors vectors; 1.5.4: + 3 producer-block vectors; 1.6.0: + 13 states vectors
         needs_openssl = sorted(n[:-len(".expected.json")] for n in os.listdir(os.path.join(_HERE, "spec", "vectors", "ap2")) if n.endswith(".expected.json")
                                and "openssl" in json.load(open(os.path.join(_HERE, "spec", "vectors", "ap2", n), encoding="utf-8")).get("requires", []))
         self.assertEqual(sorted(x["vector"] for x in r["results"] if x["status"] == "SKIP"), needs_openssl)   # SKIP = exactly the openssl vectors (1.6.0)
@@ -411,7 +411,7 @@ class TestExpectedFilesAndBackend(unittest.TestCase):
             st = {x["vector"]: x["status"] for x in r["results"]}
             self.assertTrue(r["conformant"], r)
             self.assertEqual(sum(v == "SKIP" for v in st.values()), 21, st)
-            self.assertEqual(sum(v == "PASS" for v in st.values()), 24, st)   # 1.7.0: + sd_digest_repeated, sd_digest_repeated_sd, sd_claim_name_reserved (no producer block: no backend dependence)
+            self.assertEqual(sum(v == "PASS" for v in st.values()), 25, st)   # 1.7.1: + sd_disclosures_too_deep (no producer block); 1.7.0: + sd_digest_repeated, sd_digest_repeated_sd, sd_claim_name_reserved (no producer block: no backend dependence)
             # the bench can fail: the same run with one marker removed reports that vector FAIL, not SKIP
             d = self._copy(); p = os.path.join(d, "valid_signed.expected.json")
             e = json.load(open(p, encoding="utf-8")); del e["requires_backend"]; json.dump(e, open(p, "w", encoding="utf-8"))

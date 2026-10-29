@@ -85,16 +85,23 @@ function resolveDisclosures(payload, disclosures) {
   // value, matched or decoy) is refused at the second encounter, before anything under it is resolved (RFC 9901 §7.1 step 4; up to 1.6.0 a
   // repeated placeholder expanded the mandate twice); a disclosed claim named `_sd` or `...` is refused (§7.1 step 3.c.ii.2; up to 1.6.0 inserted as a claim)
   function meet(dig) { if (seen.has(dig)) throw new Refused("digest encountered more than once in the issuer payload (RFC 9901 §7.1 step 4, rejected fail-closed)"); seen.add(dig); }
-  function walk(node) {
+  // 1.7.1 — SPEC §6 step 2: the resolved claims nest no deeper than MAX_DEPTH (the §3.1 bound), else disclosures_too_deep; the walk is
+  // iterative (an explicit stack of generators: `yield [child, depth]` hands a child to run(), which passes back its resolved value), so
+  // neither the bound nor the error depends on the engine's stack (up to 1.7.0 a chain of 20000 disclosures was "Maximum call stack size exceeded")
+  function* walk(node, depth) {
+    if (node !== null && typeof node === "object" && depth > MAX_DEPTH) throw new Refused("disclosures_too_deep: the resolved claims nest deeper than " + MAX_DEPTH + " (SPEC §6 step 2, rejected fail-closed)");
     if (node !== null && typeof node === "object" && !Array.isArray(node)) { const out = Object.create(null);
-      for (const k of Object.keys(node)) { if (k === "_sd" || k === "_sd_alg") continue; out[k] = walk(node[k]); }
+      for (const k of Object.keys(node)) { if (k === "_sd" || k === "_sd_alg") continue; out[k] = yield [node[k], depth + 1]; }
       const sd = "_sd" in node ? node._sd : []; if (!Array.isArray(sd) || sd.some((x) => typeof x !== "string")) throw new Refused("_sd must be a list of digest strings");
-      for (const dig of sd) { meet(dig); if (byDigest.has(dig)) { const arr = byDigest.get(dig); if (arr.length !== 3) throw new Refused("object disclosure must be [salt,name,value]"); if (typeof arr[1] !== "string") throw new Refused("disclosed claim name must be a string"); if (arr[1] === "_sd" || arr[1] === "...") throw new Refused("disclosed claim name is reserved (RFC 9901 §7.1 step 3.c.ii.2, rejected fail-closed)"); if (arr[1] in out) throw new Refused("disclosed claim collides"); out[arr[1]] = walk(arr[2]); used.add(dig); } }
+      for (const dig of sd) { meet(dig); if (byDigest.has(dig)) { const arr = byDigest.get(dig); if (arr.length !== 3) throw new Refused("object disclosure must be [salt,name,value]"); if (typeof arr[1] !== "string") throw new Refused("disclosed claim name must be a string"); if (arr[1] === "_sd" || arr[1] === "...") throw new Refused("disclosed claim name is reserved (RFC 9901 §7.1 step 3.c.ii.2, rejected fail-closed)"); if (arr[1] in out) throw new Refused("disclosed claim collides"); out[arr[1]] = yield [arr[2], depth + 1]; used.add(dig); } }
       return out; }
-    if (Array.isArray(node)) { const out = []; for (const item of node) { if (item !== null && typeof item === "object" && !Array.isArray(item) && Object.keys(item).length === 1 && "..." in item) { const dig = item["..."]; if (typeof dig !== "string") throw new Refused("array disclosure placeholder must be a digest string"); meet(dig); if (byDigest.has(dig)) { const arr = byDigest.get(dig); if (arr.length !== 2) throw new Refused("array disclosure must be [salt,value]"); out.push(walk(arr[1])); used.add(dig); } } else out.push(walk(item)); } return out; }
+    if (Array.isArray(node)) { const out = []; for (const item of node) { if (item !== null && typeof item === "object" && !Array.isArray(item) && Object.keys(item).length === 1 && "..." in item) { const dig = item["..."]; if (typeof dig !== "string") throw new Refused("array disclosure placeholder must be a digest string"); meet(dig); if (byDigest.has(dig)) { const arr = byDigest.get(dig); if (arr.length !== 2) throw new Refused("array disclosure must be [salt,value]"); out.push(yield [arr[1], depth + 1]); used.add(dig); } } else out.push(yield [item, depth + 1]); } return out; }
     return node;
   }
-  const resolved = walk(payload); for (const dig of byDigest.keys()) if (!used.has(dig)) throw new Refused("disclosure(s) match no digest");
+  function run(root) { const stack = [walk(root, 1)]; let value;
+    while (stack.length) { const r = stack[stack.length - 1].next(value); if (r.done) { stack.pop(); value = r.value; } else { stack.push(walk(r.value[0], r.value[1])); } }   // a fresh generator ignores the value of its first next()
+    return value; }
+  const resolved = run(payload); for (const dig of byDigest.keys()) if (!used.has(dig)) throw new Refused("disclosure(s) match no digest");
   return resolved;
 }
 function es256Verify(signingInput, signature, jwk) {

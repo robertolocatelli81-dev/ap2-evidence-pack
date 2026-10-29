@@ -339,7 +339,11 @@ def resolve_disclosures(payload: Dict, disclosures: List[str], census: Optional[
     it is resolved (RFC 9901 §7.1 step 4; up to 1.6.0 a repeated placeholder expanded the mandate twice, `valid: true`);
     a disclosed claim named `_sd` or `...` is an error (§7.1 step 3.c.ii.2; up to 1.6.0 inserted as an ordinary claim).
     `census`, when a dict, receives `encountered` (every digest value met, in order) and `matched` (those with a
-    disclosure): SPEC §11.3 step 5 reads its hidden digests from here, so the two sections share one census."""
+    disclosure): SPEC §11.3 step 5 reads its hidden digests from here, so the two sections share one census.
+    1.7.1 (SPEC §6 step 2): the resolved claims nest no deeper than MAX_JSON_DEPTH (the §3.1 bound), else
+    `disclosures_too_deep`; the walk is iterative (an explicit stack of generators), so neither the bound nor the error
+    depends on the interpreter's recursion limit (up to 1.7.0 a chain of 1500 nested disclosures raised RecursionError,
+    measured on Python 3.9, 3.11 and 3.13)."""
     # 1.1.0 r2: the SHAPE of the SD-JWT fields is imposed (present-with-null is not absent — `dict.get(k, default)` and
     # JS `??` disagreed): `_sd_alg` absent or exactly "sha-256"; `_sd` absent or a list of strings; `{"...": x}` with x a string
     if "_sd_alg" in payload and payload["_sd_alg"] != "sha-256":
@@ -367,13 +371,16 @@ def resolve_disclosures(payload: Dict, disclosures: List[str], census: Optional[
         seen.add(dig)
         encountered.append(dig)
 
-    def walk(node):
+    def walk(node, depth):   # a generator: `yield (child, depth)` hands a child to run(), which sends back its resolved value
+        if isinstance(node, (dict, list)) and depth > MAX_JSON_DEPTH:
+            raise Ap2EvidenceError(f"disclosures_too_deep: the resolved claims nest deeper than {MAX_JSON_DEPTH} "
+                                   "(SPEC §6 step 2, rejected fail-closed)")
         if isinstance(node, dict):
             out = {}
             for k, v in node.items():
                 if k in ("_sd", "_sd_alg"):
                     continue
-                out[k] = walk(v)
+                out[k] = yield (v, depth + 1)
             sd = node.get("_sd", [])
             if not isinstance(sd, list) or any(not isinstance(x, str) for x in sd):
                 raise Ap2EvidenceError("_sd must be a list of digest strings")
@@ -389,7 +396,7 @@ def resolve_disclosures(payload: Dict, disclosures: List[str], census: Optional[
                         raise Ap2EvidenceError(f"disclosed claim name {arr[1]!r} is reserved (RFC 9901 §7.1 step 3.c.ii.2, rejected fail-closed)")
                     if arr[1] in out:
                         raise Ap2EvidenceError(f"disclosed claim {arr[1]!r} collides")
-                    out[arr[1]] = walk(arr[2])
+                    out[arr[1]] = yield (arr[2], depth + 1)
                     used.add(dig)
             return out
         if isinstance(node, list):
@@ -404,15 +411,28 @@ def resolve_disclosures(payload: Dict, disclosures: List[str], census: Optional[
                         d, arr = by_digest[dig]
                         if len(arr) != 2:
                             raise Ap2EvidenceError("array disclosure must be [salt,value]")
-                        out_l.append(walk(arr[1]))
+                        out_l.append((yield (arr[1], depth + 1)))
                         used.add(dig)
                     # undisclosed array element: omitted (that is selective disclosure)
                 else:
-                    out_l.append(walk(item))
+                    out_l.append((yield (item, depth + 1)))
             return out_l
         return node
 
-    resolved = walk(payload)
+    def run(root):
+        stack, value = [walk(root, 1)], None
+        while stack:
+            try:
+                child = stack[-1].send(value)
+            except StopIteration as stop:   # that node is resolved: its value goes to its parent
+                stack.pop()
+                value = stop.value
+                continue
+            stack.append(walk(*child))
+            value = None
+        return value
+
+    resolved = run(payload)
     unused = set(by_digest) - used
     if unused:
         raise Ap2EvidenceError(f"{len(unused)} disclosure(s) match no digest in the "
@@ -792,8 +812,12 @@ def _snapshot_key(parsed: Dict, supplied_jwk: Optional[Dict] = None,
             jwks = json.loads(raw.decode())
         except Exception as e:  # noqa: BLE001
             raise Ap2EvidenceError(f"JWKS body is not JSON: {type(e).__name__}") from e
+        # 1.7.1 (NEMESIS2): a body that parses but is not {"keys": [object, ...]} (RFC 7517 §5) is a refusal; measured on 1.7.0
+        # and 1.7.1 with the fetch replaced in-process, a list, a string, null, "keys": 5 or "keys": [5] was a traceback
+        if not isinstance(jwks, dict) or not isinstance(jwks.get("keys"), list) or any(not isinstance(k, dict) for k in jwks["keys"]):
+            raise Ap2EvidenceError('JWKS body is not a JSON object with "keys", a list of JWK objects (RFC 7517 §5)')
         kid = parsed["header"].get("kid")
-        keys = jwks.get("keys", [])
+        keys = jwks["keys"]
         match = [k for k in keys if not kid or k.get("kid") == kid]
         if not match:
             raise Ap2EvidenceError(f"no key in JWKS matches kid={kid!r}")
@@ -1136,6 +1160,20 @@ def _write_pack_file(path: str, obj) -> None:
                 pass
 
 
+def _refuse_oversize(evidence, outcome: str = "not built") -> None:
+    """SPEC §3.1: a verifier refuses an evidence file over 64 MiB, so `build`, `stamp` and `sign_evidence` do not write one.
+    The size is that of the text the writers write (the same `json.dump` options, UTF-8). Measured on 1.7.1 before this
+    check: a token with one 50 MB disclosure built a 116 670 431-byte pack, exit 0, that both verifiers refused; and
+    `stamp` / `sign_evidence` on a pack 200 bytes under the bound wrote 67 109 963 / 67 116 150 bytes, refused alike."""
+    try:
+        n = len(json.dumps(evidence, ensure_ascii=False, indent=1, sort_keys=True).encode("utf-8"))
+    except UnicodeEncodeError as e:   # a str holding surrogate code points (library input only): the writer would raise the same
+        raise Ap2EvidenceError(f"the pack cannot be written as UTF-8 (a surrogate code point) — {outcome}") from e
+    if n > MAX_EVIDENCE_BYTES:
+        raise Ap2EvidenceError(f"the pack would be refused by verify (SPEC §3.1): evidence file exceeds "
+                               f"{MAX_EVIDENCE_BYTES} bytes ({n}) — {outcome}")
+
+
 def build_evidence(artifacts: List[Dict], out_path: str,
                    keys: Optional[Dict[str, Dict]] = None,
                    jwks_urls: Optional[Dict[str, str]] = None,
@@ -1183,7 +1221,18 @@ def build_evidence(artifacts: List[Dict], out_path: str,
         "bindings": find_bindings(for_bindings),
         "honest_scope": HONEST_SCOPE,
     }
-    evidence["evidence_digest_sha256"] = hashlib.sha256(_canon(evidence)).hexdigest()
+    try:   # 1.7.1 (SPEC §3.1): a pack the verifier's profile refuses is not written — measured on 1.7.0, `build` wrote packs
+        # `verify` refused as json_too_deep (a chain of nested disclosures, a deep member of a --key JWK) or for a float
+        canonical = _canon(evidence)   # a supplied key is not bounded before this line: one nested ~990 deep was a RecursionError
+        loads_strict(canonical.decode("ascii"))   # the fields added below (the digest, the TSA blocks) are at most 3 deep
+    except RecursionError as e:
+        raise Ap2EvidenceError(f"the pack would be refused by verify (SPEC §3.1): json_too_deep: nesting exceeds "
+                               f"{MAX_JSON_DEPTH} — not built") from e
+    except (ValueError, TypeError) as e:   # Ap2EvidenceError is a ValueError; json.dumps raises ValueError/TypeError on library
+        # input that is not JSON (a cycle, an integer past the interpreter's digit limit, a set): measured, an uncaught exception
+        raise Ap2EvidenceError(f"the pack would be refused by verify (SPEC §3.1): {e} — not built") from e
+    _refuse_oversize(evidence)   # §3.1 also bounds the file at 64 MiB: checked before any TSA is asked, and again below
+    evidence["evidence_digest_sha256"] = hashlib.sha256(canonical).hexdigest()
     if os.path.isdir(out_path):   # refused before any TSA is asked (the same reason the write itself gives)
         raise Ap2WriteError(f"cannot write the pack {out_path!r}: IsADirectoryError: {os.strerror(errno.EISDIR)}")
     evidence["rfc3161_timestamp"] = (
@@ -1201,6 +1250,7 @@ def build_evidence(artifacts: List[Dict], out_path: str,
             failed.append({"tsa_url": u, "note": st.get("note")})
     if added:
         evidence["anchors"] = added
+    _refuse_oversize(evidence)   # with the digest and the TSA blocks: the bytes the writer below produces
     try:   # 1.5.2: a pack that cannot be written is EX_IOERR in the CLI, not a traceback (exit 1, the "not valid" code)
         _write_pack_file(out_path, evidence)
     except OSError as e:
@@ -1245,6 +1295,7 @@ def add_anchor(path: str, tsa_url: str) -> Dict:
         if not st.get("anchored"):
             raise Ap2EvidenceError(f"no anchor obtained: {st.get('note')}")
         ev.setdefault("anchors", []).append({"mechanism": "rfc3161", "tsr_b64": st["tsr_b64"], "tsa_url": tsa_url})
+        _refuse_oversize(ev, "not stamped")   # 1.7.1 (SPEC §3.1): the anchor must not take the pack over 64 MiB; the pack is unchanged
         mode = os.stat(path).st_mode & 0o7777
         tmp = None
         try:   # a fresh, unpredictable name created O_EXCL (a fixed name could be a planted symlink: measured, it overwrote its target)
@@ -1283,6 +1334,7 @@ def sign_evidence(path, identity=None, classical_alg="ed25519"):
     if identity is None:
         identity = _sigsuite.ProducerIdentity.create(classical_alg=classical_alg)
     ev["producer_signatures"] = identity.sign_block(digest.encode("ascii"))
+    _refuse_oversize(ev, "not signed")   # 1.7.1 (SPEC §3.1): the producer block must not take the pack over 64 MiB
     _write_pack_file(path, ev)   # 1.5.2: whole or not at all; the pack read above stays as it was on a failed write
     algs = [x["sig_alg"] for x in ev["producer_signatures"]["signatures"]]
     return {"out": path, "scheme": ev["producer_signatures"]["scheme"], "sig_algs": algs,
@@ -2503,6 +2555,8 @@ def _main(argv: Optional[List[str]] = None) -> int:
                 p.error(f"{flag}: cannot read {path!r} ({type(e).__name__})")
             except ValueError as e:
                 p.error(f"{flag}: {path!r} is not valid JSON ({e})")
+            except RecursionError:   # 1.7.1: measured on 1.7.0, a --key file 100000 arrays deep was a traceback (exit 1)
+                p.error(f"{flag}: {path!r} nests too deep to be parsed")
 
         arts = []
         for spec in a.artifacts:
@@ -2512,6 +2566,8 @@ def _main(argv: Optional[List[str]] = None) -> int:
         for spec in a.key:
             name, path = _pair("--key", spec)
             keys[name] = _read("--key", path, as_json=True)
+            if not isinstance(keys[name], dict) or not keys[name]:   # a list was an AttributeError traceback; null and {}
+                p.error(f"--key: {path!r} is not a non-empty JSON object (a JWK)")   # fell back to the header key in silence
         jwks = dict(_pair("--jwks-url", s) for s in a.jwks_url)
         try:
             res = build_evidence(arts, a.out, keys=keys, jwks_urls=jwks,

@@ -1,5 +1,98 @@
 # Changelog
 
+## 1.7.1 — 2026-10-30 — the depth of the resolved claims is bounded; `build` refuses what `verify` refuses
+
+Closes the paragraph "Known, not fixed in 1.7.0" below.
+
+**Not additive** (both verifiers, SPEC §6 step 2): resolved claims that nest deeper than 512 — the bound of SPEC §3.1,
+counted as §3.1 counts a JSON text, the payload object at depth 1 — are that artifact's error, `disclosures_too_deep`,
+whatever the depth of each JSON text they come from. A chain of disclosures, each nested in the one before, keeps every
+text of the token shallow and resolves into claims as deep as the chain; up to 1.7.0 nothing bounded them. Both
+resolvers (`resolve_disclosures`, `resolveDisclosures`) now walk iteratively, with an explicit stack, so neither the
+bound nor its error depends on the interpreter's recursion limit or the engine's stack. `valid` changes on no pack: a pack
+holding such a token was never valid (a file within the §3.1 bound cannot record claims that deep, so `claims_match` was
+false). What changes is the artifact's entry in the receipt and what follows from it: measured on 1.7.0, on a token whose
+claims resolve 513 levels deep or more the reference reported `claims_match: false` with no error up to a depth that
+depends on the interpreter and on the caller's stack (the `verify` command: 991 on Python 3.9 and 3.11, 994 on 3.13;
+`verify_evidence` from a shallow caller: 993, on 3.13 at least 995), and the JS verifier at every depth measured from 513
+to 1500, and so `issuer_identity` `self_asserted` and the key's class in `provenance_classes`; 1.7.1 reports the
+artifact's error, `issuer_identity` `not_present`, `provenance_classes` empty, and on `issuer_identity` and
+`holder_binding` the `detail` "artifacts that are errors are stated in sealed_content only". One conformance vector, `sd_disclosures_too_deep` (a chain of
+513 object disclosures; 45 → 46; the JS verifier 39/45 → 40/46, the six openssl vectors SKIP as before): a 1.7.0 verifier
+fails it, measured in both. RFC 9901 sets no depth bound; `verifiers/sdk_crosscheck.py` counts the vector with the
+refusals under this repository's §3.1 profile, declared stricter (the third stack accepts it: 6 → 7 artifacts in that
+line).
+
+**`build` refuses what `verify` refuses** (SPEC §3.1): the pack is checked under the profile before any TSA is asked —
+its canonical form, and the size of the file the writer would write against the 64 MiB bound — and the size again with
+the TSA blocks; a pack the profile refuses is not written — the `build` command exits 1 with one line
+`{"error": "the pack would be refused by verify (SPEC §3.1): …"}` on stderr. A supplied key nested deeper than the
+interpreter can canonicalise is the same refusal, `json_too_deep`. A `--key` file nested too deep to parse is a usage
+error (exit 2) instead of a traceback, and so is a `--key` file that is not a non-empty JSON object. `stamp` and
+`sign_evidence` measure the pack with the block they add and refuse, the pack unchanged, one that would exceed 64 MiB
+(`stamp` exit 1, once the TSA has answered; measured before the check: a pack 200 bytes under the bound became, with a local TSA, 67 109 963
+bytes after `stamp` and 67 116 150 after `sign_evidence`, and both verifiers refused it). A JWKS body that parses but is not
+`{"keys": [object, …]}` (RFC 7517 §5) is a build refusal: measured with the fetch replaced in-process (the https request
+itself is not measured), a list, a string, `null`, `"keys": 5` or `"keys": [5]` was a traceback on 1.7.0. `build_evidence`
+given a string holding a high and a low surrogate as two code points (escaped, they pass the canonical check as a valid
+pair), or a supplied key that is not JSON (a cycle, a set, bytes, an integer past the interpreter's digit limit), refuses
+instead of raising `UnicodeEncodeError`, `ValueError` or `TypeError` (library input only: the JSON parser joins an escaped
+pair, and argv on Linux yields only lone low surrogates, U+DC80–U+DCFF for bytes that are not UTF-8, which the canonical
+check refuses as `lone_surrogate`; measured on 1.7.0, `build --subject` or an artifact name holding such a byte was a
+`UnicodeEncodeError` traceback, exit 1).
+
+Before and after, measured 2026-10-29 (`nice -n 19 env -u PYTHONPATH`; chains of one form, object or array disclosures,
+at every depth of 505–515 and 985–995 resolved levels, and at 1500 and 20000; Python 3.9, 3.11 and 3.13 on 1.7.0, all
+three on 1.7.1):
+
+| | 1.7.0 | 1.7.1 |
+|---|---|---|
+| `build` command | writes a pack its own `verify` refuses as `json_too_deep` at 510–988 levels (510–990 on 3.13); from 989 (991) exit 1 with a traceback | writes up to 509 (the claims sit three levels down in the pack); 510–512 exit 1 `json_too_deep`; from 513 exit 1 `disclosures_too_deep`; no traceback, no file |
+| `build_evidence` | the same, `RecursionError` from a depth that depends on the caller's own stack (991, 993 on 3.13, from a shallow caller) | `Ap2EvidenceError` as above |
+| `resolve_disclosures`, §11.3 step 5 census | `RecursionError` at 1500 and 20000; the census also from 995–997 resolved levels, by interpreter, form and the caller's stack (from a shallow caller, two runs: 3.9 995 object chain and 996 array chain, 3.11 996, 3.13 997) | `disclosures_too_deep` from 513; the same under a recursion limit of the caller's stack + 60 |
+| `verify`, token in a file the bound admits | artifact error `RecursionError: maximum recursion depth exceeded` from 992 with the `verify` command (995 on 3.13), from 994 through `verify_evidence` from a shallow caller (on 3.13: not at 995, at 1500); `claims_match: false` below | artifact error `disclosures_too_deep` from 513 |
+| JS verifier, same files | `Maximum call stack size exceeded` at 20000, `claims_match: false` at 1500 | `disclosures_too_deep` from 513 |
+| `build --key` (3.11) | a JWK member that is a float or nested 600 deep: a pack `verify` refuses; a member nested 987 deep or more (measured 987–1000; also 3.9, from 989 on 3.13): a `RecursionError` traceback; a file 100000 arrays deep, or one that is a list, a string, a number or `true`: traceback; a file that is `null` or `{}`: the pack is built with the header's self-asserted key, the file ignored | exit 1 with the profile's reason; exit 2 |
+| `build`, a pack over 64 MiB | written (a token with one 50 MB disclosure: 116 670 431 bytes; a pack of 67 108 865 bytes); both verifiers refuse it | exit 1, `evidence file exceeds 67108864 bytes`, no file, no TSA asked; a pack of exactly 67 108 864 bytes is written and valid |
+| `stamp`, `sign_evidence`, a pack 200 bytes under the bound | written over the bound (67 109 963 / 67 116 150 bytes); both verifiers refuse it | refused, the pack unchanged (`stamp` exit 1) |
+
+`test_ap2_depth.py` (14 tests): 52 generated chains — fixed chains at every threshold and 24 random ones of 495–530 levels
+mixing plain objects, plain arrays, object and array disclosures, the generator knowing the claims it meant — through the
+library, the §11.3 census, `build_evidence`, `verify_evidence`, `verify_restrictions` and the JS verifier (one Node
+process); 14 chains of 511 disclosures whose leaf is a scalar (`null` included: not a level) or an empty container (a
+level); the `build` command at eight depths, eight `--key` files and a pack over 64 MiB, and the size bound before and
+after the TSA (a stub TSA); the bound at the byte (a pack of exactly 64 MiB, 40 MiB of it two-byte UTF-8, written and
+valid; one byte more refused, ASCII or two-byte), `stamp` and `sign_evidence` on a pack 200 bytes under the bound (a local TSA),
+surrogate code points and four keys that are not JSON from the library, ten JWKS bodies. On 1.7.0 the file is red (the module copied into that tree,
+95 failures and 94 errors on Python 3.11).
+
+**Audit of the same class** (recursion on input a verifier or `build` reads): the two resolvers are iterative now; the
+strict JSON parsers were bounded already (the reference by a linear pre-scan, the JS parser by a counter); the canonical
+form (`_canon`, `canon`), the binding scan (`find_bindings`, `findBindings`), the pack writer and SPEC §11 recurse only over
+what these bounds admit, at most 512 levels plus the pack's own three; the JWKS body is parsed under a catch-all that
+turns a parse error, `RecursionError` included, into a build refusal, and its shape is checked after it (above). `ProducerIdentity.load` (the producer's own key file, library only) is unchanged.
+
+**Measured on 1.7.1** (2026-10-29 and 2026-10-30, `env -u PYTHONPATH`, every job of `.github/workflows/ci.yml` run locally
+as written on a `git archive` of the release code; Node 22.23.2 / OpenSSL 3.5.7 here, 24 in CI): 15/15 suites green, 307
+tests run by unittest, on Python 3.9, 3.11 and 3.13 (`cryptography` 50.0.2) and on Python 3.11 with the declared floor
+`cryptography` 48.0.0 (`test_ap2_depth.py` 14 — new —, `test_ap2_conformance.py` 38); `test_packaging.py` skips its three
+`tomllib` tests on 3.9 and its wheel-contents test on the floor, where `build` is not installed; every module runs as many
+tests as a script and as a module; the build/verify/tamper gate; the reference conformant 46/46, the JS verifier 40/46
+(the six openssl vectors SKIP); `differential_oracle.py` 189 cases (49 vector runs + 117 hostile files + 4 positive
+controls + 19 CLI cases), 0 disagreements, 12 declared; the ablation (every strict layer red alone); `type_fuzz.py`
+1390/1390; the 1.7.1 wheel installed alone in a clean venv and verifying a vector; the third-verifier job (`sd-jwt` 0.10.4,
+SDK `e1ea56d`): 164 packs seen, 42 refused before the mandate layer, 181 artifacts compared, 122 claim-sets compared, 0
+undeclared disagreements, the seeded divergence reported; `downstream-cryptovalid` (cryptovalid-opencore master at
+`66ebd08`: 48 tests, no AP2 test skipped, its front-end passes the built pack and refuses the tampered one). Mutants of
+the new lines, one textual substitution each with the targeted tests (plus the identity mutant, which lived): 19 in the
+reference and 11 in the JS verifier, 29 detected; the one that lived removed `value = undefined` before the first `next()`
+of a fresh generator, which ignores its argument — the line is not in this release. Then 22 on the lines of the profile
+check and those added in review (the size bound in `build`, `stamp` and `sign_evidence`, the supplied key, the `--key`
+file, the JWKS shape, surrogate code points and keys that are not JSON, and the JS guard without its `node !== null`,
+which lived until the scalar-leaf chains): 22, all detected — among them `>` → `>=` at exactly 64 MiB, the size measured
+on the canonical form, without the indentation, without `ensure_ascii=False` or in characters instead of UTF-8 bytes, each
+detected by the bound tested at the byte.
+
 ## 1.7.0 — 2026-10-29 — a repeated digest and a reserved claim name are the artifact's error; a restriction record for an open mandate
 
 **Not additive** (both verifiers, SPEC §6 step 2): an issuer payload in which a digest value is encountered more than once —
@@ -127,7 +220,7 @@ disclosures nest one inside another, `build_evidence` and the `build` command wr
 traceback and writes no file. `verify` answers with a verdict, not a traceback: a file nested deeper than 512 is refused
 as `json_too_deep`, and a chain of disclosures inside a token that the file itself does not nest, measured at 1000, 1500
 and 20000 disclosures, makes the artifact invalid with the error `RecursionError: maximum recursion depth exceeded`. The
-library will bound the depth of what it resolves and `build` will refuse what `verify` refuses.
+library will bound the depth of what it resolves and `build` will refuse what `verify` refuses. Fixed in 1.7.1 (above).
 
 ## 1.6.0 — 2026-10-18 — one closed field per question: admission, states, policy
 
