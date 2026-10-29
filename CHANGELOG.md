@@ -8,8 +8,8 @@ that artifact's error (RFC 9901 §7.1 step 4: "If any digest value is encountere
 payload (directly or recursively via other Disclosures), the SD-JWT MUST be rejected"), refused at the second encounter,
 before anything under it is resolved; a disclosure matched from an `_sd` array whose claim name is `_sd` or `...`, at any
 level, is that artifact's error (§7.1 step 3.c.ii.2: "If the claim name is _sd or ..., the SD-JWT MUST be rejected"). Up to
-1.6.0 both verifiers accepted both — measured 2026-10-28 on fffadff and re-measured 2026-10-29 (`~/progetti/apc_banco/
-ap2_170_banco/probe/sd_rules_probe.py`, 11 forms of the two rules, three lenses: library, Python CLI on a sealed pack, JS
+1.6.0 both verifiers accepted both — measured 2026-10-28 on fffadff and re-measured 2026-10-29 (a probe kept
+outside this repository, not published: 11 forms of the two rules, three lenses: library, Python CLI on a sealed pack, JS
 CLI): a repeated array placeholder in `delegate_payload` expanded the mandate twice into `resolved_claims` with `valid:
 true`; the same object digest in two `_sd` arrays inserted the claim in both objects; a disclosed claim named `_sd` or
 `...` was inserted as an ordinary claim; 9 of the 11 forms were accepted by every lens (the other two fell to a side
@@ -18,9 +18,9 @@ pack that was built by `build_evidence` from well-formed tokens; a pack sealed a
 `valid: false`, `sealed_content` `contradicted` `artifact_invalid`. Three conformance vectors, `sd_digest_repeated`,
 `sd_digest_repeated_sd`, `sd_claim_name_reserved` (42 → 45; the JS verifier 36/42 → 39/45, the six openssl vectors SKIP
 as before): a 1.6.0 verifier says `valid: true` on all three. The names `_sd_alg`, `_sdx`, `..` stay ordinary claims
-in both verifiers (a disclosed `_sd_alg` kept as a claim is this format's declared reading, the same as `sd-jwt` 0.10.4:
-read literally, §7.1 step 3.c.ii.3 would refuse it as a collision with the payload's own `_sd_alg` and step 3.f would drop
-it); a nested plain `_sd_alg` is still dropped — the same as `sd-jwt`
+in both verifiers (a disclosed `_sd_alg` kept as a claim, at the top level and nested, is this format's declared reading,
+the same as `sd-jwt` 0.10.4: read literally, §7.1 would not keep it at the top level — beside the payload's own `_sd_alg`
+step 3.c.ii.3 refuses it as a collision, without one step 3.f removes it); a nested plain `_sd_alg` is still dropped — the same as `sd-jwt`
 0.10.4 does (measured 2026-10-29: `{"sub": {"_sd_alg": "sha-512", "k": 1}}` → `{"sub": {"k": 1}}` in both). The `sd-jwt`
 0.10.4 reference library through the AP2 SDK at `e1ea56d` (measured 2026-10-28 and 2026-10-29) accepts the repeated array
 placeholder (its `_duplicate_hash_check` in `verifier.py` covers the `_sd` arrays only — the same digest in two `_sd` arrays
@@ -35,7 +35,7 @@ other means around such a record, where 54dd18e said `valid: true` and judged it
 inside disclosed values, decoys), 51 with a repeat planted and 54 with a reserved name, the oracle being the generator;
 the library, `verify_evidence` on the sealed pack and the JS verifier (one Node process) must resolve the intended payload
 or refuse with the rule's reason. On fffadff and on 54dd18e that module is red on exactly the 105 planted cases in every
-lens and green on the 135 clean ones (`out/posctrl/` in the bench).
+lens and green on the 135 clean ones (the module copied into those two trees and run by hand, as its docstring says).
 
 **Restriction record (SPEC §11).** AP2 at `e1ea56d` has no way to restrict or revoke a mandate once issued. SPEC §11 (revision 1.7.0) defines this
 repository's own profile `io.github.robertolocatelli81.restriction/1`: an SD-JWT in the same pack, signed by the same key,
@@ -56,7 +56,7 @@ more `reasons`; one of them crashed on a `constraints: null` of the original) ar
 The 19 read: 16 are a no-op, a value nobody reads, a message text or a path not exercised (the 64 MiB bound, `rmtree`
 errors); 1 `<=` → `<` on `budget.max` (equal values are an equal copy, matched before; differential fuzz head vs mutant
 1500 pairs, 0 differences, control `<=` → `>=` 300/300); 1 `add_help` covered by the CLI grammar; 1 `is` → `is not` in a
-help text (report in the branch notes). Three more of the first review's own mutants survived the 65 and are pinned by its 5
+help text. Three more of the first review's own mutants survived the 65 and are pinned by its 5
 tests: non-ASCII digits in a date (`\d` would read an earlier `not_before` as later), a swap of two neighbours in the
 `frequency` order, a non-object constraint of the original copied equal. The second review's 70 targeted mutants (plus the
 identity mutant, which survived): 66 killed by the test file, 3 survivors read as equivalent (`valid` is always a boolean in
@@ -105,9 +105,17 @@ step 5 then checked it on its own records) and is fixed above, in both verifiers
 38); the reference conformant 45/45; `differential_oracle.py` 188 cases (48 vector runs + 117 hostile files + 4 positive
 controls + 19 CLI cases), 0 disagreements, 12 declared; `sdk_crosscheck.py --hostile` 163 packs seen, 42 refused before the
 mandate layer, 180 artifacts compared, 122 claim-sets compared, 0 undeclared disagreements (two new declared, above; the
-third stack's 23 refusals: 12 with a message, 11 uncaught internal errors). Python 3.9 / 3.13, the other CI jobs run
-locally and the mutants of the new lines: see the author's record for this release in the OMEGA bench
-(`gtm/ap2_170_20261029/AUTORE_170_20261029.md`).
+third stack's 23 refusals: 12 with a message, 11 uncaught internal errors). The same 14 suites and 293 tests on Python 3.9
+and 3.13 (`cryptography` 50.0.2), and on Python 3.11 with the declared floor `cryptography` 48.0.0; the other steps and jobs
+of `.github/workflows/ci.yml` run locally as written (Node 22.23.2 here, 24 in CI): every module runs as many tests as a
+script and as a module, the build/verify/tamper gate, the ablation (every strict layer red alone), `type_fuzz.py` 1390/1390,
+the 1.7.0 wheel installed alone in a clean venv and verifying a vector, the third-verifier job with its seeded divergence
+reported, and `downstream-cryptovalid` (cryptovalid-opencore master at `66ebd08`: 48 tests, no AP2 test skipped, its
+front-end passes the built pack and refuses the tampered one). Mutants of the new lines, one textual substitution per line
+with the targeted tests: 18 in the reference and 8 in the JS verifier, 25 detected; the one that lived replaces a `continue`
+by `hidden = 0` before a test of `hidden`, the same behaviour. Three mutants of a review that extended the reserved names in
+the JS verifier (`_sd_alg`, every `_sd*` prefix, `..`) lived until six control packs of `test_ap2_sd_rules.py` pinned the
+accepted side of the rule in both verifiers.
 
 ## 1.6.0 — 2026-10-18 — one closed field per question: admission, states, policy
 
