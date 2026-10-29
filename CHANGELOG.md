@@ -120,6 +120,15 @@ by `hidden = 0` before a test of `hidden`, the same behaviour. Three mutants of 
 the JS verifier (`_sd_alg`, every `_sd*` prefix, `..`) lived until six control packs of `test_ap2_sd_rules.py` pinned the
 accepted side of the rule in both verifiers; a seventh pins a disclosed `_sd_alg` beside a plain one in a nested object.
 
+**Known, not fixed in 1.7.0** (the same on 1.6.0; measured 2026-10-29 on Python 3.9, 3.11 and 3.13). For a token whose
+disclosures nest one inside another, `build_evidence` and the `build` command write a pack that `verify` then refuses as
+`json_too_deep` (SPEC §3.1, nesting deeper than 512) when the chain is 510 to 988 disclosures deep (510 to 990 on Python
+3.13); from 989 (991 on Python 3.13) `build_evidence` raises `RecursionError`, and the `build` command exits 1 with a
+traceback and writes no file. `verify` answers with a verdict, not a traceback: a file nested deeper than 512 is refused
+as `json_too_deep`, and a chain of disclosures inside a token that the file itself does not nest, measured at 1000, 1500
+and 20000 disclosures, makes the artifact invalid with the error `RecursionError: maximum recursion depth exceeded`. The
+library will bound the depth of what it resolves and `build` will refuse what `verify` refuses.
+
 ## 1.6.0 — 2026-10-18 — one closed field per question: admission, states, policy
 
 A relying party (a dispute provider, an auditor) used to read the verdict off twelve booleans and their combinations, and
