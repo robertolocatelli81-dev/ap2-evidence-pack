@@ -51,6 +51,7 @@ python3 ap2_evidence.py verify evidence.json     # offline, fail-closed; exit 0/
 python3 ap2_evidence.py verify evidence.json --trusted-producer-key ed25519=<b64> --trusted-producer-key ml-dsa-65=<b64> --require-pq --require-anchor   # relying-party policy (1.1.0)
 python3 ap2_evidence.py verify evidence.json --min-anchors 2 --tsa-cert tsa-bundle.pem   # 1.5.0: two distinct anchors, each TSA-verified
 python3 ap2_evidence.py verify evidence.json --trusted-producer-key ed25519=<b64> --trust-set-complete   # 1.6.0: the pinned set is complete
+python3 ap2_evidence.py restriction evidence.json [--tsa-cert PEM]   # 1.7.0: SPEC §11, each restriction record of the pack judged against its original (reference only)
 node verifiers/js/ap2-verify.mjs evidence.json   # the independent verifier, same flags and exit codes (limits below)
 ```
 
@@ -97,6 +98,22 @@ Measured on Linux only; Windows and macOS are not measured (on Windows Python's 
 non-blocking pipe there would be 74).
 
 Or as a library: `build_evidence(...)` / `verify_evidence(...)`.
+
+## Restriction record (1.7.0, SPEC §11)
+
+AP2 at `e1ea56d` has no way to restrict or revoke a mandate once issued. SPEC §11 defines this repository's own profile
+`io.github.robertolocatelli81.restriction/1` (not part of AP2, not reviewed by AP2): an SD-JWT in the same pack, signed by
+the same key, whose Mandate Content holds one constraint `{"type": "io.github.robertolocatelli81.restricts",
+"issuer_jwt_hash": H}` naming an open mandate of the pack, with the same `cnf` and terms no broader than it under closed
+rules per constraint type (§11.4). `ap2_evidence.py restriction <pack>` (library `verify_restrictions`,
+`evaluate_restriction`) verifies the pack under §6 first, then each record: `verified` only when bound and no broader,
+`contradicted` when a rule fails, `not_evaluated` for what the profile cannot judge (hidden digests, names and types
+outside its lists, a pack that is not valid). Additive: `verify`, its receipt and every conformance vector do not depend
+on §11; the JS verifier does not implement it (declared). Not a revocation: the original stays valid for whoever holds
+only it. Measured with the AP2 SDK at `e1ea56d`: where the SDK reads a typed mandate it refuses the record
+(`ValidationError` on the unknown constraint type — AP2: "Any unknown Constraints MUST be treated as failing evaluation")
+and still accepts the original; where it does not (`verify_chain`, `sd_jwt.verify`) the record passes like any token.
+`test_ap2_restriction.py` (87 tests) is built from the two open mandates of AP2's documentation, decoded verbatim.
 
 ## Honest scope
 
@@ -162,7 +179,7 @@ The format is defined by `SPEC_AP2_EVIDENCE.md` plus the test vectors in
 `spec/vectors/ap2/` — seven ACCEPTs (`valid_signed`, the positive control; `anchor_valid`,
 a real RFC 3161 token from a probe TSA whose certificate ships beside it; and, since 1.4.0,
 `header_param_ignored`, `kb_jwt_valid`, `key_jwk_member_ignored`; since 1.5.0 `anchors_two_valid` and `anchors_only`)
-and twenty-two REJECTs
+and twenty-five REJECTs
 (stripped-signature downgrade, valid-but-unpinned producer key, digest mismatch, time
 anchor required-but-missing, time anchor claimed-but-invalid, a real token issued for
 another digest; since 1.4.0 an unknown key at the top level / inside the anchor block / inside
@@ -171,7 +188,11 @@ KB-JWT without `typ: kb+jwt`; since 1.5.0 seven `anchors` cases of SPEC §3.3, t
 text; since 1.5.4 three producer blocks that do not verify, SPEC §5); since 1.6.0 thirteen more, one for each cell of
 the SPEC §6.9 states table the others did not reach (`holder_*`, `sealed_binding_mismatch`, `time_*`, `producer_*`,
 `issuer_x5c_*`; five of them under `--tsa-cert` or `--trust-anchor`, which need openssl), and every expected file carries
-the `states` block a verifier must reproduce. 1.6.0 changes the twelve fields of two vectors (an unknown key inside an
+the `states` block a verifier must reproduce; since 1.7.0 three SD-JWT processing-rule vectors, `sd_digest_repeated`,
+`sd_digest_repeated_sd` and `sd_claim_name_reserved` (SPEC §6 step 2, RFC 9901 §7.1 steps 4 and 3.c.ii.2: on 1.6.0 all three
+were `valid: true` in both verifiers, measured 2026-10-28 — a repeated array placeholder expanded the mandate twice into
+`resolved_claims`, a disclosed claim named `_sd` was inserted as an ordinary claim; a 1.6.0 verifier is not conformant to
+1.7.0 on those three). 1.6.0 changes the twelve fields of two vectors (an unknown key inside an
 artifact entry or a producer-signature entry is now a refusal, SPEC §9.1): a verifier conformant to 1.5.x is not
 conformant to 1.6.0 on those two. An independent verifier
 claims conformance by reproducing each vector's `normative` block under its declared
@@ -186,8 +207,8 @@ python3 spec/vectors/ap2/run_ap2_conformance.py   # exit 0 = conformant
 
 | Implementation | Runtime / deps | Status |
 |---|---|---|
-| `ap2_evidence.py` | Python 3 + `cryptography`; `openssl` for `--tsa-cert` / `--trust-anchor` | reference — conformant 42/42 (1.6.0); ACVP ML-DSA-65 sigVer 9/9 |
-| `verifiers/js/ap2-verify.mjs` | Node with OpenSSL ≥ 3.5 for ML-DSA-65 (measured: Node 22.23.2 / OpenSSL 3.5.7 locally, Node 24 in CI), `node:crypto` only; on an older build ML-DSA-65 is SKIP = incomplete, never a pass, and the ML-DSA vectors are not measured (the JS conformance test skips, it does not pass); no TSA signature check — `tsa_verified` null, `time_anchor` `instrument_failure`; no x5c chain validation — `--trust-anchor` is a usage error (1.6.0) | independent — conformant on 36/42 on every normative field, the `report` and the `states` block, through `run_ap2_conformance.run(verify_fn=…)` (`test_ap2_conformance.py`); the 6 vectors whose `requires` lists openssl are SKIP (1.6.0: the five under `tsa_cert` / `trust_anchor`, and `anchor_invalid`, which the differential oracle runs in both verifiers) |
+| `ap2_evidence.py` | Python 3 + `cryptography`; `openssl` for `--tsa-cert` / `--trust-anchor` | reference — conformant 45/45 (1.7.0); ACVP ML-DSA-65 sigVer 9/9 |
+| `verifiers/js/ap2-verify.mjs` | Node with OpenSSL ≥ 3.5 for ML-DSA-65 (measured: Node 22.23.2 / OpenSSL 3.5.7 locally, Node 24 in CI), `node:crypto` only; on an older build ML-DSA-65 is SKIP = incomplete, never a pass, and the ML-DSA vectors are not measured (the JS conformance test skips, it does not pass); no TSA signature check — `tsa_verified` null, `time_anchor` `instrument_failure`; no x5c chain validation — `--trust-anchor` is a usage error (1.6.0) | independent — conformant on 39/45 (1.7.0) on every normative field, the `report` and the `states` block, through `run_ap2_conformance.run(verify_fn=…)` (`test_ap2_conformance.py`); the 6 vectors whose `requires` lists openssl are SKIP (1.6.0: the five under `tsa_cert` / `trust_anchor`, and `anchor_invalid`, which the differential oracle runs in both verifiers) |
 
 **Closed schema (1.4.0, SPEC §9; 1.4.1).** Measured on 1.3.0 on 2026-10-10: a key nobody had defined, written inside
 `rfc3161_timestamp`, `producer_signatures` or a `signatures[i]` entry, was `valid: true` in both verifiers with nothing in
@@ -257,6 +278,8 @@ REJECT to everything is caught; through 1.2.0 this sentence said more than the o
 controls, and two verifiers refusing one alike were an agreement — measured by ablation on 25/09/2026, see CHANGELOG). The CA-issued `x5c` leaf under `--trust-anchor`, the only case
 where `self_asserted_only` is false, is one of the hostile files, not one of those three — this sentence said
 otherwise through 1.1.2:
+Re-measured 2026-10-29 on 1.7.0: **188 cases, 0 disagreements, of which 12 are declared divergences** (`48 vector runs +
+117 hostile files + 4 positive controls + 19 CLI cases = 188`: the three 1.7.0 vectors, refused alike by both verifiers).
 Re-measured 2026-10-18 on 1.6.0, which also compares `admission`, `refusal_class`, the state and reasons of every subject
 and `policy`, and passes the vectors' `tsa_cert` / `trust_anchor` / `trust_set_complete`: **185 cases, 0 disagreements, of
 which 12 are declared divergences** (`45 vector runs + 117 hostile files + 4 positive controls + 19 CLI cases = 185`; the
@@ -342,6 +365,13 @@ it prints the SDK commit and the `sd-jwt` version it actually loaded rather than
 AP2_SDK_PATH=/path/to/AP2/code/sdk/python python3 verifiers/sdk_crosscheck.py --hostile
 ```
 
+Re-measured 2026-10-29 on 1.7.0 (same SDK commit, `sd-jwt` 0.10.4, Python 3.11), vectors plus the hostile corpus: 163 packs
+seen, 42 refused before the mandate layer, **180 artifacts compared, 122 claim-sets compared, 0 undeclared disagreements**;
+two new declared divergences in the direction "we refuse, the third stack accepts", each with its clause in the bench:
+`sd_digest_repeated` (RFC 9901 §7.1 step 4 — `sd-jwt` 0.10.4 checks repeated digests in `_sd` arrays only, not array
+placeholders, and returns the mandate twice) and `sd_claim_name_reserved` (§7.1 step 3.c.ii.2 — no such check, `_sd`
+inserted as a claim); on `sd_digest_repeated_sd` both stacks refuse. Of the third stack's 23 refusals, 12 carry a message
+and 11 are uncaught internal errors.
 Re-measured 2026-10-18 on 1.6.0 (same SDK commit, `sd-jwt` 0.10.4, Python 3.11), vectors plus the hostile corpus: 160 packs
 seen, 42 refused before the mandate layer, **177 artifacts compared, 122 claim-sets compared, 0 undeclared
 disagreements**, and **one declared divergence in the direction "we accept, the third stack refuses"**:
@@ -458,6 +488,8 @@ python3 test_ap2_conformance.py   # conformance vectors + ACVP ML-DSA-65 + signa
 python3 test_ap2_schema_mutants.py     # closed schema (SPEC §9) under generative mutation, both verifiers, quick subset
 python3 test_ap2_closed_schema_gaps.py # closed schema: the cases the generative bench does not derive (optional keys, present, KB record, report order)
 python3 test_ap2_anchors.py            # 1.5.0: stamp / build --tsa repeated with a real local TSA, anchor identity, the earliest gen_time, --min-anchors in both verifiers
+python3 test_ap2_sd_rules.py           # 1.7.0: RFC 9901 §7.1 steps 4 and 3.c.ii.2 proved generatively — random payloads with digests in every position, planted repeats and reserved names, both verifiers (red on 1.6.0)
+python3 test_ap2_restriction.py        # 1.7.0: SPEC §11, the restriction record profile (the two open mandates of AP2's documentation, decoded verbatim)
 python3 verifiers/schema_mutants.py --full   # the release measurement (16 503 mutations in 1.5.0); --py-root/--js point it at an older checkout = positive control
 python3 verifiers/differential_oracle.py   # Python vs Node on every vector, hostile file and CLI case (needs node)
 verifiers/lax_python_ablation.sh           # the strict layers removed from a copy of the reference -> the suite must be red
@@ -492,7 +524,7 @@ any legal or regulatory proceeding.
 ## Versioning
 
 Within 1.x these do not change: `build_evidence(artifacts, out_path)`, `verify_evidence(path)` → dict with `valid` and,
-when false, `refused`; the CLI `ap2-evidence build|verify` (1.5.0 adds `stamp`) and its exit codes (0 valid or done, 1 not valid or refused, 2 a usage error). Wheel layout,
+when false, `refused`; the CLI `ap2-evidence build|verify` (1.5.0 adds `stamp`, 1.7.0 `restriction`) and its exit codes (0 valid or done, 1 not valid or refused, 2 a usage error). Wheel layout,
 dependency floors and new refusals may change in a minor release and the changelog says so. A change to the three above
 is 2.0, with one exception, made in 1.5.2 and extended in 1.5.3 to one case: exit 74 when the receipt, the pack, a refusal or a usage
 message could not be written whole, or when `--tsa-cert` or `--trust-anchor` could not write the temporary files openssl

@@ -1,8 +1,39 @@
 # Changelog
 
-## Unreleased (branch `restriction-in-constraint`, DRAFT, not released) — a restriction record for an open mandate
+## 1.7.0 — 2026-10-29 — a repeated digest and a reserved claim name are the artifact's error; a restriction record for an open mandate
 
-AP2 at `e1ea56d` has no way to restrict or revoke a mandate once issued. SPEC §11 (draft revision 1.7.0) defines this
+**Not additive** (both verifiers, SPEC §6 step 2): an issuer payload in which a digest value is encountered more than once —
+in an `_sd` array or as a `{"...": d}` array placeholder, in the payload or inside a disclosed value, matched or decoy — is
+that artifact's error (RFC 9901 §7.1 step 4: "If any digest value is encountered more than once in the Issuer-signed JWT
+payload (directly or recursively via other Disclosures), the SD-JWT MUST be rejected"), refused at the second encounter,
+before anything under it is resolved; a disclosure matched from an `_sd` array whose claim name is `_sd` or `...`, at any
+level, is that artifact's error (§7.1 step 3.c.ii.2: "If the claim name is _sd or ..., the SD-JWT MUST be rejected"). Up to
+1.6.0 both verifiers accepted both — measured 2026-10-28 on fffadff and re-measured 2026-10-29 (`~/progetti/apc_banco/
+ap2_170_banco/probe/sd_rules_probe.py`, 11 forms of the two rules, three lenses: library, Python CLI on a sealed pack, JS
+CLI): a repeated array placeholder in `delegate_payload` expanded the mandate twice into `resolved_claims` with `valid:
+true`; the same object digest in two `_sd` arrays inserted the claim in both objects; a disclosed claim named `_sd` or
+`...` was inserted as an ordinary claim; 9 of the 11 forms were accepted by every lens (the other two fell to a side
+effect, "disclosed claim collides" and "array disclosure must be [salt,value]", not to the rule). `valid` changes on no
+pack that was built by `build_evidence` from well-formed tokens; a pack sealed around such a token by other means is now
+`valid: false`, `sealed_content` `contradicted` `artifact_invalid`. Three conformance vectors, `sd_digest_repeated`,
+`sd_digest_repeated_sd`, `sd_claim_name_reserved` (42 → 45; the JS verifier 36/42 → 39/45, the six openssl vectors SKIP
+as before): a 1.6.0 verifier says `valid: true` on all three. The names `_sd_alg`, `_sdx`, `..` stay ordinary claims
+(§7.1 step 3.f removes only the payload's own `_sd_alg`); a nested plain `_sd_alg` is still dropped — the same as `sd-jwt`
+0.10.4 does (measured 2026-10-29: `{"sub": {"_sd_alg": "sha-512", "k": 1}}` → `{"sub": {"k": 1}}` in both). The `sd-jwt`
+0.10.4 reference library through the AP2 SDK at `e1ea56d` (measured 2026-10-28 and 2026-10-29) accepts the repeated array
+placeholder (its `_duplicate_hash_check` in `verifier.py` covers the `_sd` arrays only — the same digest in two `_sd` arrays
+it refuses, "Duplicate hash found in SD-JWT") and has no reserved-name check; both are declared divergences of
+`verifiers/sdk_crosscheck.py`, with their clause. SPEC §11.3 step 5 no longer keeps a census of its own: `_digest_census`
+reads the resolver's (`resolve_disclosures(..., census={})` returns the digests encountered and the ones matched), one rule
+and one implementation for the two sections; a repeated digest now ends at §6 step 2 (the pack is not valid, step 1), and a
+direct `evaluate_restriction` on such a token says `malformed` / `original_malformed` as before. Proved generatively,
+`test_ap2_sd_rules.py`: 240 random payloads with digests in every position (`_sd` at every depth, array placeholders,
+inside disclosed values, decoys), 51 with a repeat planted and 54 with a reserved name, the oracle being the generator;
+the library, `verify_evidence` on the sealed pack and the JS verifier (one Node process) must resolve the intended payload
+or refuse with the rule's reason. On fffadff and on 54dd18e that module is red on exactly the 105 planted cases in every
+lens and green on the 135 clean ones (`out/posctrl/` in the bench).
+
+**Restriction record (SPEC §11).** AP2 at `e1ea56d` has no way to restrict or revoke a mandate once issued. SPEC §11 (revision 1.7.0) defines this
 repository's own profile `io.github.robertolocatelli81.restriction/1`: an SD-JWT in the same pack, signed by the same key,
 whose Mandate Content holds one constraint `{"type": "io.github.robertolocatelli81.restricts", "issuer_jwt_hash": H}`
 naming the original by the `issuer_jwt_hash` of its signed JWT, carrying the same
@@ -60,18 +91,19 @@ open payment mandate, re-signed, minus its `allowed` payee as admitting no payee
 the signed terms); for O
 `form_unsupported` is stated after step 6's first clause; 1 test (`constraints` a property disclosure in the payload form
 is plain on both sides: a mutant reading that name as the form's key lived; step 4 listed before step 6).
-Measured on this draft (Python 3.9 / 3.11 / 3.13, `env -u PYTHONPATH`): `test_ap2_restriction.py` 87 tests, 13/13 suites
-green (284 tests on 3.11); `sdk_crosscheck --hostile` 0 of 177 disagreements. The counts in the paragraph above are the
-first draft's.
+Measured on the §11 draft at 54dd18e (2026-10-29, Python 3.9 / 3.11 / 3.13, `env -u PYTHONPATH`): `test_ap2_restriction.py`
+87 tests, 13/13 suites green (284 tests on 3.11); `sdk_crosscheck --hostile` 0 of 177 disagreements. The counts in the
+paragraph above are the first draft's. The repeated-digest defect of 1.6.0 was found while building this profile (its
+step 5 then checked it on its own records) and is fixed above, in both verifiers.
 
-Found while building it, in 1.6.0 and NOT fixed here (another change, both verifiers): a digest repeated in the issuer
-payload is accepted and its disclosure expanded twice — measured 2026-10-28, both verifiers `valid: true`, the mandate twice
-in `resolved_claims.delegate_payload` (RFC 9901 §7.1 step 4: "If any digest value is encountered more than once in the
-Issuer-signed JWT payload (directly or recursively via other Disclosures), the SD-JWT MUST be rejected"); §11 checks it on
-its own records. The same section, step 3.c.ii.2 ("If the claim name is _sd or ..., the SD-JWT MUST be rejected"): 1.6.0
-inserts such a disclosed claim as an ordinary one (both verifiers, measured 2026-10-28). The `sd-jwt` 0.10.4 reference library
-accepts both as well — its duplicate check covers the `_sd` arrays only, not array placeholders, and it has no reserved-name
-check (measured 2026-10-28 through the AP2 SDK at `e1ea56d`).
+**Measured on 1.7.0** (2026-10-29, Python 3.11, `env -u PYTHONPATH`, `nice -n 19`): 14/14 suites green, 292 tests
+(`test_ap2_evidence.py` 35 — 5 added —, `test_ap2_sd_rules.py` 3, `test_ap2_restriction.py` 87, `test_ap2_conformance.py`
+38); the reference conformant 45/45; `differential_oracle.py` 188 cases (48 vector runs + 117 hostile files + 4 positive
+controls + 19 CLI cases), 0 disagreements, 12 declared; `sdk_crosscheck.py --hostile` 163 packs seen, 42 refused before the
+mandate layer, 180 artifacts compared, 122 claim-sets compared, 0 undeclared disagreements (two new declared, above; the
+third stack's 23 refusals: 12 with a message, 11 uncaught internal errors). Python 3.9 / 3.13, the other CI jobs run
+locally and the mutants of the new lines: see the author's record for this release in the OMEGA bench
+(`gtm/ap2_170_20261029/AUTORE_170_20261029.md`).
 
 ## 1.6.0 — 2026-10-18 — one closed field per question: admission, states, policy
 
