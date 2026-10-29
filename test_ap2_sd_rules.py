@@ -187,6 +187,24 @@ class TestGenerativeSdRules(unittest.TestCase):
                     self.assertFalse(r["valid"])
                     self.assertIn("more than once" if c["planted"] == "repeat" else "is reserved", r["artifacts"][0].get("error", ""))
             manifest.append({"name": str(c["i"]), "path": path, "flags": []})
+        # the acceptance frontier, pinned in BOTH verifiers (review 2026-10-29: a JS mutant that extended the reserved names to
+        # `_sd_alg`, to every `_sd*` prefix or to `..` survived the corpus): a disclosed claim that merely looks like a reserved
+        # name is an ordinary claim, at the top level beside the payload's own `_sd_alg` and nested inside a disclosed object
+        controls = []
+        for name in ("_sdx", "_sd_alg", ".."):
+            d1 = _disclosure(_b64u(os.urandom(8)), name, 1)
+            controls.append((f"pc_top_{name}", {"iss": "w", "_sd": [ap2._disclosure_digest(d1)], "_sd_alg": "sha-256"}, [d1], {"iss": "w", name: 1}))
+            d2 = _disclosure(_b64u(os.urandom(8)), name, 2); inner = _disclosure(_b64u(os.urandom(8)), "inner", {"_sd": [ap2._disclosure_digest(d2)]})
+            controls.append((f"pc_nested_{name}", {"iss": "w", "_sd": [ap2._disclosure_digest(inner)], "_sd_alg": "sha-256"}, [inner, d2], {"iss": "w", "inner": {name: 2}}))
+        for cname, payload, discs, want in controls:
+            ev = O._fresh_pack(base, sk, n, '{"alg":"ES256","typ":"ap2-mandate+sd-jwt"}', json.dumps(payload), want, disclosures=discs)
+            path = os.path.join(d, cname + ".json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(ev, f)
+            with self.subTest(control=cname, verifier="python"):
+                r = ap2.verify_evidence(path)
+                self.assertTrue(r["valid"], r["artifacts"])
+            manifest.append({"name": cname, "path": path, "flags": []})
         if not shutil.which("node"):
             self.skipTest("node absent: the JS verifier is not measured")
         mpath = os.path.join(d, "manifest.json")
@@ -204,6 +222,11 @@ class TestGenerativeSdRules(unittest.TestCase):
                 else:
                     self.assertFalse(r["valid"])
                     self.assertIn("more than once" if c["planted"] == "repeat" else "is reserved", r["artifacts"][0].get("error", ""))
+        for cname, *_ in controls:
+            with self.subTest(control=cname, verifier="js"):
+                r = receipts[cname]
+                self.assertNotIn("crash", r, r)
+                self.assertTrue(r["valid"], r.get("artifacts"))
 
 
 class TestBenchCanFail(unittest.TestCase):

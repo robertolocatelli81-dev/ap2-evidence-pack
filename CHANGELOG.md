@@ -18,7 +18,9 @@ pack that was built by `build_evidence` from well-formed tokens; a pack sealed a
 `valid: false`, `sealed_content` `contradicted` `artifact_invalid`. Three conformance vectors, `sd_digest_repeated`,
 `sd_digest_repeated_sd`, `sd_claim_name_reserved` (42 → 45; the JS verifier 36/42 → 39/45, the six openssl vectors SKIP
 as before): a 1.6.0 verifier says `valid: true` on all three. The names `_sd_alg`, `_sdx`, `..` stay ordinary claims
-(§7.1 step 3.f removes only the payload's own `_sd_alg`); a nested plain `_sd_alg` is still dropped — the same as `sd-jwt`
+in both verifiers (a disclosed `_sd_alg` kept as a claim is this format's declared reading, the same as `sd-jwt` 0.10.4:
+read literally, §7.1 step 3.c.ii.3 would refuse it as a collision with the payload's own `_sd_alg` and step 3.f would drop
+it); a nested plain `_sd_alg` is still dropped — the same as `sd-jwt`
 0.10.4 does (measured 2026-10-29: `{"sub": {"_sd_alg": "sha-512", "k": 1}}` → `{"sub": {"k": 1}}` in both). The `sd-jwt`
 0.10.4 reference library through the AP2 SDK at `e1ea56d` (measured 2026-10-28 and 2026-10-29) accepts the repeated array
 placeholder (its `_duplicate_hash_check` in `verifier.py` covers the `_sd` arrays only — the same digest in two `_sd` arrays

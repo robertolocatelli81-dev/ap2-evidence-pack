@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Roberto Locatelli
-"""SPEC §11 (draft 1.7.0) — the restriction record. Every mandate below is built from AP2's own examples
+"""SPEC §11 (1.7.0) — the restriction record. Every mandate below is built from AP2's own examples
 (google-agentic-commerce/AP2 at e1ea56db72a6385bce3e5c1112b3a56ce60acb43): the two encoded tokens are copied verbatim from
 the documentation and decoded here; the constraint examples are those of docs/ap2/payment_mandate.md. They are re-issued
 with a throwaway key (the documentation does not publish the agent-provider key), in the form the AP2 SDK produces:
