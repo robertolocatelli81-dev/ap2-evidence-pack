@@ -892,9 +892,10 @@ the complete receipt on stdout, one line `check not run here:` on stderr; or the
    associated with any claim" (decoys): a verifier cannot tell a decoy from a hidden constraint, so a hidden element is
    never assumed absent. The census is the resolver's of §6 step 2 (one rule, one implementation): the digests it
    encounters minus the disclosures it matches. A digest encountered more than once is therefore that artifact's error
-   under §6 step 2 (RFC 9901 §7.1 step 4), the pack is not valid and step 1 ends the evaluation; a caller that reaches
-   this step with such a token directly (`evaluate_restriction`, bypassing §6) gets `not_evaluated` `original_malformed`
-   for O, `contradicted` `malformed` for R. Up to the draft of 2026-10-28 this step kept a census of its own because the
+   under §6 step 2 (RFC 9901 §7.1 step 4) and the pack is not valid: that token's Mandate Content cannot be resolved, so
+   it is read as no record at all (no entry), and every other record of the pack is `not_evaluated` `pack_not_valid`
+   (step 1); a caller that reaches this step with such a token directly (`evaluate_restriction`, bypassing §6) gets
+   `not_evaluated` `original_malformed` for O, `contradicted` `malformed` for R. Up to the draft of 2026-10-28 this step kept a census of its own because the
    1.6.0 resolver did not reject a repeated digest.
 6. Same form (§11.1), and each form readable: first, O's `delegate_payload` a property disclosure of its payload (O has
    two readings, §11.1) is `not_evaluated` `original_disclosable` (`at`: `original`) and nothing further is evaluated;

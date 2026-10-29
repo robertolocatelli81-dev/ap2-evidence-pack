@@ -25,8 +25,10 @@ placeholder (its `_duplicate_hash_check` in `verifier.py` covers the `_sd` array
 it refuses, "Duplicate hash found in SD-JWT") and has no reserved-name check; both are declared divergences of
 `verifiers/sdk_crosscheck.py`, with their clause. SPEC §11.3 step 5 no longer keeps a census of its own: `_digest_census`
 reads the resolver's (`resolve_disclosures(..., census={})` returns the digests encountered and the ones matched), one rule
-and one implementation for the two sections; a repeated digest now ends at §6 step 2 (the pack is not valid, step 1), and a
-direct `evaluate_restriction` on such a token says `malformed` / `original_malformed` as before. Proved generatively,
+and one implementation for the two sections; a repeated digest now ends at §6 step 2: the pack is not valid, that token is
+read as no record (its Mandate Content cannot be resolved; measured: `restrictions: []`, `valid: false` on a pack sealed by
+other means around such a record, where 54dd18e said `valid: true` and judged it), every other record is `pack_not_valid`
+(step 1), and a direct `evaluate_restriction` on such a token says `malformed` / `original_malformed` as before. Proved generatively,
 `test_ap2_sd_rules.py`: 240 random payloads with digests in every position (`_sd` at every depth, array placeholders,
 inside disclosed values, decoys), 51 with a repeat planted and 54 with a reserved name, the oracle being the generator;
 the library, `verify_evidence` on the sealed pack and the JS verifier (one Node process) must resolve the intended payload
@@ -96,8 +98,8 @@ Measured on the §11 draft at 54dd18e (2026-10-29, Python 3.9 / 3.11 / 3.13, `en
 paragraph above are the first draft's. The repeated-digest defect of 1.6.0 was found while building this profile (its
 step 5 then checked it on its own records) and is fixed above, in both verifiers.
 
-**Measured on 1.7.0** (2026-10-29, Python 3.11, `env -u PYTHONPATH`, `nice -n 19`): 14/14 suites green, 292 tests
-(`test_ap2_evidence.py` 35 — 5 added —, `test_ap2_sd_rules.py` 3, `test_ap2_restriction.py` 87, `test_ap2_conformance.py`
+**Measured on 1.7.0** (2026-10-29, Python 3.11, `env -u PYTHONPATH`, `nice -n 19`): 14/14 suites green, 293 tests
+(`test_ap2_evidence.py` 35 — 5 added —, `test_ap2_sd_rules.py` 3, `test_ap2_restriction.py` 88 — 1 added —, `test_ap2_conformance.py`
 38); the reference conformant 45/45; `differential_oracle.py` 188 cases (48 vector runs + 117 hostile files + 4 positive
 controls + 19 CLI cases), 0 disagreements, 12 declared; `sdk_crosscheck.py --hostile` 163 packs seen, 42 refused before the
 mandate layer, 180 artifacts compared, 122 claim-sets compared, 0 undeclared disagreements (two new declared, above; the

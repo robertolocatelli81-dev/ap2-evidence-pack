@@ -450,6 +450,40 @@ class TestBinding(PackCase):
         # positive control of the census: the same tokens without the repeat have no hidden digest
         self.assertEqual((ap2._digest_census(ap2.parse_sd_jwt(o)), ap2._digest_census(ap2.parse_sd_jwt(restrict(o, PAY)))), (0, 0))
 
+    def test_a_pack_sealed_by_other_means_around_a_repeated_record_is_not_valid_and_holds_no_record(self):
+        """SPEC §11.3 step 5 (1.7.0): `build_evidence` refuses such a token, so the pack is assembled from parts (as 1.6.0 built
+        it, `resolved_claims` as recorded then): §6 says not valid, the token is read as no record (its content cannot be
+        resolved), and another record of the same pack is `pack_not_valid`. Measured on 54dd18e: `valid: true` and the
+        record judged (`restricts_malformed`)."""
+        sys.path.insert(0, os.path.join(_HERE, "spec", "vectors", "ap2")); import make_vectors_closed_schema as cs  # noqa: E402,PLC0415
+
+        def twice(text):
+            pl = json.loads(text)
+            pl["delegate_payload"].append(dict(pl["delegate_payload"][0]))
+            return json.dumps(pl)
+
+        def art(name, compact, resolved):
+            p = ap2.parse_sd_jwt(compact)
+            return cs._artifact(name, compact, p["header"], p["header"]["jwk"], resolved, False)
+        o = issue(PAY)
+        r_twice = restrict(o, PAY, payload_text_hook=twice)
+        content, content_r = _official(o), _official(restrict(o, PAY))   # what 1.6.0 resolved: R's content (with the reference) twice
+        scope = cs._load("valid_signed")["honest_scope"]
+        for arts in ([art("original", o, {"delegate_payload": [content]}), art("restriction", r_twice, {"delegate_payload": [content_r, content_r]})],
+                     [art("original", o, {"delegate_payload": [content]}), art("restriction", r_twice, {"delegate_payload": [content_r, content_r]}),
+                      art("second", restrict(o, PAY), {"delegate_payload": [content_r]})]):
+            path = os.path.join(self.d, "parts.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(cs._pack(scope, "sealed by other means", arts), f)
+            v = ap2.verify_evidence(path)
+            self.assertEqual((v["admission"], v["valid"]), ("admitted", False))
+            self.assertIn("more than once", v["artifacts"][1]["error"])
+            rec = ap2.verify_restrictions(path)
+            self.assertEqual((rec["valid"], rec["met"]), (False, False))
+            self.assertEqual([e["in"] for e in rec["restrictions"]], ["second"] if len(arts) == 3 else [])
+            if len(arts) == 3:
+                self.assertEqual(why(rec["restrictions"][0]), [("not_evaluated", "pack_not_valid")])
+
     def test_forms(self):
         o = issue(PAY)
         rec, e = self.run_pair(o, restrict(o, PAY, form="payload"))

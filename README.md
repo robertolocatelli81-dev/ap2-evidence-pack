@@ -113,7 +113,7 @@ on §11; the JS verifier does not implement it (declared). Not a revocation: the
 only it. Measured with the AP2 SDK at `e1ea56d`: where the SDK reads a typed mandate it refuses the record
 (`ValidationError` on the unknown constraint type — AP2: "Any unknown Constraints MUST be treated as failing evaluation")
 and still accepts the original; where it does not (`verify_chain`, `sd_jwt.verify`) the record passes like any token.
-`test_ap2_restriction.py` (87 tests) is built from the two open mandates of AP2's documentation, decoded verbatim.
+`test_ap2_restriction.py` (88 tests) is built from the two open mandates of AP2's documentation, decoded verbatim.
 
 ## Honest scope
 
