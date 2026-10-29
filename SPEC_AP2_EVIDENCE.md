@@ -306,10 +306,10 @@ flags: `require_producer`, `require_pq`, `require_anchor`, and `min_anchors` (1.
    matched from an `_sd` array whose claim name is `_sd` or `...`, at any level, → reject, §7.1 step 3.c.ii.2 verbatim,
    "If the claim name is _sd or ..., the SD-JWT MUST be rejected" (vector `sd_claim_name_reserved`; up to 1.6.0 both
    verifiers inserted it as an ordinary claim, measured 2026-10-28) — the name `_sd_alg` is not in that rule: this
-   format keeps a disclosure so named as an ordinary claim, at the top level and nested, as `sd-jwt` 0.10.4 does (measured
-   2026-10-29) — this format's declared reading, both verifiers: read literally, §7.1 would not keep it at the top level
-   (beside the payload's own `_sd_alg`, step 3.c.ii.3 refuses it as a collision; without one, step 3.f removes it), and
-   nested, where no `_sd_alg` is at the level of the `_sd` key, step 3.c.ii.3 does not apply; for an `_sd`
+   format keeps a disclosure so named as an ordinary claim at every level, and drops a plain `_sd_alg` below the top
+   level, as `sd-jwt` 0.10.4 does (measured 2026-10-29) — this format's declared reading, both verifiers. Read literally,
+   §7.1 differs in two places: step 3.c.ii.3 refuses the disclosure as a collision where a plain `_sd_alg` is at the level
+   of its `_sd` key, and otherwise, at the top level, step 3.f removes it; for an `_sd`
    that is not an array of digest strings and for an array placeholder whose value is not a digest
    string, §4.2.4.1 and §4.2.4.2 address the MUST to the Issuer and §7.1 gives the verifier no rejection
    step of its own — §7.1 step 3.b collects only well-formed shapes and step 3.e removes every `_sd`

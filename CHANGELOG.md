@@ -18,10 +18,10 @@ pack that was built by `build_evidence` from well-formed tokens; a pack sealed a
 `valid: false`, `sealed_content` `contradicted` `artifact_invalid`. Three conformance vectors, `sd_digest_repeated`,
 `sd_digest_repeated_sd`, `sd_claim_name_reserved` (42 → 45; the JS verifier 36/42 → 39/45, the six openssl vectors SKIP
 as before): a 1.6.0 verifier says `valid: true` on all three. The names `_sd_alg`, `_sdx`, `..` stay ordinary claims
-in both verifiers (a disclosed `_sd_alg` kept as a claim, at the top level and nested, is this format's declared reading,
-the same as `sd-jwt` 0.10.4: read literally, §7.1 would not keep it at the top level — beside the payload's own `_sd_alg`
-step 3.c.ii.3 refuses it as a collision, without one step 3.f removes it); a nested plain `_sd_alg` is still dropped — the same as `sd-jwt`
-0.10.4 does (measured 2026-10-29: `{"sub": {"_sd_alg": "sha-512", "k": 1}}` → `{"sub": {"k": 1}}` in both). The `sd-jwt`
+in both verifiers: a disclosed `_sd_alg` is kept as a claim at every level and a plain `_sd_alg` below the top level is
+dropped, as `sd-jwt` 0.10.4 does (measured 2026-10-29: `{"sub": {"_sd_alg": "sha-512", "k": 1}}` → `{"sub": {"k": 1}}` in
+both). That is this format's declared reading (SPEC §6 step 2); RFC 9901 §7.1 read literally refuses such a disclosure
+where a plain `_sd_alg` is at the level of its `_sd` key (step 3.c.ii.3) and otherwise removes it at the top level (step 3.f). The `sd-jwt`
 0.10.4 reference library through the AP2 SDK at `e1ea56d` (measured 2026-10-28 and 2026-10-29) accepts the repeated array
 placeholder (its `_duplicate_hash_check` in `verifier.py` covers the `_sd` arrays only — the same digest in two `_sd` arrays
 it refuses, "Duplicate hash found in SD-JWT") and has no reserved-name check; both are declared divergences of
@@ -105,8 +105,10 @@ step 5 then checked it on its own records) and is fixed above, in both verifiers
 38); the reference conformant 45/45; `differential_oracle.py` 188 cases (48 vector runs + 117 hostile files + 4 positive
 controls + 19 CLI cases), 0 disagreements, 12 declared; `sdk_crosscheck.py --hostile` 163 packs seen, 42 refused before the
 mandate layer, 180 artifacts compared, 122 claim-sets compared, 0 undeclared disagreements (two new declared, above; the
-third stack's 23 refusals: 12 with a message, 11 uncaught internal errors). The same 14 suites and 293 tests on Python 3.9
-and 3.13 (`cryptography` 50.0.2), and on Python 3.11 with the declared floor `cryptography` 48.0.0; the other steps and jobs
+third stack's 23 refusals: 12 with a message, 11 uncaught internal errors). The same 14 suites, 293 tests run by unittest,
+on Python 3.9 and 3.13 (`cryptography` 50.0.2) and on Python 3.11 with the declared floor `cryptography` 48.0.0;
+`test_packaging.py` skips its three `tomllib` tests on 3.9, and its wheel-contents test on 3.13 and on the floor, where
+`build` is not installed; the other steps and jobs
 of `.github/workflows/ci.yml` run locally as written (Node 22.23.2 here, 24 in CI): every module runs as many tests as a
 script and as a module, the build/verify/tamper gate, the ablation (every strict layer red alone), `type_fuzz.py` 1390/1390,
 the 1.7.0 wheel installed alone in a clean venv and verifying a vector, the third-verifier job with its seeded divergence
@@ -115,7 +117,7 @@ front-end passes the built pack and refuses the tampered one). Mutants of the ne
 with the targeted tests: 18 in the reference and 8 in the JS verifier, 25 detected; the one that lived replaces a `continue`
 by `hidden = 0` before a test of `hidden`, the same behaviour. Three mutants of a review that extended the reserved names in
 the JS verifier (`_sd_alg`, every `_sd*` prefix, `..`) lived until six control packs of `test_ap2_sd_rules.py` pinned the
-accepted side of the rule in both verifiers.
+accepted side of the rule in both verifiers; a seventh pins a disclosed `_sd_alg` beside a plain one in a nested object.
 
 ## 1.6.0 — 2026-10-18 — one closed field per question: admission, states, policy
 

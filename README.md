@@ -185,7 +185,8 @@ anchor required-but-missing, time anchor claimed-but-invalid, a real token issue
 another digest; since 1.4.0 an unknown key at the top level / inside the anchor block / inside
 an artifact entry / inside a producer-signature entry, a `crit` nobody understands, and a
 KB-JWT without `typ: kb+jwt`; since 1.5.0 seven `anchors` cases of SPEC §3.3, the three refusals pinned to their exact
-text; since 1.5.4 three producer blocks that do not verify, SPEC §5; since 1.7.0 three SD-JWT processing-rule vectors, named below); since 1.6.0 thirteen more, one for each cell of
+text; since 1.5.4 three producer blocks that do not verify, SPEC §5; since 1.7.0 three SD-JWT processing-rule vectors, named below); since 1.6.0 thirteen more vectors, seven of them
+`valid: true` and six `valid: false`, one for each cell of
 the SPEC §6.9 states table the others did not reach (`holder_*`, `sealed_binding_mismatch`, `time_*`, `producer_*`,
 `issuer_x5c_*`; five of them under `--tsa-cert` or `--trust-anchor`, which need openssl), and every expected file carries
 the `states` block a verifier must reproduce; the three 1.7.0 REJECTs are `sd_digest_repeated`,
