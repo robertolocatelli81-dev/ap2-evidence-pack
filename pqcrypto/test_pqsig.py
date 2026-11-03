@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -107,7 +108,7 @@ class TestAp2ProducerSignature(unittest.TestCase):
         self.t = _load_test_helpers()
         self.sk, self.jwk = self.t._make_signer()
         self.sdjwt = self.t._make_sd_jwt(self.sk, {"iss": "merchant"}, {"amount": "10.00"})
-        self.tmp = tempfile.mkdtemp()
+        self.tmp = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)   # 1.7.2: no directory left behind
 
     def _build(self):
         p = os.path.join(self.tmp, "ev.json")
@@ -166,7 +167,7 @@ class TestProducerPinningAndPolicy(unittest.TestCase):
         self.t = _load_test_helpers()
         self.sk, self.jwk = self.t._make_signer()
         self.sdjwt = self.t._make_sd_jwt(self.sk, {"iss": "merchant"}, {"amount": "10.00"})
-        self.tmp = tempfile.mkdtemp()
+        self.tmp = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)   # 1.7.2: no directory left behind
         self.ident = S.ProducerIdentity.create()
         self.pin = self.ident.public_keys()
 

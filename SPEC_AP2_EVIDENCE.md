@@ -108,6 +108,14 @@ silently CLEARED `self_asserted_only`).
 `jwk_header` as `x5c_header` flipped `self_asserted_only` to false with no `x5c`
 anywhere in the pack — the one field the honest scope sends the auditor to.
 
+1.7.2 — a supplied key names an artifact. `--key name=jwk.json` and `--jwks-url name=URL` (the `supplied` and
+`jwks_fetched` classes) are given FOR a named artifact of the build: the reference `build` refuses, as a usage error
+(exit 2, no file, before any key file is read or any URL fetched), a name that is not an artifact of this build or a
+name given twice to the same flag, and `build_evidence` refuses (`Ap2EvidenceError`, no file) a `keys` or `jwks_urls`
+name that is not an artifact. Up to 1.7.1 such a name was ignored in silence — measured 2026-11-02 on 1.7.1: `--key
+nope=k.json` built the pack with the header keys (`jwk_header`) and exit 0; `--key payment=K1 --key payment=K2` used K2
+alone, exit 0 — so a mistyped name left the caller's trust decision out of the pack with no sign of it.
+
 ## 3. Canonicalisation and digest (NORMATIVE)
 
 `evidence_digest_sha256 = HEX(SHA-256(canonical_bytes))` where `canonical_bytes`
@@ -153,6 +161,57 @@ JWK `x`/`y` exactly 32 bytes each (RFC 7518 §6.2.1); `key.provenance_class` in 
 `rfc3161_timestamp.anchored` a boolean; `producer_signatures.signatures[].sig_alg` a
 string (any other type is a FAIL entry). A violation inside an artifact is that
 artifact's error (the pack is not `valid`); a violation of a top-level shape is a refusal.
+
+1.7.2 — numbers in the SD-JWT layer (NORMATIVE, both verifiers). The JSON texts inside an SD-JWT are written by another
+producer under RFC 8259, and the AP2 schema types `payment.budget.max` as `number` (`open_payment_mandate.json`,
+`$schema` 2020-12): the AP2 SDK at `e1ea56d` (`Budget.max: float`) writes `Budget(max=10)` as `"max":10.0`. JSON Schema
+Core 2020-12 §6.3 says integer JSON numbers "SHOULD NOT be encoded with a fractional part"; this profile follows it on the
+reader's side by default, and treats the exponent form (`1e2`), which §6.3 does not name, the same way, and gives the relying party an explicit option for the mandates already written that way.
+
+- **Default.** In those texts — the issuer JWT header and payload, every disclosure, the KB-JWT header and payload — a
+  number literal written with a fraction or an exponent is that artifact's error, the literal named first
+  (`float '10.0' in the SD-JWT needs accept_integral_floats`), whatever its value. Same as 1.7.1 in effect
+  (a 1.7.1 verifier refused such a token as `float '10.0' in the evidence file`); only the message changes.
+- **`accept_integral_floats`** (a boolean, default false; `--accept-integral-floats` on `build`, `verify` and
+  `restriction`, `acceptIntegralFloats` / `--accept-integral-floats` in the JS verifier; in an expected file, a policy key,
+  §7). Under it, such a literal whose value is an integer within ±(2^53−1) is READ as that integer: `10.0`, `1e2`,
+  `250.00`, `-0.0` are 10, 100, 250, 0. The decision is taken on the decimal digits of the literal, exactly (the digits the
+  point and the exponent leave below the units are all zero), never by binary64 arithmetic: `10.000000000000000001` is NOT
+  an integer here, though `float()` and `Number()` make it 10. A literal whose value is not an integer (`0.29`, `1e-7`) or
+  is an integer outside the range (`1e16`, `9007199254740992.0`, `1E400`) stays that artifact's error under the option too
+  (`float '0.29' in the SD-JWT: not an integer within +/-(2^53-1)`). The option is REPORTED: the receipt carries
+  `accept_integral_floats: true`, and each artifact entry `integral_literals_read`, the literals of its token read that
+  way, in the order parsed (each cut to 30 characters); `build` reports the same two members. Without the option neither
+  member is present, and the receipt is the 1.7.1 receipt except for the message of the default above.
+
+Rules relied on for the reading: JSON Schema Validation 2020-12 §6.1.1 (`integer` "matches any number with a zero
+fractional part"), RFC 8785 §3.2.2.3 (the canonical serialization of 10.0 is `10`), RFC 8259 §6 (integers in that range
+are the numbers implementations "agree exactly" on). The signed bytes are never rewritten: the ES256 signature, the
+disclosure digests and the KB-JWT `sd_hash` are checked over the base64url segments as received; the integer is what the
+pack RECORDS (`resolved_claims`, under the file profile above, which has no literal with a fraction) and what §11
+compares. A pack `build` writes under the option verifies only under the option (without it, that artifact's error):
+the option is a decision of the relying party, stated each time, never a property the pack carries. The evidence file
+itself is unchanged: a literal with a fraction or an exponent anywhere in the file, `10.0` included, is a refusal with or
+without the option. Declared: a schema-valid AP2 budget with a fraction (`0.29`) cannot be carried by this format, and
+its unit is open in AP2 (#339, #368, #377). Measured 2026-11-02, six open payment mandates minted by the AP2 SDK at
+`e1ea56d` with `max` 10, 10.0, 0.29, 250, 1000 (JPY), 100 (EUR): the SDK wrote all six with a fraction (`10.0`, `10.0`,
+`0.29`, `250.0`, `1000.0`, `100.0`); 1.7.1 refused all six; 1.7.2 refuses all six by default and, under the option,
+carries the five integral ones and refuses `0.29`.
+
+Direction read on 2026-11-03 (sources checked that day; this profile's reading, not a rule of AP2): money amounts are
+converging on integers in ISO 4217 minor units — AP2's own `types/amount.json` (`amount`: "Amount in minor units") and
+`payment.amount_range.max` (`integer`), Verifiable Intent (`agent-intent/verifiable-intent`, `spec/constraints.md` §4.5:
+`mandate.payment.budget` `max` an `integer` in minor units; §4.4, on every amount of those constraints: "Using integers
+eliminates decimal parsing ambiguity entirely"), and the proposal of AP2 #389 (make `budget.max` an integer in minor
+units). In the #389 thread its author agreed that a migration note should state the reader rule "a reader may reject
+`10.0` rather than coerce it" — in reply to a comment by this profile's author, naming this profile: not an
+independent signal. The exception is the SDK's `Budget.max: float` in major units at `e1ea56d`, unchanged on
+`main` since 2026-04-29; three open pull requests by different authors keep that type in major units — #340 states the major
+unit in the schema's description, #368 and #377 fix the SDK's conversion to minor units — so a fractional budget such as `0.29` USD would stay legitimate there. The core specification has moved to
+FIDO (AP2 `CONTRIBUTING.md`), where no public text on this was found. Hence the default refuses what Core §6.3 says not
+to write and what the integer direction makes unnecessary, and `accept_integral_floats` carries the mandates already
+written by the SDK; if the major-unit reading prevails, a fractional budget remains outside this format (declared above)
+and the rule is revisited in a later revision.
 
 1.7.1: the depth bound applies to the claims RESOLVED from an SD-JWT as well (§6 step 2): each JSON text of a token can be
 within the profile while a chain of disclosures, each nested in the one before, resolves into claims as deep as the chain.
@@ -306,7 +365,8 @@ flags: `require_producer`, `require_pq`, `require_anchor`, and `min_anchors` (1.
    by SHA-256 (§1, §8), and unless `subject`, `created_utc`, `honest_scope` are strings
    (§1 MUSTs — 1.1.0 r5: a `…/2.0` pack used to be verified under the 1.0 rules, and a pack
    with no `honest_scope` produced a receipt with `honest_scope: null`). Recompute the digest (§3) → `digest_ok`.
-2. For EVERY artifact: parse `sd_jwt_compact` (its JSON under the §3.1 profile); apply the JOSE rules of §9.2 to the
+2. For EVERY artifact: parse `sd_jwt_compact` (its JSON under the §3.1 profile, numbers in the SD-JWT layer as its 1.7.2
+   paragraph says, with or without `accept_integral_floats`); apply the JOSE rules of §9.2 to the
    protected header (`crit` → RFC 7515 §4.1.11, unknown parameters ignored and reported); verify the ES256 signature with
    the snapshotted JWK over the JWS signing input; resolve disclosures
    fail-closed (unmatched, duplicate, or malformed disclosure → reject — for an UNMATCHED
@@ -551,7 +611,7 @@ refusal; a conformant verifier reproduces it exactly); `policy` keys `trusted_pr
 `require_producer`, `require_anchor`, `min_anchors`, with the types of §6 (`require_*` booleans, `min_anchors` a positive
 integer, `trusted_producer_keys` null or an object mapping a `sig_alg` to a key or a non-empty list of keys), and since
 1.6.0 `trust_set_complete` (boolean), `tsa_cert` and `trust_anchor` (the name of a file of the vector set, passed as
-`--tsa-cert` / `--trust-anchor`). The five vectors that pass `tsa_cert` or `trust_anchor` list `"openssl"` in `requires`: a
+`--tsa-cert` / `--trust-anchor`), and since 1.7.2 `accept_integral_floats` (boolean, §3.1). The five vectors that pass `tsa_cert` or `trust_anchor` list `"openssl"` in `requires`: a
 verifier that cannot call openssl (the JS verifier) reports them SKIP. A runner that meets
 any other key, backend name or policy type, a file that is not UTF-8 JSON or repeats a key, or a pack without its
 expected file (or the reverse) stops with an error of the vector set, never ignoring it (`run_ap2_conformance.py`:
@@ -942,7 +1002,10 @@ and Processing Rules"; the SDK's `check_payment_constraints` / `check_checkout_c
 every constraint, `constraints.py`). So R is no broader than O when every requirement of O is met by a requirement of R at
 least as strict: a requirement R adds can only remove closed mandates, except where a rule below says otherwise. A value of
 R canonically equal (§3) to the value of O always meets it. Integers are JSON integers (`type(x) is int`, not a boolean);
-§3.1 already refuses fractions — so the AP2 documentation examples written `100.50` / `1000.00` cannot be carried (declared).
+since 1.7.2, under `accept_integral_floats` only, a literal with a zero fractional part inside a token is read as its
+integer (§3.1), so the AP2 documentation example `1000.00` (`payment_mandate.md`, line 214 at `e1ea56d`) is 1000 there
+and an artifact error by default, while `100.50` (line 186) cannot be carried either way (declared; the SDK's own
+`AmountRange.max: int` refuses it too, measured 2026-11-02).
 
 **Top-level claims of the payload** (in the `delegate_payload` form: beside `delegate_payload`; in the other form the
 payload is the Mandate Content and the content rules apply to it):
@@ -990,7 +1053,7 @@ only when canonically equal; otherwise `not_evaluated` `vct_not_supported`.
 | `type` (schema keys) | c' (in R) is within c (in O) when |
 |---|---|
 | `payment.amount_range` (`type`, `currency` string, `max` integer — required; `min` integer) | same `currency`; `max'` ≤ `max`; when c has `min`, c' has `min'` ≥ `min` ("If absent, there is no minimum") |
-| `payment.budget` (`type`, `currency` string, `max` — required; `max` is `number` in the schema, read here as an integer by the rule above — the AP2 SDK takes it in major units, `int(self.constraint.max * 100)`, `constraints.py`, unlike `amount_range`; the same unit on both sides keeps the comparison sound) | same `currency`; `max'` ≤ `max` |
+| `payment.budget` (`type`, `currency` string, `max` — required; `max` is `number` in the schema, read here as an integer by the rule above (1.7.2: `10.0` is that artifact's error by default and 10 under `accept_integral_floats`; a fraction is that artifact's error either way, §3.1) — the AP2 SDK takes it in major units, `int(self.constraint.max * 100)`, `constraints.py`, unlike `amount_range`; the same unit on both sides keeps the comparison sound) | same `currency`; `max'` ≤ `max` |
 | `payment.agent_recurrence` (`type`, `frequency` enum — required; `max_occurrences` integer) | `frequency'` no more frequent, in the order `ON_DEMAND` < `DAILY` < `WEEKLY` < `BIWEEKLY` < `MONTHLY` < `QUARTERLY` < `ANNUALLY` (this profile's reading of "sufficiently separated in time from the previous presentation to meet the `frequency` definition", `payment_mandate.md`; AP2 states no order and the SDK does not evaluate `frequency`); when c has `max_occurrences`, c' has one ≤ it |
 | `payment.allowed_payees`, `payment.allowed_payment_instruments`, `payment.allowed_pisps`, `checkout.allowed_merchants` (`type`, `allowed` list of objects — required) | every element of `allowed'` is canonically equal to an element of `allowed` (stricter than AP2's matching — `merchant_matches` compares `id`, or `name`+`website`; an element spelled differently that AP2 would match the same is `constraint_widened` here, declared) |
 | `payment.execution_date` (`type` required; `not_before`, `not_after` strings) | when c has `not_before`, c' has one ≥ it; when c has `not_after`, c' has one ≤ it. Comparable values are `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SSZ` (ASCII digits, a real calendar date and time), both of the SAME form; another form or two forms is `not_evaluated` `date_form` |

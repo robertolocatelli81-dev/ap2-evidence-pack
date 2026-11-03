@@ -40,7 +40,7 @@ This tool turns a set of SD-JWT mandates into **one evidence file** that verifie
 ## Usage
 
 ```bash
-pip install ap2-evidence-pack   # cryptography >= 48 comes with it (declared since 1.1.1; >= 48 since 1.3.0)
+pip install --extra-index-url https://robertolocatelli81-dev.github.io/pypi/ ap2-evidence-pack   # not on PyPI: this index (see Install); cryptography >= 48 comes with it
 
 python3 examples/make_samples.py     # generates sample checkout.sdjwt + payment.sdjwt
 python3 ap2_evidence.py build evidence.json checkout=checkout.sdjwt payment=payment.sdjwt \
@@ -52,8 +52,20 @@ python3 ap2_evidence.py verify evidence.json --trusted-producer-key ed25519=<b64
 python3 ap2_evidence.py verify evidence.json --min-anchors 2 --tsa-cert tsa-bundle.pem   # 1.5.0: two distinct anchors, each TSA-verified
 python3 ap2_evidence.py verify evidence.json --trusted-producer-key ed25519=<b64> --trust-set-complete   # 1.6.0: the pinned set is complete
 python3 ap2_evidence.py restriction evidence.json [--tsa-cert PEM]   # 1.7.0: SPEC §11, each restriction record of the pack judged against its original (reference only)
+python3 ap2_evidence.py build evidence.json open_payment=mandate.sdjwt --accept-integral-floats   # 1.7.2: see below
+python3 ap2_evidence.py verify evidence.json --accept-integral-floats                             # 1.7.2: the same option to verify that pack
 node verifiers/js/ap2-verify.mjs evidence.json   # the independent verifier, same flags and exit codes (limits below)
 ```
+
+**Numbers inside a token (1.7.2, SPEC §3.1).** By default a number written with a fraction or an exponent inside an
+SD-JWT — `10.0`, `1e2` — makes that artifact an error (`float '10.0' in the SD-JWT needs accept_integral_floats`): JSON Schema Core 2020-12 §6.3 says an integer "SHOULD NOT" be encoded with a fractional part, and this profile treats the exponent form the same way. The AP2 SDK at
+`e1ea56d` writes a budget as a JSON float (`Budget(max=10)` signs `"max": 10.0`; from `1e16` up, an exponent). `--accept-integral-floats` (on `build`,
+`verify` and `restriction`, and in the JS verifier) is the relying party's decision to read such a literal as its integer
+when it is one within ±(2^53−1), decided on the digits, not through binary64; the signature is checked over the bytes as
+signed. The receipt then says `accept_integral_floats: true` and lists, per artifact, `integral_literals_read`. A pack built
+under the option verifies only under it. `0.29` is an error with or without the option. Measured 2026-11-03 on six open
+payment mandates the SDK at `e1ea56d` minted (`max` 10, 10.0, 0.29, 250, 1000 JPY, 100 EUR): 1.7.2 refuses all six by
+default; under the option it builds and verifies the five integral ones in both verifiers and refuses `0.29`.
 
 **Reading the verdict (1.6.0, SPEC §6.9).** Beside the twelve fields of §6 every receipt states `admission`
 (`admitted`, or `refused` with a `refusal_class`: `format_unsupported`, `unknown_member`, `malformed`), and for an admitted
@@ -211,8 +223,8 @@ python3 spec/vectors/ap2/run_ap2_conformance.py   # exit 0 = conformant
 
 | Implementation | Runtime / deps | Status |
 |---|---|---|
-| `ap2_evidence.py` | Python 3 + `cryptography`; `openssl` for `--tsa-cert` / `--trust-anchor` | reference — conformant 46/46 (1.7.1); ACVP ML-DSA-65 sigVer 9/9 |
-| `verifiers/js/ap2-verify.mjs` | Node with OpenSSL ≥ 3.5 for ML-DSA-65 (measured: Node 22.23.2 / OpenSSL 3.5.7 locally, Node 24 in CI), `node:crypto` only; on an older build ML-DSA-65 is SKIP = incomplete, never a pass, and the ML-DSA vectors are not measured (the JS conformance test skips, it does not pass); no TSA signature check — `tsa_verified` null, `time_anchor` `instrument_failure`; no x5c chain validation — `--trust-anchor` is a usage error (1.6.0) | independent — conformant on 40/46 (1.7.1) on every normative field, the `report` and the `states` block, through `run_ap2_conformance.run(verify_fn=…)` (`test_ap2_conformance.py`); the 6 vectors whose `requires` lists openssl are SKIP (1.6.0: the five under `tsa_cert` / `trust_anchor`, and `anchor_invalid`, which the differential oracle runs in both verifiers) |
+| `ap2_evidence.py` | Python 3 + `cryptography`; `openssl` for `--tsa-cert` / `--trust-anchor` | reference — conformant 50/50 (1.7.2); ACVP ML-DSA-65 sigVer 9/9 |
+| `verifiers/js/ap2-verify.mjs` | Node with OpenSSL ≥ 3.5 for ML-DSA-65 (measured: Node 22.23.2 / OpenSSL 3.5.7 locally, Node 24 in CI), `node:crypto` only; on an older build ML-DSA-65 is SKIP = incomplete, never a pass, and the ML-DSA vectors are not measured (the JS conformance test skips, it does not pass); no TSA signature check — `tsa_verified` null, `time_anchor` `instrument_failure`; no x5c chain validation — `--trust-anchor` is a usage error (1.6.0) | independent — conformant on 44/50 (1.7.2) on every normative field, the `report` and the `states` block, through `run_ap2_conformance.run(verify_fn=…)` (`test_ap2_conformance.py`); the 6 vectors whose `requires` lists openssl are SKIP (1.6.0: the five under `tsa_cert` / `trust_anchor`, and `anchor_invalid`, which the differential oracle runs in both verifiers) |
 
 **Closed schema (1.4.0, SPEC §9; 1.4.1).** Measured on 1.3.0 on 2026-10-10: a key nobody had defined, written inside
 `rfc3161_timestamp`, `producer_signatures` or a `signatures[i]` entry, was `valid: true` in both verifiers with nothing in
@@ -282,6 +294,11 @@ REJECT to everything is caught; through 1.2.0 this sentence said more than the o
 controls, and two verifiers refusing one alike were an agreement — measured by ablation on 25/09/2026, see CHANGELOG). The CA-issued `x5c` leaf under `--trust-anchor`, the only case
 where `self_asserted_only` is false, is one of the hostile files, not one of those three — this sentence said
 otherwise through 1.1.2:
+Re-measured 2026-11-03 on 1.7.2: **202 cases, 0 disagreements, of which 12 are declared divergences** (`53 vector runs +
+126 hostile files + 4 positive controls + 19 CLI cases = 202`: the four 1.7.2 vectors, each under its own policy; four
+signed tokens with number literals, and five runs under `--accept-integral-floats`. The oracle also compares
+`accept_integral_floats` and each artifact's `integral_literals_read`, and stops on a policy key it does not know — up to
+1.7.1 it ignored one).
 Re-measured 2026-10-29 on 1.7.1: **189 cases, 0 disagreements, of which 12 are declared divergences** (`49 vector runs +
 117 hostile files + 4 positive controls + 19 CLI cases = 189`: the 1.7.1 vector, an artifact error alike in both verifiers).
 Re-measured 2026-10-29 on 1.7.0: **188 cases, 0 disagreements, of which 12 are declared divergences** (`48 vector runs +

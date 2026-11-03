@@ -38,7 +38,7 @@ sigsuite = ap2._sigsuite   # the signature suite the reference really uses (its 
 # 1.5.4 — SPEC §7: the closed schema of <name>.expected.json
 EXPECTED_KEYS = {"vector", "description", "policy", "normative", "report", "requires", "requires_backend", "states"}
 POLICY_KEYS = {"trusted_producer_keys", "require_pq", "require_producer", "require_anchor", "min_anchors",
-               "trust_set_complete", "tsa_cert", "trust_anchor"}   # 1.6.0: the last three
+               "trust_set_complete", "tsa_cert", "trust_anchor", "accept_integral_floats"}   # 1.6.0: tsa_cert, trust_anchor, trust_set_complete; 1.7.2: accept_integral_floats
 # 1.6.0 — SPEC §6.9/§7: the `states` block every expected file carries (closed, like the rest of the file)
 STATES_KEYS = {"admission", "refusal_class", "subjects", "policy"}
 SUBJECTS = ("sealed_content", "holder_binding", "time_anchor", "producer_signature", "issuer_identity")
@@ -87,7 +87,7 @@ def check_expected(exp, name: str, vdir: str = None) -> None:
         raise VectorSetError(f"{name}: `vector` must be the file's name and `description` a string")
     closed(exp.get("policy"), POLICY_KEYS, "policy")
     pol = exp["policy"]
-    for k in ("require_pq", "require_producer", "require_anchor", "trust_set_complete"):
+    for k in ("require_pq", "require_producer", "require_anchor", "trust_set_complete", "accept_integral_floats"):
         if k in pol and not isinstance(pol[k], bool):
             raise VectorSetError(f"{name}: policy {k} must be a boolean (SPEC §7)")
     if "min_anchors" in pol and not (type(pol["min_anchors"]) is int and pol["min_anchors"] >= 1):
@@ -168,6 +168,8 @@ def verify_with_policy(verify_fn, pack_path: str, pol: dict, vdir: str) -> dict:
         extra["min_anchors"] = pol["min_anchors"]
     if pol.get("trust_set_complete"):
         extra["trust_set_complete"] = True
+    if pol.get("accept_integral_floats"):   # 1.7.2 — SPEC §3.1
+        extra["accept_integral_floats"] = True
     for k in ("tsa_cert", "trust_anchor"):
         if k in pol:
             extra[k] = os.path.join(vdir, pol[k])

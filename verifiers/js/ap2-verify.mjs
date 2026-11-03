@@ -5,7 +5,9 @@
 // ml-dsa-65 through the Node build's OpenSSL >= 3.5, else SKIP = incomplete, never a pass), policy flags, valid.
 // Acceptance profile of the file (SPEC §3.1): strict UTF-8, no BOM, no duplicate keys, no floats, integers within
 // +/-(2^53-1), nesting <= 512, no lone surrogate escape, 64 MiB bound. A refused file is a receipt with valid=false.
-// Usage: ap2-verify.mjs <evidence.json> [--trusted-producer-key ALG=B64]... [--require-producer] [--require-pq] [--require-anchor] [--min-anchors N] [--tsa-cert PEM] [--trust-set-complete]
+// Inside the SD-JWTs (1.7.2) a literal with a fraction or an exponent is that artifact's error; with --accept-integral-floats
+// one whose value is an integer in that range is read as it, and the receipt names it.
+// Usage: ap2-verify.mjs <evidence.json> [--trusted-producer-key ALG=B64]... [--require-producer] [--require-pq] [--require-anchor] [--min-anchors N] [--tsa-cert PEM] [--trust-set-complete] [--accept-integral-floats]
 import { statSync, accessSync, openSync, fstatSync, readSync, closeSync, writeSync, constants as FS } from "node:fs";
 import { createHash, createPublicKey, verify as cryptoVerify, X509Certificate } from "node:crypto";
 
@@ -16,7 +18,28 @@ class UnknownMember extends Refused {}
 class FormatUnsupported extends Refused {}   // 1.6.0: an anchor mechanism a later revision may define   // 1.6.0 — SPEC §9.1/§6.9: a key outside a closed list = a refusal of class unknown_member
 
 // ---- strict JSON parser (keeps number lexemes; refuses what the profile refuses) ----
-function parseStrict(text) {
+// 1.7.2 (SPEC §3.1, the SD-JWT layer): the integer a literal with a fraction or an exponent denotes when its value is an
+// integer within +/-(2^53-1), else null — decided on the decimal DIGITS (BigInt), never through Number(): the same digit
+// algorithm as the reference's `_integral_literal`, so both verifiers read, or refuse, the same literals.
+function integralLiteral(m) {
+  const neg = m[0][0] === "-", ip = m[1], fp = m[2] ? m[2].slice(1) : "", ex = m[3] ? m[3].slice(1) : "0";
+  let digits = (ip + fp).replace(/^0+/, "");
+  if (!digits) return 0;                                                 // 0.0, -0.0, 0e99999: zero, whatever the exponent
+  if (ex.replace(/^[+-]/, "").replace(/^0+/, "").length > 9) return null; // ten exponent digits or more: outside the range either way
+  let shift = parseInt(ex, 10) - fp.length;                              // value = digits * 10**shift
+  if (shift < 0) {
+    if (digits.length <= -shift || /[1-9]/.test(digits.slice(shift))) return null;   // a non-zero digit below the units
+    digits = digits.slice(0, shift); shift = 0;
+  }
+  if (digits.length + shift > 16) return null;                           // 2^53-1 has 16 digits
+  const v = BigInt(digits) * 10n ** BigInt(shift);
+  if (v > BigInt(SAFE)) return null;
+  return Number(neg ? -v : v);
+}
+// 1.7.2 (SPEC §3.1): null = the default (a literal with a fraction or an exponent in a token is that artifact's error); an
+// array = acceptIntegralFloats was asked: an integral one is read as its integer and its text recorded here.
+let INTEGRAL_READ = null;
+function parseStrict(text, inToken = false) {
   let i = 0, depth = 0;
   const ws = () => { while (i < text.length && " \t\n\r".includes(text[i])) i++; };
   const err = (m) => { throw new Refused(m + " at " + i); };
@@ -41,7 +64,10 @@ function parseStrict(text) {
     if (c === '"') return str();
     if (text.startsWith("true", i)) { i += 4; return true; } if (text.startsWith("false", i)) { i += 5; return false; } if (text.startsWith("null", i)) { i += 4; return null; }
     const m = /^-?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?/.exec(text.slice(i)); if (!m) err("value");
-    if (m[2] || m[3]) err("float " + m[0]); const n = Number(m[0]); if (!Number.isSafeInteger(n) || Math.abs(n) > SAFE) err("integer out of range"); i += m[0].length; return n;
+    if (m[2] || m[3]) { if (!inToken) err("float " + m[0]); const shown = m[0].length <= 30 ? m[0] : m[0].slice(0, 30) + "…";
+      if (INTEGRAL_READ === null) err("float " + shown + " in the SD-JWT needs accept_integral_floats");
+      const v = integralLiteral(m); if (v === null) err("float " + shown + " in the SD-JWT: not an integer within +/-(2^53-1)"); INTEGRAL_READ.push(shown); i += m[0].length; return v; }
+    const n = Number(m[0]); if (!Number.isSafeInteger(n) || Math.abs(n) > SAFE) err("integer out of range"); i += m[0].length; return n;
   }
   const v = value(); ws(); if (i !== text.length) err("trailing data"); return v;
 }
@@ -61,7 +87,7 @@ const HONEST_SCOPE_SHA256 = "a4b12a682847c23c4a136dd399c6aa0dfa69540a5c7200039d5
 const B64URL = /^[A-Za-z0-9_-]+$/;
 function b64uDecode(s) { if (typeof s !== "string" || !s || !B64URL.test(s) || s.length % 4 === 1) throw new Refused("invalid base64url segment"); const raw = Buffer.from(s, "base64url"); if (b64u(raw) !== s) throw new Refused("non-canonical base64url"); return raw; }
 const b64Strict = (s) => { if (typeof s !== "string" || !s || s.length % 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(s)) return null; const raw = Buffer.from(s, "base64"); return raw.toString("base64") === s ? raw : null; };
-function jsonOf(buf) { const t = UTF8.decode(buf); return parseStrict(t); }
+function jsonOf(buf) { const t = UTF8.decode(buf); return parseStrict(t, true); }   // 1.7.2: the SD-JWT layer reads integral literals
 
 // ---- SD-JWT ----
 function parseSdJwt(compact) {
@@ -401,6 +427,13 @@ function readEvidenceBytes(path) {
   } finally { closeSync(fd); }
 }
 export function verifyEvidence(path, opts = {}) {
+  // 1.7.2 (SPEC §3.1): acceptIntegralFloats, a boolean, default false; when true the receipt says so
+  if (opts.acceptIntegralFloats !== undefined && typeof opts.acceptIntegralFloats !== "boolean") throw new TypeError("acceptIntegralFloats must be a boolean");
+  const saved = INTEGRAL_READ; INTEGRAL_READ = opts.acceptIntegralFloats ? [] : null;
+  try { const r = verifyEvidenceInner(path, opts); if (opts.acceptIntegralFloats) r.accept_integral_floats = true; return r; }
+  finally { INTEGRAL_READ = saved; }
+}
+function verifyEvidenceInner(path, opts) {
   if (opts.minAnchors !== undefined && opts.minAnchors !== null && !(Number.isSafeInteger(opts.minAnchors) && opts.minAnchors >= 1))   // SPEC §3.3: an integer >= 1 —
     throw new TypeError("minAnchors must be an integer >= 1 (got " + String(opts.minAnchors) + ")");   // NaN once disabled the policy in silence
   if (opts.trustAnchor !== undefined && opts.trustAnchor !== null) throw new TypeError("trustAnchor: this verifier cannot validate x5c chains (SPEC §6 step 7) — a flag that does nothing is refused (1.6.0)");
@@ -441,6 +474,7 @@ export function verifyEvidence(path, opts = {}) {
   const recomputed = sha256(Buffer.from(canon(e2), "utf-8")).toString("hex"); const digestOk = recomputed === ev.evidence_digest_sha256;
   const artResults = []; let allOk = true; const forBindings = [];
   for (const a of ev.artifacts) {
+    const read0 = INTEGRAL_READ === null ? null : INTEGRAL_READ.length;   // 1.7.2: the literals this artifact had read as integers
     try { checkClosed(a, "artifact", ARTIFACT_KEYS); checkClosed(a.key, "artifact key", KEY_KEYS); checkClosed(a.kb_jwt, "artifact kb_jwt", KB_COPY_KEYS); checkClosed(a.verified_at_build, "artifact verified_at_build", VAB_KEYS);   // 1.4.0 — SPEC §9.1
       const compact = a.sd_jwt_compact; if (typeof compact !== "string" || compact !== compact.trim() || !/^[\x00-\x7f]*$/.test(compact)) throw new Refused("sd_jwt_compact must be the exact ASCII compact serialization");
       if (!a.key || typeof a.key !== "object" || Array.isArray(a.key)) throw new Refused("artifact key.jwk must be an object");
@@ -462,6 +496,7 @@ export function verifyEvidence(path, opts = {}) {
       artResults.push({ name: a.name, signature_ok: sigOk, claims_match: claimsOk, kb_jwt: kb, provenance_class: a.key?.provenance_class, self_asserted: selfAsserted, ignored: ign, ...(prov.ident ? { x5c_leaf: prov.ident } : {}) });
       allOk = allOk && sigOk && claimsOk && kb.verified !== false; forBindings.push({ name: a.name, compact: parsed.compact, resolved });
     } catch (e) { artResults.push({ name: a?.name, error: String(e.message ?? e) }); allOk = false; }
+    if (read0 !== null) artResults[artResults.length - 1].integral_literals_read = INTEGRAL_READ.slice(read0);
   }
   const asSet = (l) => l.map((b) => canon(b)).sort().join("\n");   // r4: binding SET (SPEC §4) — Object.keys enumerates index keys first, so the scan order is not the reference's
   // 1.6.0 — SPEC §6.9: the binding set as an element of sealed_content, recomputed whenever every artifact's signature and
@@ -509,7 +544,7 @@ export function verifyEvidence(path, opts = {}) {
 }
 function main(argv) {
   // 1.5.2 review: a usage line that stderr does not take (/dev/full) is 74, as in the Python CLI (console.error dropped the error and exited 2)
-  const usage = () => { try { writeAllSync(2, "usage: ap2-verify.mjs <evidence.json> [--trusted-producer-key ALG=B64]... [--require-producer] [--require-pq] [--require-anchor] [--min-anchors N] [--tsa-cert PEM] [--trust-set-complete]\n"); } catch { process.exit(EX_IOERR); } process.exit(2); };
+  const usage = () => { try { writeAllSync(2, "usage: ap2-verify.mjs <evidence.json> [--trusted-producer-key ALG=B64]... [--require-producer] [--require-pq] [--require-anchor] [--min-anchors N] [--tsa-cert PEM] [--trust-set-complete] [--accept-integral-floats]\n"); } catch { process.exit(EX_IOERR); } process.exit(2); };
   const a = argv.slice(2); const opts = { trusted: null }; let path = null;
   for (let i = 0; i < a.length; i++) { let tok = a[i], eqv = null; const eq = tok.indexOf("="); if (eq > 0 && tok.startsWith("--")) { eqv = tok.slice(eq + 1); tok = tok.slice(0, eq); }
     const nx = () => { const v = eqv !== null ? eqv : a[++i]; if (v === undefined || v === "" || v.startsWith("-")) usage(); return v; };
@@ -519,6 +554,7 @@ function main(argv) {
     else if (tok === "--trust-anchor") { nx(); usage(); }   // 1.6.0: this verifier cannot validate x5c chains; a flag accepted that does nothing is a usage error (r8 accepted it and reported chain_verified null)
     else if (tok === "--require-producer" && eqv === null) opts.requireProducer = true; else if (tok === "--require-pq" && eqv === null) opts.requirePq = true; else if (tok === "--require-anchor" && eqv === null) opts.requireAnchor = true;
     else if (tok === "--trust-set-complete" && eqv === null) opts.trustSetComplete = true;   // 1.6.0 — SPEC §6.9
+    else if (tok === "--accept-integral-floats" && eqv === null) opts.acceptIntegralFloats = true;   // 1.7.2 — SPEC §3.1
     else if (tok.startsWith("-") || path !== null) usage(); else path = tok; }
   if (!path) usage();
   // 1.6.0 review: a --tsa-cert that cannot be read is a usage error, as in the reference (it named no certificate)

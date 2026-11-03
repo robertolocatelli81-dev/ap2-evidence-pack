@@ -20,6 +20,7 @@ function opts(flags) {
     else if (f === "--tsa-cert") o.tsaCert = flags[++i];
     else if (f === "--trust-anchor") o.trustAnchor = flags[++i];   // 1.6.0: verifyEvidence refuses it (a crash entry), as the CLI does (usage, exit 2)
     else if (f === "--trust-set-complete") o.trustSetComplete = true;   // 1.6.0 — SPEC §6.9
+    else if (f === "--accept-integral-floats") o.acceptIntegralFloats = true;   // 1.7.2 — SPEC §3.1
     else throw new Error("unknown flag " + f);
   }
   return o;

@@ -111,7 +111,28 @@ def strip(ev: dict) -> dict:
     ev = rehash(ev); ev.pop("rfc3161_timestamp", None); ev.pop("anchors", None); return ev
 
 
+# 1.7.2: the policy keys of an expected file (SPEC §7) this bench passes on, and the two it leaves out ON PURPOSE — tsa_cert
+# and trust_anchor name openssl checks the JS verifier cannot run (its conformance run reports those vectors SKIP); the bench
+# compares the two verifiers on the same inputs, so both run without them. Any other key is an error, not silence (up to
+# 1.7.1 trust_set_complete was dropped here without a word).
+_POLICY_PASSED = {"trusted_producer_keys", "require_producer", "require_pq", "require_anchor", "min_anchors",
+                  "trust_set_complete", "accept_integral_floats"}
+_POLICY_LEFT_OUT = {"tsa_cert", "trust_anchor"}
+
+
+# 1.7.2: options that change how the CONTENT is read (SPEC §3.1), not the container's policy: they stay on the resealed
+# content and on its mutations, where the container policy is dropped.
+_CONTENT_FLAGS = ("--accept-integral-floats",)
+
+
+def content_flags(flags):
+    return [f for f in flags if f in _CONTENT_FLAGS]
+
+
 def flags_for(policy: dict):
+    unknown = set(policy) - _POLICY_PASSED - _POLICY_LEFT_OUT
+    if unknown:
+        raise ValueError(f"policy keys this bench does not know: {sorted(unknown)}")
     fl = []
     for alg, keys in (policy.get("trusted_producer_keys") or {}).items():
         for k in ([keys] if isinstance(keys, str) else keys):
@@ -121,6 +142,10 @@ def flags_for(policy: dict):
             fl.append("--" + name.replace("_", "-"))
     if "min_anchors" in policy:   # 1.5.0 — SPEC §3.3
         fl += ["--min-anchors", str(policy["min_anchors"])]
+    if policy.get("trust_set_complete"):   # 1.6.0 — SPEC §6.9
+        fl.append("--trust-set-complete")
+    if policy.get("accept_integral_floats"):   # 1.7.2 — SPEC §3.1
+        fl.append("--accept-integral-floats")
     return fl
 
 
@@ -241,7 +266,7 @@ class Corpus:
         obj = self.get(src, locate)
         if not isinstance(obj, dict):
             return
-        fl = [] if sealed else flags
+        fl = content_flags(flags) if sealed else flags
         # unknown keys, every value type (REPORT for the JWK: ignored and listed under `key_jwk`)
         keys = list(self.unknown_keys); cv = self.case_variant(table, obj)
         if cv: keys.append(cv)
@@ -352,18 +377,18 @@ class Corpus:
         sealed_seen = {}
         for name, ev, flags, norm in vectors:
             self.add(f"base/{name}", os.path.join(VDIR, name + ".json"), flags, None, None, kind="baseline")
-            r = strip(ev); dg = r["evidence_digest_sha256"]
+            r = strip(ev); dg = (r["evidence_digest_sha256"], tuple(content_flags(flags)))   # 1.7.2: one resealed baseline per content AND reading
             if dg not in sealed_seen:
                 sealed_seen[dg] = f"base/{name}~resealed"
-                self.add(sealed_seen[dg], self.write(r), [], None, None, kind="baseline")
+                self.add(sealed_seen[dg], self.write(r), content_flags(flags), None, None, kind="baseline")
         # mutations of every object of every vector
         for name, ev, flags, norm in vectors:
             if norm.get("valid") is not True and name not in ("stripped_signature", "unpinned_producer", "anchor_missing", "digest_mismatch"):
                 continue   # a source whose baseline is already a refusal / an artifact error cannot attribute a new signal
-            r = strip(ev); sealed_base = sealed_seen[r["evidence_digest_sha256"]]
+            r = strip(ev); sealed_base = sealed_seen[(r["evidence_digest_sha256"], tuple(content_flags(flags)))]
             for label, locate, table, unknown_cls, sealed, idx, sig in self.objects(ev):
                 if sealed:
-                    self.mutate_object_family(name, r, [], label, locate, table, unknown_cls, True, idx, sig, sealed_base)
+                    self.mutate_object_family(name, r, content_flags(flags), label, locate, table, unknown_cls, True, idx, sig, sealed_base)
                 else:
                     if unknown_cls == SIGFAIL and name in ("digest_mismatch",):
                         continue   # the producer signatures FAIL there already (recomputed digest): a FAIL entry is not attributable
@@ -435,6 +460,8 @@ def kwargs_for(flags):
         elif f == "--require-pq": kw["require_pq"] = True; i += 1
         elif f == "--require-anchor": kw["require_anchor"] = True; i += 1
         elif f == "--min-anchors": kw["min_anchors"] = int(flags[i + 1]); i += 2   # 1.5.0 — SPEC §3.3
+        elif f == "--trust-set-complete": kw["trust_set_complete"] = True; i += 1   # 1.6.0 — SPEC §6.9
+        elif f == "--accept-integral-floats": kw["accept_integral_floats"] = True; i += 1   # 1.7.2 — SPEC §3.1
         else: raise ValueError(f)
     return kw
 

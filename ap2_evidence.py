@@ -65,6 +65,7 @@ import stat
 import sys
 import urllib.request
 from datetime import datetime, timezone
+from contextvars import ContextVar
 from typing import Dict, List, Optional, Tuple
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -147,6 +148,56 @@ def _no_float(text: str):
     raise Ap2EvidenceError(f"float {text!r} in the evidence file (not portable: use a string)")
 
 
+_NUMBER_LITERAL = re.compile(r"(-?)([0-9]+)(?:\.([0-9]+))?(?:[eE]([+-]?[0-9]+))?")
+
+
+def _integral_literal(text: str) -> Optional[int]:
+    """1.7.2 (SPEC §3.1, the SD-JWT layer): the integer a JSON number literal written with a fraction or an exponent
+    denotes, when its value is an integer within +/-(2^53-1); None otherwise. Decided on the DECIMAL DIGITS of the literal,
+    exactly — never through binary64 (float("10.000000000000000001") is 10.0; here it is not an integer). The JS verifier
+    runs the same digit algorithm (`integralLiteral`), so both verifiers read, or refuse, the same literals."""
+    m = _NUMBER_LITERAL.fullmatch(text)
+    if not m:
+        return None
+    neg, ip, fp, ex = m.group(1) == "-", m.group(2), m.group(3) or "", m.group(4) or "0"
+    digits = (ip + fp).lstrip("0")
+    if not digits:
+        return 0                                    # 0.0, -0.0, 0e99999: zero, whatever the exponent
+    ex_digits = ex.lstrip("+-").lstrip("0")
+    if len(ex_digits) > 9:                           # an exponent of ten digits or more: far outside the range, either way
+        return None
+    shift = int(ex) - len(fp)                        # value = int(digits) * 10**shift
+    if shift < 0:
+        if len(digits) <= -shift or digits[shift:].strip("0"):
+            return None                              # a non-zero digit below the units: not an integer
+        digits = digits[:shift]
+        shift = 0
+    if len(digits) + shift > 16:                     # 2^53-1 has 16 digits
+        return None
+    v = int(digits) * 10 ** shift
+    if v > _SAFE_INT:
+        return None
+    return -v if neg else v
+
+
+# 1.7.2 (SPEC §3.1): None = the default, a literal with a fraction or an exponent inside a token is that artifact's error;
+# a list = the relying party asked for `accept_integral_floats`: an integral one is read as its integer and its text is
+# appended here, so the receipt names every literal read that way (per artifact). A ContextVar: one value per call/thread.
+_INTEGRAL_READ: ContextVar = ContextVar("ap2_integral_read", default=None)
+
+
+def _token_number(text: str):
+    shown = text if len(text) <= 30 else text[:30] + "…"   # the literal is attacker-sized; the receipt keeps 120 chars of an error
+    read = _INTEGRAL_READ.get()
+    if read is None:
+        raise Ap2EvidenceError(f"float {shown!r} in the SD-JWT needs accept_integral_floats")   # literal first: the receipt keeps 120 chars
+    v = _integral_literal(text)
+    if v is None:
+        raise Ap2EvidenceError(f"float {shown!r} in the SD-JWT: not an integer within +/-(2^53-1) (SPEC §3.1)")
+    read.append(shown)
+    return v
+
+
 def _bounded_int(text: str) -> int:
     v = int(text)
     if abs(v) > _SAFE_INT:
@@ -197,15 +248,18 @@ def _has_lone_surrogate(text: str) -> bool:
     return False
 
 
-def loads_strict(text: str):
+def loads_strict(text: str, token: bool = False):
     """Strict JSON for the evidence file: no duplicate keys, no floats, integers within +/-(2^53-1), no NaN/Infinity,
-    nesting <= 512 by linear pre-scan, no lone UTF-16 surrogate escape. Raises Ap2EvidenceError."""
+    nesting <= 512 by linear pre-scan, no lone UTF-16 surrogate escape. Raises Ap2EvidenceError.
+    `token=True` (1.7.2, SPEC §3.1): the JSON of an SD-JWT segment, where a literal with a fraction or an exponent whose
+    value is an integer within the range is read as that integer (`10.0` -> 10); any other such literal is refused."""
     if _nesting_depth(text) > MAX_JSON_DEPTH:
         raise Ap2EvidenceError(f"json_too_deep: nesting exceeds {MAX_JSON_DEPTH}")
     if _has_lone_surrogate(text):
         raise Ap2EvidenceError("lone_surrogate: unpaired UTF-16 surrogate escape")
     try:
-        return json.loads(text, object_pairs_hook=_no_dup_pairs, parse_float=_no_float, parse_int=_bounded_int, parse_constant=_no_constant)
+        return json.loads(text, object_pairs_hook=_no_dup_pairs, parse_float=_token_number if token else _no_float,
+                          parse_int=_bounded_int, parse_constant=_no_constant)
     except RecursionError as e:
         raise Ap2EvidenceError("json_too_deep") from e
     except ValueError as e:
@@ -266,7 +320,7 @@ def _loads_segment(raw: bytes, what: str):
         raise Ap2EvidenceError(f"{what} is not valid UTF-8") from e
     if text.startswith("\ufeff"):
         raise Ap2EvidenceError(f"{what} starts with a BOM")
-    return loads_strict(text)
+    return loads_strict(text, token=True)
 
 
 def _b64url_decode(s: str) -> bytes:
@@ -1179,7 +1233,33 @@ def build_evidence(artifacts: List[Dict], out_path: str,
                    jwks_urls: Optional[Dict[str, str]] = None,
                    tsa_url: Optional[str] = None,
                    subject: str = "agentic-payment mandate evidence",
-                   extra_tsa_urls: Optional[List[str]] = None) -> Dict:
+                   extra_tsa_urls: Optional[List[str]] = None,
+                   accept_integral_floats: bool = False) -> Dict:
+    """See `_build_evidence`. 1.7.2 (SPEC §3.1): without `accept_integral_floats` a token whose JSON writes a number with a
+    fraction or an exponent (`10.0`, as the AP2 SDK writes every budget) is refused; with it an integral one is read as its
+    integer, the pack records the integer (`resolved_claims`), and the result says so and lists the literals. A pack built
+    that way verifies only under `accept_integral_floats` (declared in SPEC §3.1)."""
+    if type(accept_integral_floats) is not bool:
+        raise ValueError(f"accept_integral_floats must be a boolean (got {accept_integral_floats!r})")
+    tok = _INTEGRAL_READ.set([] if accept_integral_floats else None)
+    try:
+        r = _build_evidence(artifacts, out_path, keys=keys, jwks_urls=jwks_urls, tsa_url=tsa_url, subject=subject,
+                            extra_tsa_urls=extra_tsa_urls)
+        read = _INTEGRAL_READ.get()
+    finally:
+        _INTEGRAL_READ.reset(tok)
+    if accept_integral_floats:
+        r["accept_integral_floats"] = True
+        r["integral_literals_read"] = read
+    return r
+
+
+def _build_evidence(artifacts: List[Dict], out_path: str,
+                    keys: Optional[Dict[str, Dict]] = None,
+                    jwks_urls: Optional[Dict[str, str]] = None,
+                    tsa_url: Optional[str] = None,
+                    subject: str = "agentic-payment mandate evidence",
+                    extra_tsa_urls: Optional[List[str]] = None) -> Dict:
     """artifacts: [{name, sd_jwt}]. Verifies every artifact NOW, snapshots the key material
     used, records bindings, and writes ONE self-contained evidence file. Any artifact that
     fails to verify aborts the build (an evidence file must never contain a red light
@@ -1191,6 +1271,10 @@ def build_evidence(artifacts: List[Dict], out_path: str,
     if len(set(names)) != len(names):
         raise Ap2EvidenceError("duplicate artifact names (bindings would silently "
                                "overwrite each other — refused fail-closed)")
+    for what, given in (("keys", keys), ("jwks_urls", jwks_urls)):   # 1.7.2 (SPEC §2): a supplied key names an artifact of
+        stray = [k for k in given if k not in names]               # this build; up to 1.7.1 a stray name was ignored in silence
+        if stray:
+            raise Ap2EvidenceError(f"{what}: no artifact named {stray[0]!r} in this build (SPEC §2)")
     entries, for_bindings = [], []
     for a in artifacts:
         parsed = parse_sd_jwt(a["sd_jwt"])
@@ -1495,7 +1579,34 @@ def derive_states(*, digest_ok, art_results, binding_set_match, ts_block, rfc_bl
 def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = False,
                     require_producer: bool = False, require_anchor: bool = False, tsa_cert: Optional[str] = None,
                     trust_anchor: Optional[str] = None, min_anchors: Optional[int] = None,
-                    trust_set_complete: bool = False) -> Dict:
+                    trust_set_complete: bool = False, accept_integral_floats: bool = False) -> Dict:
+    """See `_verify_evidence`. 1.7.2 (SPEC §3.1): `accept_integral_floats` (default False) reads a number literal of a token
+    written with a fraction or an exponent whose value is an integer within +/-(2^53-1) (`10.0`) as that integer; without
+    it such a literal is that artifact's error. When it is set the receipt says so (`accept_integral_floats: true`) and
+    each artifact entry lists the literals read that way (`integral_literals_read`); without it neither member is present,
+    and the receipt is the 1.7.1 receipt but for the message of an artifact whose token has such a literal."""
+    if type(accept_integral_floats) is not bool:   # SPEC §7 discipline: an option of the wrong type never changes a verdict in silence
+        raise ValueError(f"accept_integral_floats must be a boolean (got {accept_integral_floats!r})")
+    tok = _INTEGRAL_READ.set([] if accept_integral_floats else None)
+    try:
+        r = _verify_evidence(path, trusted_producer_keys=trusted_producer_keys, require_pq=require_pq,
+                             require_producer=require_producer, require_anchor=require_anchor, tsa_cert=tsa_cert,
+                             trust_anchor=trust_anchor, min_anchors=min_anchors, trust_set_complete=trust_set_complete)
+    except Ap2WriteError as e:
+        if accept_integral_floats and isinstance(getattr(e, "receipt", None), dict):
+            e.receipt["accept_integral_floats"] = True
+        raise
+    finally:
+        _INTEGRAL_READ.reset(tok)
+    if accept_integral_floats:
+        r["accept_integral_floats"] = True
+    return r
+
+
+def _verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = False,
+                     require_producer: bool = False, require_anchor: bool = False, tsa_cert: Optional[str] = None,
+                     trust_anchor: Optional[str] = None, min_anchors: Optional[int] = None,
+                     trust_set_complete: bool = False) -> Dict:
     """OFFLINE re-verification from the evidence file alone: digest, every signature with
     the SNAPSHOTTED key, every disclosure, every binding, and the RFC 3161 token's binding
     (status + imprint; the TSA itself only with `tsa_cert`, via openssl). Fail-closed. Raises Ap2WriteError (1.5.2) when
@@ -1614,6 +1725,8 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
     art_results, all_ok = [], True
     for_bindings = []
     for a in ev["artifacts"]:
+        _read = _INTEGRAL_READ.get()   # 1.7.2 (SPEC §3.1): the literals this artifact had read as integers, when asked
+        _read0 = None if _read is None else len(_read)
         try:
             _check_closed(a, "artifact", _ARTIFACT_KEYS)   # 1.4.0 — SPEC §9.1: the entry, its key, its KB record and its attestation are CLOSED
             _check_closed(a["key"], "artifact key", _KEY_KEYS)
@@ -1663,6 +1776,8 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
         except Exception as e:  # noqa: BLE001 — any malformation of an artifact is that artifact's error, never a traceback
             art_results.append({"name": a.get("name") if isinstance(a, dict) else None, "error": f"{type(e).__name__}: {str(e)[:120]}"})
             all_ok = False
+        if _read is not None:
+            art_results[-1]["integral_literals_read"] = _read[_read0:]
 
     # 1.6.0 — SPEC §6.9: the binding set as an element of sealed_content is recomputed whenever every artifact's issuer
     # signature and claims verified — also when a KB-JWT failed, where `bindings_ok` is false by the §6 step 3 rule without a
@@ -2187,7 +2302,26 @@ def _existed_by(receipt: Dict) -> Optional[str]:
     return min((x["gen_time"] for x in cands), key=_gt_key, default=None)
 
 
-def verify_restrictions(path: str, tsa_cert: Optional[str] = None) -> Dict:
+def verify_restrictions(path: str, tsa_cert: Optional[str] = None, accept_integral_floats: bool = False) -> Dict:
+    """See `_verify_restrictions`. 1.7.2 (SPEC §3.1): `accept_integral_floats` is passed to the pack's verification and
+    applies to the tokens the evaluation reads (§11); the receipt says so when it is set."""
+    if type(accept_integral_floats) is not bool:
+        raise ValueError(f"accept_integral_floats must be a boolean (got {accept_integral_floats!r})")
+    tok = _INTEGRAL_READ.set([] if accept_integral_floats else None)
+    try:
+        r = _verify_restrictions(path, tsa_cert=tsa_cert)
+    except Ap2WriteError as e:
+        if accept_integral_floats and isinstance(getattr(e, "receipt", None), dict):
+            e.receipt["accept_integral_floats"] = True
+        raise
+    finally:
+        _INTEGRAL_READ.reset(tok)
+    if accept_integral_floats:
+        r["accept_integral_floats"] = True
+    return r
+
+
+def _verify_restrictions(path: str, tsa_cert: Optional[str] = None) -> Dict:
     """SPEC §11.2: verify the pack (§6, default policy, `tsa_cert` passed through), then evaluate every restriction record
     in it. The pack is read ONCE: the verification and the evaluation run on the same snapshot (a private copy of the
     parsed file), so a file swapped between two reads cannot give one verdict about two contents. Raises Ap2WriteError when
@@ -2217,7 +2351,7 @@ def verify_restrictions(path: str, tsa_cert: Optional[str] = None) -> Dict:
                 raise Ap2WriteError(f"cannot write the private copy of the pack: {type(e).__name__}: "
                                     f"{os.strerror(e.errno) if isinstance(e.errno, int) else e}") from e
             try:
-                receipt = verify_evidence(copy, tsa_cert=tsa_cert)
+                receipt = verify_evidence(copy, tsa_cert=tsa_cert, accept_integral_floats=_INTEGRAL_READ.get() is not None)
             except Ap2WriteError as e:
                 if e.receipt is None:
                     raise
@@ -2502,6 +2636,7 @@ def _main(argv: Optional[List[str]] = None) -> int:
                    help="fetch the key from a JWKS at build time (TLS witness)")
     b.add_argument("--tsa", action="append", default=[], help="RFC 3161 TSA URL (optional third-party time anchor); may repeat: the first goes to rfc3161_timestamp, the others to anchors (SPEC §3.3)")
     b.add_argument("--subject", default="agentic-payment mandate evidence")
+    b.add_argument("--accept-integral-floats", action="store_true", help="1.7.2 (SPEC §3.1): read a number of a token written with a fraction or an exponent whose value is an integer within +/-(2^53-1) (10.0, as the AP2 SDK writes a budget) as that integer, and say so in the result; without it such a token is refused")
     st = sub.add_parser("stamp", allow_abbrev=False, add_help=False)   # 1.5.0 — SPEC §3.3: add an anchor to an existing pack
     st.add_argument("evidence")
     st.add_argument("--tsa", required=True, action="append", help="RFC 3161 TSA URL: append its token to `anchors` (exactly one per run)")
@@ -2516,13 +2651,15 @@ def _main(argv: Optional[List[str]] = None) -> int:
     v.add_argument("--trust-anchor", help="PEM trust anchor: validate the artifact x5c chain with openssl verify. Without it every key is self-asserted (offline, a certificate proves only that the signer wrote it) — the JS verifier cannot validate chains and reports chain_verified null (declared)")
     v.add_argument("--min-anchors", help="policy: at least N distinct anchors must verify (SPEC §3.3; --require-anchor alone is 1)")
     v.add_argument("--tsa-cert", help="PEM certificate (or chain) of the TSA: verify the token's signature and chain with openssl ts -verify (without it, the TSA is NOT verified — declared)")
+    v.add_argument("--accept-integral-floats", action="store_true", help="1.7.2 (SPEC §3.1): read a number of a token written with a fraction or an exponent whose value is an integer within +/-(2^53-1) (10.0, as the AP2 SDK writes a budget) as that integer, and say so in the result; without it such a token is refused")
     rs = sub.add_parser("restriction", allow_abbrev=False, add_help=False)   # SPEC §11 (1.7.0)
     rs.add_argument("evidence")
     rs.add_argument("--tsa-cert", help="PEM certificate (or chain) of the TSA, as for verify: without it `existed_by` is null")
+    rs.add_argument("--accept-integral-floats", action="store_true", help="1.7.2 (SPEC §3.1): read a number of a token written with a fraction or an exponent whose value is an integer within +/-(2^53-1) (10.0, as the AP2 SDK writes a budget) as that integer, and say so in the result; without it such a token is refused")
     raw = list(sys.argv[1:] if argv is None else argv)
     # 1.1.0: one CLI grammar with the sibling verifiers — "" or a flag as a value, "--", -h/--help, a value on a boolean flag,
     # an abbreviated flag = usage (exit 2, no verdict); the file path itself must not be "" or flag-like
-    if "--" in raw or any(x in ("-h", "--help") for x in raw) or any(x.split("=", 1)[0] in ("--require-producer", "--require-pq", "--require-anchor", "--trust-set-complete") and "=" in x for x in raw):
+    if "--" in raw or any(x in ("-h", "--help") for x in raw) or any(x.split("=", 1)[0] in ("--require-producer", "--require-pq", "--require-anchor", "--trust-set-complete", "--accept-integral-floats") and "=" in x for x in raw):
         p.error("unexpected argument")
     i = 0
     while i < len(raw):
@@ -2562,17 +2699,30 @@ def _main(argv: Optional[List[str]] = None) -> int:
         for spec in a.artifacts:
             name, path = _pair("artifact", spec)
             arts.append({"name": name, "sd_jwt": _read("artifact", path)})
+        art_names = [x["name"] for x in arts]
+        def _named(flag, specs):
+            """1.7.2 (SPEC §2): every name=... of this flag is an artifact of THIS build, and given once — before any file
+            under it is read or any URL fetched. Measured on 1.7.1: `--key nope=k.json` and a repeated `--key a=...` were
+            ignored in silence (the header key, or the last file, used; exit 0)."""
+            out = []
+            for spec in specs:
+                name, val = _pair(flag, spec)
+                if name not in art_names:
+                    p.error(f"{flag}: no artifact named {name!r} in this build (artifacts: {', '.join(art_names)})")
+                if any(n == name for n, _ in out):
+                    p.error(f"{flag}: {name!r} given more than once")
+                out.append((name, val))
+            return out
         keys = {}
-        for spec in a.key:
-            name, path = _pair("--key", spec)
+        for name, path in _named("--key", a.key):
             keys[name] = _read("--key", path, as_json=True)
             if not isinstance(keys[name], dict) or not keys[name]:   # a list was an AttributeError traceback; null and {}
                 p.error(f"--key: {path!r} is not a non-empty JSON object (a JWK)")   # fell back to the header key in silence
-        jwks = dict(_pair("--jwks-url", s) for s in a.jwks_url)
+        jwks = dict(_named("--jwks-url", a.jwks_url))
         try:
             res = build_evidence(arts, a.out, keys=keys, jwks_urls=jwks,
                                  tsa_url=(a.tsa[0] if a.tsa else None), subject=a.subject,
-                                 extra_tsa_urls=a.tsa[1:])
+                                 extra_tsa_urls=a.tsa[1:], accept_integral_floats=a.accept_integral_floats)
         except Ap2WriteError as e:
             return _not_written(str(e))
         except Ap2EvidenceError as e:
@@ -2619,7 +2769,8 @@ def _main(argv: Optional[List[str]] = None) -> int:
         try:
             r = verify_evidence(a.evidence, trusted_producer_keys=trusted, require_pq=a.require_pq,
                                 require_producer=a.require_producer, require_anchor=a.require_anchor, tsa_cert=a.tsa_cert,
-                                trust_anchor=a.trust_anchor, min_anchors=min_anchors, trust_set_complete=a.trust_set_complete)
+                                trust_anchor=a.trust_anchor, min_anchors=min_anchors, trust_set_complete=a.trust_set_complete,
+                                accept_integral_floats=a.accept_integral_floats)
         except Ap2WriteError as e:   # a check could not be run here: never "not valid"
             if e.receipt is None:
                 return _not_written(str(e))
@@ -2645,7 +2796,7 @@ def _main(argv: Optional[List[str]] = None) -> int:
             if not ok:
                 p.error(f"--tsa-cert: cannot read {a.tsa_cert!r} (not a readable regular file)")
         try:
-            r = verify_restrictions(a.evidence, tsa_cert=a.tsa_cert)
+            r = verify_restrictions(a.evidence, tsa_cert=a.tsa_cert, accept_integral_floats=a.accept_integral_floats)
         except Ap2WriteError as e:
             if e.receipt is None:
                 return _not_written(str(e))

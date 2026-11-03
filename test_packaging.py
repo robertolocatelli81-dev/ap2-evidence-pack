@@ -96,6 +96,8 @@ class TestWheelContents(unittest.TestCase):
     def test_wheel_has_ap2_pqcrypto_and_no_pqcrypto(self):
         try:
             import build  # noqa: F401  (python -m build, as the release procedure does; isolated: needs setuptools>=68 reachable)
+            if getattr(build, "__file__", None) is None:   # 1.7.2: a stray build/ folder (left by `python -m build`) imports as a
+                raise ImportError("build/ is a folder, not the package")   # namespace package and is not the tool
         except ImportError:
             self.skipTest("the `build` package is not installed: the wheel is not measured here")
         src = tempfile.mkdtemp(); out = tempfile.mkdtemp()

@@ -1,5 +1,70 @@
 # Changelog
 
+## 1.7.2 — 2026-11-03 — numbers inside a token: an error by default, read under an explicit option; a supplied key names an artifact
+
+**Numbers in the SD-JWT layer** (both verifiers, SPEC §3.1). The AP2 SDK at `e1ea56d` (`Budget.max: float`) signs every
+budget as a JSON float: `Budget(max=10)` is `"max": 10.0` (from `1e16` up, an exponent: `1e+16`). JSON Schema Core 2020-12 §6.3 says such a literal "SHOULD NOT"
+be written where an integer is meant. 1.7.2 keeps refusing it by default and gives the relying party an explicit option:
+
+- default: a literal with a fraction or an exponent in any JSON text of a token (issuer header and payload, disclosures,
+  KB-JWT) is that artifact's error, the literal named first: `float '10.0' in the SD-JWT needs
+  accept_integral_floats`. The verdict is the one 1.7.1 gave (`float '10.0' in the evidence file`); only the message changes.
+- `--accept-integral-floats` on `build`, `verify` and `restriction` (`accept_integral_floats=True` in the library, a
+  boolean — anything else is a `ValueError`; `--accept-integral-floats` / `acceptIntegralFloats` in the JS verifier; a
+  policy key of an expected file, SPEC §7): a literal whose value is an integer within ±(2^53−1) is read as that integer,
+  decided on its decimal digits, not through binary64 (`10.000000000000000001` is not an integer here, though `float()`
+  makes it 10). The signature, the disclosure digests and `sd_hash` are checked over the bytes as signed; the pack records
+  the integer. The receipt then carries `accept_integral_floats: true` and, per artifact, `integral_literals_read`; `build`
+  reports the same two members. Without the option neither member is present, and the receipt is the 1.7.1 receipt except for the message of an
+  artifact whose token has such a literal (the first item): measured 2026-11-03 against 1.7.1 on every vector and every
+  hostile file of the oracle, run without the option in both languages, the only other difference was the text of
+  openssl's own errors, which changes from run to run. A pack
+  built under the option verifies only under it.
+- `0.29`, `1e-7`, `9007199254740992.0` stay that artifact's error with or without the option. In the evidence file
+  itself a float stays a refusal with or without it.
+
+Four conformance vectors (46 → 50; the JS verifier 40/46 → 44/50, the six openssl vectors SKIP as before):
+`sd_number_integral_literal` (`10.0`, `250.00`, `1700003600.0` signed; default: that artifact's error),
+`sd_number_integral_literal_accepted` (the same bytes under the option: valid, the integers recorded),
+`sd_number_fraction` and `sd_number_fraction_accepted` (`0.29`: an artifact error either way). A 1.7.1 verifier fails
+`sd_number_integral_literal_accepted` in both languages (`valid: false`, measured 2026-11-03) and does not know the flag
+(exit 2). On six open payment mandates minted with the SDK at `e1ea56d` (`max` 10, 10.0, 0.29, 250, 1000 JPY, 100 EUR,
+measured 2026-11-03): 1.7.2 refuses all six by default; under the option it builds the five integral ones, both verifiers
+verify them, and `0.29` is refused.
+
+**A supplied key names an artifact** (SPEC §2). `--key name=jwk.json` and `--jwks-url name=URL` with a name that is not
+an artifact of the build, or a name given twice to one flag, are a usage error (exit 2, no file, before any key file is
+read or URL fetched); `build_evidence` refuses such a `keys` / `jwks_urls` name (`Ap2EvidenceError`, no file). Measured
+2026-11-03 on 1.7.1: `--key nope=k.json` and `--key payment=k.json --key payment=k.json` both built a pack, exit 0 — the
+first with the header key (`jwk_header`), so a mistyped name left the caller's key decision out of the pack with no sign.
+
+**Benches.** `verifiers/differential_oracle.py` and `verifiers/schema_mutants.py` read the policy of an expected file from
+a closed list: a key they do not know stops them. Up to 1.7.1 the schema-mutation bench dropped `trust_set_complete`
+without a word; it now passes it, and leaves out `tsa_cert` and `trust_anchor` on purpose (openssl checks the JS verifier
+cannot run), declared in the code. Both pass `accept_integral_floats`; the mutation bench keeps it on the resealed content
+and its mutations, where the container's policy is dropped. The oracle also compares `accept_integral_floats` and
+`integral_literals_read`, runs the four token-number cases and the file float under the option too, and counts 202 cases,
+0 disagreements, 12 declared (53 vector runs + 126 hostile files + 4 positive controls + 19 CLI cases).
+`verifiers/sdk_crosscheck.py` lists the default refusal among the §3.1 refusals declared stricter than RFC 9901.
+
+New tests: `test_ap2_numbers.py` (21: the digit algorithm against exact decimals on 2 842 distinct generated literals and
+the JS algorithm on 1 941; the default and the option in both verifiers, the CLI and the build; the option's type; a token without such a literal
+giving the same receipt with and without the option but for the two members; the 30-character cut and the list per
+artifact in both verifiers; `restriction` under the option end to end, library and CLI; the option on the receipt inside
+`Ap2WriteError`; the JS option's type and `--accept-integral-floats=1`; two threads, one value each), `test_ap2_supplied_key_names.py` (8). Two suites (`test_ap2_evidence.py`, `pqcrypto/test_pqsig.py`) no longer leave temporary directories. `test_packaging.py` no longer takes a `build/` folder left in the tree by `python -m build`
+for the `build` package (it imported as a namespace package and ran the wheel test where the tool is absent).
+
+Measured 2026-11-03 in one run on a `git archive` of this release (the tree of this text, before this paragraph was
+written): the 17 suites, 336 tests, pass on Python 3.9.25, 3.11.2 and 3.13.15 with `cryptography`
+50.0.2 and on 3.11.2 with 48.0.0, the declared floor, leaving no temporary directory; `test_packaging.py` skipped its three
+`tomllib` tests on 3.9 and its wheel-contents test where the `build` package was not installed (3.9, 3.13, the floor),
+and the wheel was measured apart: built, installed alone
+in a clean venv, imported and verifying a vector; every module runs the same tests as a script and as a module; the gate
+(the sample pack exit 0, tampered exit 1); the oracle 0/202 (12 declared); the ablation (each strict layer red alone); the
+type fuzz 1 390/1 390 inputs answered with a verdict; cryptovalid-opencore at `66ebd08` against the wheel, its five AP2
+suites and its front-end (built pack exit 0 under `ap2` and `auto`, tampered exit 1); the third stack at `e1ea56d`
+(`sdk_crosscheck.py --hostile` exit 0; with a seeded divergence exit 1, reported).
+
 ## 1.7.1 — 2026-10-30 — the depth of the resolved claims is bounded; `build` refuses what `verify` refuses
 
 Closes the paragraph "Known, not fixed in 1.7.0" below.

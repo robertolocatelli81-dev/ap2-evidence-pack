@@ -142,14 +142,23 @@ def _matches_declared(name, py, js):
     """A declared divergence matches when every compared field agrees with the declaration, except the freshly generated
     x5c leaf identity (new keys each run) — which must still be IDENTICAL between the two verifiers."""
     d = DECLARED[name]
+    n = 20 + len(d["py_new"])   # 1.7.2: the fields after the declared ones (the option and the literals read) are not part of
+    # a declaration: they must agree between the two verifiers, and without the option they are (None, (None, ...)).
     if d["js"] == "USAGE":   # 1.6.0: JS refuses --trust-anchor (usage, exit 2): only the reference's verdict is declared
-        return js == ("USAGE",) and py[:19] == d["py"][:19] and py[20:] == d["py_new"]
-    if py[19] != js[19]:
+        return js == ("USAGE",) and py[:19] == d["py"][:19] and py[20:n] == d["py_new"] and py[n] is None and all(x is None for x in py[n + 1])
+    if py[19] != js[19] or py[n:] != js[n:]:
         return False
-    return py[:19] == d["py"][:19] and js[:19] == d["js"][:19] and py[20:] == d["py_new"] and js[20:] == d["js_new"]
+    return py[:19] == d["py"][:19] and js[:19] == d["js"][:19] and py[20:n] == d["py_new"] and js[20:n] == d["js_new"]
+
+
+_POLICY_KNOWN = {"trusted_producer_keys", "require_producer", "require_pq", "require_anchor", "min_anchors",
+                 "trust_set_complete", "tsa_cert", "trust_anchor", "accept_integral_floats"}   # SPEC §7: the closed list
 
 
 def flags_for(policy, vdir=None):
+    unknown = set(policy) - _POLICY_KNOWN   # 1.7.2: a policy key this oracle does not pass on is an error, not silence
+    if unknown:
+        raise ValueError(f"policy keys the oracle does not know: {sorted(unknown)}")
     fl = []
     for alg, keys in (policy.get("trusted_producer_keys") or {}).items():
         for k in ([keys] if isinstance(keys, str) else keys):
@@ -161,6 +170,8 @@ def flags_for(policy, vdir=None):
         fl += ["--min-anchors", str(policy["min_anchors"])]
     if policy.get("trust_set_complete"):   # 1.6.0 — SPEC §6.9
         fl.append("--trust-set-complete")
+    if policy.get("accept_integral_floats"):   # 1.7.2 — SPEC §3.1
+        fl.append("--accept-integral-floats")
     for k in ("tsa_cert", "trust_anchor"):   # 1.6.0: files of the vector set
         if k in policy:
             fl += ["--" + k.replace("_", "-"), os.path.join(vdir, policy[k])]
@@ -207,7 +218,9 @@ def run(cmd, path, flags):
         st = r.get("states")   # 1.6.0 — SPEC §6.9: admission, refusal_class, every subject's state and reasons (not `detail`, free text), policy
         new = (r.get("admission"), r.get("refusal_class"),
                None if st is None else tuple((k, v.get("state"), tuple(v.get("reasons") or ())) for k, v in st.items()),
-               None if r.get("policy") is None else (r["policy"].get("met"), tuple(r["policy"].get("unmet") or ())), "ok" in prod)
+               None if r.get("policy") is None else (r["policy"].get("met"), tuple(r["policy"].get("unmet") or ())), "ok" in prod,
+               r.get("accept_integral_floats"),   # 1.7.2 — SPEC §3.1: the option, and the literals each artifact had read that way
+               tuple(tuple(a["integral_literals_read"]) if "integral_literals_read" in a else None for a in (r.get("artifacts") or [])))
         return (r.get("valid"), r.get("digest_ok"), r.get("bindings_ok"), prod.get("present"), prod.get("ok"), prod.get("trusted"),
                 r.get("pq_protected"), ts.get("claimed"), ts.get("verified"), ts.get("granted"), ts.get("imprint_ok"), ts.get("gen_time"),
                 r.get("policy_ok"), r.get("self_asserted_only"), r.get("chain_verified"), tuple(r.get("provenance_classes") or ()),
@@ -301,6 +314,23 @@ def build_cases(d):
     e = _fresh_pack(base, sk6, n6, deep_hdr.encode(), '{"iss":"x"}', {"iss": "x"})
     for a in e["artifacts"]: a["key"].pop("provenance_class", None)
     cases["header-deep-signed-rehashed"] = (w("hdeep", json.dumps(rehash(e))), [])
+    # 1.7.2 (SPEC §3.1, the SD-JWT layer): by default any literal with a fraction or an exponent inside the token is that
+    # artifact's error in both verifiers; under --accept-integral-floats one with a zero fractional part is read as its
+    # integer (valid, claims_match on the integer recorded, integral_literals_read) and a fraction, or an integer value past
+    # 2^53-1, stays that artifact's error. Each case below runs both ways. In the FILE a float stays a refusal
+    # (`float-1.0-rehashed` above), with or without the option. Signed as written.
+    H172 = '{"alg":"ES256","typ":"ap2-mandate+sd-jwt"}'
+    e = _fresh_pack(base, sk6, n6, H172, '{"iss":"x","exp":1700003600.0,"budget":{"max":10.0,"n":1e2,"z":-0.0}}', {"iss": "x", "exp": 1700003600, "budget": {"max": 10, "n": 100, "z": 0}})
+    cases["token-number-integral-signed-rehashed"] = (w("tnum", json.dumps(rehash(e))), [])
+    e = _fresh_pack(base, sk6, n6, H172, '{"iss":"x","max":0.29}', {"iss": "x"})
+    cases["token-number-fraction-signed-rehashed"] = (w("tfrac", json.dumps(rehash(e))), [])
+    e = _fresh_pack(base, sk6, n6, H172, '{"iss":"x","max":9007199254740992.0}', {"iss": "x"})
+    cases["token-number-past-range-signed-rehashed"] = (w("trange", json.dumps(rehash(e))), [])
+    e = _fresh_pack(base, sk6, n6, H172, '{"iss":"x","max":10.000000000000000001}', {"iss": "x", "max": 10})
+    cases["token-number-binary64-would-round-signed-rehashed"] = (w("tround", json.dumps(rehash(e))), [])   # error in both: not an integer on the digits
+    for nm in ("token-number-integral-signed-rehashed", "token-number-fraction-signed-rehashed",
+               "token-number-past-range-signed-rehashed", "token-number-binary64-would-round-signed-rehashed", "float-1.0-rehashed"):
+        cases[nm + "+accept-integral-floats"] = (cases[nm][0], cases[nm][1] + ["--accept-integral-floats"])
     # r6: the x5c_header branch had NO coverage at all (no vector carries an x5c) — a real self-signed leaf, canonical and
     # non-canonically spelled, plus a leaf whose key differs from the snapshotted jwk
     x5c_built = _x5c_cases(base)

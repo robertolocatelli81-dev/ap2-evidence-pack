@@ -1,0 +1,59 @@
+{
+ "description": "The pack of sd_number_integral_literal, byte for byte, under accept_integral_floats (SPEC §3.1): 10.0, 250.00 and 1700003600.0 are read as 10, 250 and 1700003600, as recorded, both verifiers; the signed bytes are checked as written. The AP2 SDK at e1ea56d (Budget.max: float) writes every budget as a JSON float, 10 as 10.0 (measured 2026-11-02): such a mandate is carried only under this option.",
+ "normative": {
+  "anchors_verified": 0,
+  "bindings_ok": true,
+  "digest_ok": true,
+  "policy_ok": true,
+  "pq_protected": false,
+  "producer_ok": null,
+  "producer_present": false,
+  "producer_trusted": null,
+  "rfc3161_claimed": false,
+  "rfc3161_verified": null,
+  "self_asserted_only": true,
+  "valid": true
+ },
+ "policy": {
+  "accept_integral_floats": true
+ },
+ "states": {
+  "admission": "admitted",
+  "policy": {
+   "met": true,
+   "unmet": []
+  },
+  "refusal_class": null,
+  "subjects": {
+   "holder_binding": {
+    "reasons": [
+     "not_present"
+    ],
+    "state": "not_evaluated"
+   },
+   "issuer_identity": {
+    "reasons": [
+     "self_asserted"
+    ],
+    "state": "not_evaluated"
+   },
+   "producer_signature": {
+    "reasons": [
+     "not_present"
+    ],
+    "state": "not_evaluated"
+   },
+   "sealed_content": {
+    "reasons": [],
+    "state": "verified"
+   },
+   "time_anchor": {
+    "reasons": [
+     "not_present"
+    ],
+    "state": "not_evaluated"
+   }
+  }
+ },
+ "vector": "sd_number_integral_literal_accepted"
+}

@@ -11,6 +11,7 @@ import base64
 import hashlib
 import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -63,7 +64,7 @@ def _make_sd_jwt(sk, claims_open: dict, claims_sd: dict, header_extra: dict = No
 
 class _Base(unittest.TestCase):
     def setUp(self):
-        self.d = tempfile.mkdtemp(prefix="ap2ev_")
+        self.d = tempfile.mkdtemp(prefix="ap2ev_"); self.addCleanup(shutil.rmtree, self.d, ignore_errors=True)   # 1.7.2: no directory left behind
         self.sk, self.jwk = _make_signer()
         self.intent = _make_sd_jwt(
             self.sk, {"iss": "user-wallet", "mandate_type": "intent"},

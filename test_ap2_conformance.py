@@ -28,7 +28,7 @@ class TestAp2ConformanceVectors(unittest.TestCase):
         r = rc.run()
         self.assertTrue(r["conformant"], r)
         statuses = {x["vector"]: x["status"] for x in r["results"]}
-        self.assertEqual(len(statuses), 46, statuses)   # 1.7.1: + sd_disclosures_too_deep (SPEC §6 step 2, the depth of the resolved claims); 1.7.0: + 3 SD-JWT processing-rule vectors (SPEC §6 step 2, RFC 9901 §7.1 steps 3.c.ii.2 and 4); 1.1.0: + anchor_valid (real token, probe TSA) and anchor_wrong_digest; 1.4.0: + 9 closed-schema vectors (SPEC §9); 1.5.0: + 9 anchors vectors (SPEC §3.3); 1.5.4: + 3 producer-block vectors (SPEC §5); 1.6.0: + 13 states vectors (SPEC §6.9)
+        self.assertEqual(len(statuses), 50, statuses)   # 1.7.2: + sd_number_fraction, sd_number_integral_literal (the SDK budget number) and their two _accepted twins (under accept_integral_floats); 1.7.1: + sd_disclosures_too_deep (SPEC §6 step 2, the depth of the resolved claims); 1.7.0: + 3 SD-JWT processing-rule vectors (SPEC §6 step 2, RFC 9901 §7.1 steps 3.c.ii.2 and 4); 1.1.0: + anchor_valid (real token, probe TSA) and anchor_wrong_digest; 1.4.0: + 9 closed-schema vectors (SPEC §9); 1.5.0: + 9 anchors vectors (SPEC §3.3); 1.5.4: + 3 producer-block vectors (SPEC §5); 1.6.0: + 13 states vectors (SPEC §6.9)
         self.assertEqual(statuses.get("kb_jwt_valid"), "PASS", statuses)   # 1.4.0: the KB-JWT positive control
         # the set must contain the positive control — an always-reject verifier must fail
         self.assertEqual(statuses.get("valid_signed"), "PASS", statuses)
@@ -42,7 +42,7 @@ class TestAp2ConformanceVectors(unittest.TestCase):
         def rehash(ev):
             e2 = {k: v for k, v in ev.items() if k not in ("evidence_digest_sha256", "rfc3161_timestamp", "producer_signatures")}
             ev = dict(ev); ev["evidence_digest_sha256"] = hashlib.sha256(json.dumps(e2, sort_keys=True, separators=(",", ":")).encode()).hexdigest(); ev.pop("producer_signatures", None); return ev
-        d = tempfile.mkdtemp()
+        d = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, d, ignore_errors=True)   # 1.7.2: no directory left behind
         files = {"raw": json.dumps(rehash(dict(base, subject="x\ufffd")), ensure_ascii=False).encode("utf-8").replace("\ufffd".encode("utf-8"), b"\xff", 1),
                  "deep": b"[" * 100000, "float": json.dumps(rehash(dict(base, extra=1.0))).encode(), "big": json.dumps(rehash(dict(base, extra=9007199254740993))).encode(),
                  "nan": base_text.replace('"created_utc"', '"x": NaN, "created_utc"', 1).encode(), "bom": ("\ufeff" + base_text).encode("utf-8"), "list": b"[1]"}
@@ -63,7 +63,7 @@ class TestAp2ConformanceVectors(unittest.TestCase):
         # `evidence_format` and the §1 MUSTs were never read, so a "…/2.0" pack verified under the 1.0 rules.
         import tempfile, copy
         sys.path.insert(0, os.path.join(_HERE, "verifiers")); import differential_oracle as O
-        base = json.load(open(os.path.join(_HERE, "spec", "vectors", "ap2", "valid_signed.json"))); d = tempfile.mkdtemp()
+        base = json.load(open(os.path.join(_HERE, "spec", "vectors", "ap2", "valid_signed.json"))); d = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, d, ignore_errors=True)   # 1.7.2: no directory left behind
         def write(name, ev):
             p = os.path.join(d, name + ".json"); json.dump(ev, open(p, "w")); return p
         for name, v in (("x5c-without-x5c", "x5c_header"), ("out-of-enum", "qualified_eidas_certificate"), ("list", ["jwk_header"])):
@@ -113,7 +113,7 @@ class TestAp2ConformanceVectors(unittest.TestCase):
         # refused. The SD-JWT here is VALID, so the only thing that can make build refuse is the name — otherwise the
         # test would pass for the wrong reason (an unparsable artifact raises anyway).
         sys.path.insert(0, os.path.join(_HERE, "verifiers")); import differential_oracle as O
-        sk, n = O._fresh_key(); compact = O._sign_compact(sk, n, '{"iss":"x"}'); d = tempfile.mkdtemp()
+        sk, n = O._fresh_key(); compact = O._sign_compact(sk, n, '{"iss":"x"}'); d = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, d, ignore_errors=True)   # 1.7.2: no directory left behind
         ap2.build_evidence([{"name": "intent", "sd_jwt": compact}], os.path.join(d, "ok.json"))   # positive control: it builds
         with self.assertRaises(ap2.Ap2EvidenceError):
             ap2.build_evidence([{"name": "", "sd_jwt": compact}], os.path.join(d, "o.json"))
@@ -123,7 +123,7 @@ class TestAp2ConformanceVectors(unittest.TestCase):
         # "no self-asserted key here" — and the sealed scope must be the format's, not the pack's (SPEC §1/§8).
         import tempfile, copy
         sys.path.insert(0, os.path.join(_HERE, "verifiers")); import differential_oracle as O
-        base = json.load(open(os.path.join(_HERE, "spec", "vectors", "ap2", "valid_signed.json"))); d = tempfile.mkdtemp()
+        base = json.load(open(os.path.join(_HERE, "spec", "vectors", "ap2", "valid_signed.json"))); d = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, d, ignore_errors=True)   # 1.7.2: no directory left behind
         e = copy.deepcopy(base); e["artifacts"] = []; e["bindings"] = []
         p = os.path.join(d, "empty.json"); json.dump(O.rehash(e), open(p, "w"))
         r = ap2.verify_evidence(p)
@@ -158,14 +158,14 @@ class TestAp2ConformanceVectors(unittest.TestCase):
         base = json.load(open(V)); sk, n = O._fresh_key()
         kb = ".".join([b64u(b'{"alg":"ES256","typ":"kb+jwt"}'), b64u(b'{"aud":"m","nonce":"n1","iat":1,"sd_hash":"x"}'), b64u(b"\x00" * 64)])
         ev = O._fresh_pack(base, sk, n, '{"alg":"ES256","typ":"ap2-mandate+sd-jwt"}', '{"iss":"x"}', {"iss": "x"}, kb=kb)
-        kbp = os.path.join(tempfile.mkdtemp(), "kb.json"); json.dump(O.rehash(ev), open(kbp, "w"))
+        kbd = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, kbd, ignore_errors=True); kbp = os.path.join(kbd, "kb.json"); json.dump(O.rehash(ev), open(kbp, "w"))
         py, js = receipts(kbp)
         self.assertEqual(sorted(py["artifacts"][0]["kb_jwt"]), sorted(js["artifacts"][0]["kb_jwt"]), "KB-JWT receipt fields differ")
         self.assertEqual(py["artifacts"][0]["kb_jwt"]["claims_recorded_not_validated"],
                          js["artifacts"][0]["kb_jwt"]["claims_recorded_not_validated"], "the recorded KB-JWT claims differ")
         self.assertIn("aud", py["artifacts"][0]["kb_jwt"]["claims_recorded_not_validated"])
 
-        d = tempfile.mkdtemp(); bad = os.path.join(d, "bad.json")   # and on a refusal, where the shapes had also drifted
+        d = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, d, ignore_errors=True); bad = os.path.join(d, "bad.json")   # and on a refusal, where the shapes had also drifted
         open(bad, "w").write('{"evidence_format":"nope"}')
         py, js = receipts(bad)
         self.assertEqual(sorted(py), sorted(js), "refusal receipt fields differ between the verifiers")
@@ -183,7 +183,7 @@ class TestAp2ConformanceVectors(unittest.TestCase):
         from cryptography.hazmat.primitives.asymmetric import ec
         from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
         b64u = lambda b: base64.urlsafe_b64encode(b).decode().rstrip("=")   # noqa: E731
-        base = json.load(open(os.path.join(_HERE, "spec", "vectors", "ap2", "valid_signed.json"))); d = tempfile.mkdtemp()
+        base = json.load(open(os.path.join(_HERE, "spec", "vectors", "ap2", "valid_signed.json"))); d = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, d, ignore_errors=True)   # 1.7.2: no directory left behind
         ca = ec.generate_private_key(ec.SECP256R1()); sk = ec.generate_private_key(ec.SECP256R1()); n = sk.public_key().public_numbers()
         caname = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "probe CA")])
         cacert = (x509.CertificateBuilder().subject_name(caname).issuer_name(caname).public_key(ca.public_key()).serial_number(1)
@@ -234,7 +234,7 @@ class TestAp2ConformanceVectors(unittest.TestCase):
         nm = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "probe")])
         cert = (x509.CertificateBuilder().subject_name(nm).issuer_name(nm).public_key(sk.public_key()).serial_number(1)
                 .not_valid_before(datetime.datetime(2026, 1, 1)).not_valid_after(datetime.datetime(2046, 1, 1)).sign(sk, hashes.SHA256()))
-        leaf = _b64.b64encode(cert.public_bytes(serialization.Encoding.DER)).decode(); d = tempfile.mkdtemp()
+        leaf = _b64.b64encode(cert.public_bytes(serialization.Encoding.DER)).decode(); d = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, d, ignore_errors=True)   # 1.7.2: no directory left behind
         def mandate(x5c_entry):
             hdr = json.dumps({"alg": "ES256", "typ": "ap2-mandate+sd-jwt", "x5c": [x5c_entry]}, separators=(",", ":"))
             si = b64u(hdr.encode()) + "." + b64u(b'{"iss":"x"}')
@@ -278,7 +278,7 @@ class TestAp2ConformanceVectors(unittest.TestCase):
         # review r1: artifacts / key / jwk / rfc3161_timestamp / producer_signatures of the wrong type were TypeError /
         # AttributeError tracebacks in the reference; {} as a producer block was "absent" (valid True)
         import copy, subprocess, tempfile
-        base = json.load(open(os.path.join(_HERE, "spec", "vectors", "ap2", "valid_signed.json"))); d = tempfile.mkdtemp()
+        base = json.load(open(os.path.join(_HERE, "spec", "vectors", "ap2", "valid_signed.json"))); d = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, d, ignore_errors=True)   # 1.7.2: no directory left behind
         muts = {"artifacts-null": lambda e: e.__setitem__("artifacts", None), "artifacts-string": lambda e: e.__setitem__("artifacts", "x"),
                 "artifacts-list-of-null": lambda e: e.__setitem__("artifacts", [None]), "key-null": lambda e: e["artifacts"][0].__setitem__("key", None),
                 "jwk-list": lambda e: e["artifacts"][0]["key"].__setitem__("jwk", [1]), "rfc3161-null": lambda e: e.__setitem__("rfc3161_timestamp", None),
@@ -309,7 +309,7 @@ class TestAp2ConformanceVectors(unittest.TestCase):
         eci = der(0x30, der(0x06, bytes.fromhex("2a864886f70d010904")) + der(0xA0, der(0x04, tst))); sd = der(0x30, der(0x02, b"\x03") + der(0x31, b"") + eci + der(0x31, b""))
         resp = der(0x30, der(0x30, der(0x02, b"\x00")) + der(0x30, der(0x06, bytes.fromhex("2a864886f70d010702")) + der(0xA0, sd)))
         e = dict(base); e["rfc3161_timestamp"] = {"anchored": True, "tsa_url": "forged", "tsr_b64": base64.b64encode(resp).decode()}
-        p = os.path.join(tempfile.mkdtemp(), "forged.json"); json.dump(e, open(p, "w"))
+        fd = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, fd, ignore_errors=True); p = os.path.join(fd, "forged.json"); json.dump(e, open(p, "w"))
         r = ap2.verify_evidence(p, require_anchor=True); self.assertTrue(r["rfc3161"]["verified"]); self.assertTrue(r["valid"])       # binding only: passes (declared)
         r = ap2.verify_evidence(p, require_anchor=True, tsa_cert=cert); self.assertFalse(r["rfc3161"]["tsa_verified"]); self.assertFalse(r["valid"])
 
@@ -321,7 +321,7 @@ class TestAp2ConformanceVectors(unittest.TestCase):
         import tempfile, base64, hashlib
         sys.path.insert(0, os.path.join(_HERE, "verifiers")); import differential_oracle as O
         base = json.load(open(os.path.join(_HERE, "spec", "vectors", "ap2", "valid_signed.json")))
-        sk, n = O._fresh_key(); H = '{"alg":"ES256","typ":"ap2-mandate+sd-jwt"}'; d = tempfile.mkdtemp()
+        sk, n = O._fresh_key(); H = '{"alg":"ES256","typ":"ap2-mandate+sd-jwt"}'; d = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, d, ignore_errors=True)   # 1.7.2: no directory left behind
         kb = ".".join(base64.urlsafe_b64encode(x).decode().rstrip("=") for x in (b'{"alg":"ES256","typ":"kb+jwt"}', b'{"sd_hash":"x"}', b"\x00" * 64))
         disc = base64.urlsafe_b64encode(b'["salt",[1],"v"]').decode().rstrip("="); dig = base64.urlsafe_b64encode(hashlib.sha256(disc.encode()).digest()).decode().rstrip("=")
         bad = {"dup": ('{"iss":"x","amount":"1","amount":"999"}', {"iss": "x", "amount": "999"}, {}), "bom": (b'\xef\xbb\xbf{"iss":"x"}', {"iss": "x"}, {}),
@@ -359,8 +359,9 @@ class TestAp2ConformanceVectors(unittest.TestCase):
         if probe.stdout.strip() != "yes":   # r2: on a Node build without ML-DSA-65 (OpenSSL < 3.5) the ML-DSA vectors are SKIP in the JS verifier, so 8/8 is NOT measured — skip, never a pass
             self.skipTest("Node build without ML-DSA-65 (OpenSSL < 3.5): JS conformance on the ML-DSA vectors not measured here")
         def js_verify(path, trusted_producer_keys=None, require_pq=False, require_producer=False, require_anchor=False, min_anchors=None,
-                      trust_set_complete=False):   # no **_: an option nobody passes on is an error, not silence (1.5.0)
+                      trust_set_complete=False, accept_integral_floats=False):   # no **_: an option nobody passes on is an error, not silence (1.5.0)
             flags = ["--trust-set-complete"] if trust_set_complete else []
+            if accept_integral_floats: flags.append("--accept-integral-floats")   # 1.7.2 — SPEC §3.1
             for alg, keys in (trusted_producer_keys or {}).items():
                 for k in ([keys] if isinstance(keys, str) else keys): flags += ["--trusted-producer-key", f"{alg}={k}"]
             for flag, on in (("--require-producer", require_producer), ("--require-pq", require_pq), ("--require-anchor", require_anchor)):
@@ -371,7 +372,7 @@ class TestAp2ConformanceVectors(unittest.TestCase):
             return json.loads(out.stdout)
         r = rc.run(verify_fn=js_verify, backends={"ml-dsa-65": True}, tools={"openssl": False})   # the probe above: this Node checks ML-DSA-65; it calls no openssl
         self.assertTrue(r["conformant"], r)
-        self.assertEqual(len(r["results"]), 46)   # 1.7.1: + sd_disclosures_too_deep; 1.7.0: + 3 SD-JWT processing-rule vectors; 1.5.0: + 9 anchors vectors; 1.5.4: + 3 producer-block vectors; 1.6.0: + 13 states vectors
+        self.assertEqual(len(r["results"]), 50)   # 1.7.2: + sd_number_fraction, sd_number_integral_literal and their two _accepted twins; 1.7.1: + sd_disclosures_too_deep; 1.7.0: + 3 SD-JWT processing-rule vectors; 1.5.0: + 9 anchors vectors; 1.5.4: + 3 producer-block vectors; 1.6.0: + 13 states vectors
         needs_openssl = sorted(n[:-len(".expected.json")] for n in os.listdir(os.path.join(_HERE, "spec", "vectors", "ap2")) if n.endswith(".expected.json")
                                and "openssl" in json.load(open(os.path.join(_HERE, "spec", "vectors", "ap2", n), encoding="utf-8")).get("requires", []))
         self.assertEqual(sorted(x["vector"] for x in r["results"] if x["status"] == "SKIP"), needs_openssl)   # SKIP = exactly the openssl vectors (1.6.0)
@@ -411,7 +412,7 @@ class TestExpectedFilesAndBackend(unittest.TestCase):
             st = {x["vector"]: x["status"] for x in r["results"]}
             self.assertTrue(r["conformant"], r)
             self.assertEqual(sum(v == "SKIP" for v in st.values()), 21, st)
-            self.assertEqual(sum(v == "PASS" for v in st.values()), 25, st)   # 1.7.1: + sd_disclosures_too_deep (no producer block); 1.7.0: + sd_digest_repeated, sd_digest_repeated_sd, sd_claim_name_reserved (no producer block: no backend dependence)
+            self.assertEqual(sum(v == "PASS" for v in st.values()), 29, st)   # 1.7.2: + sd_number_fraction, sd_number_integral_literal and their two _accepted twins (no producer block); 1.7.1: + sd_disclosures_too_deep (no producer block); 1.7.0: + sd_digest_repeated, sd_digest_repeated_sd, sd_claim_name_reserved (no producer block: no backend dependence)
             # the bench can fail: the same run with one marker removed reports that vector FAIL, not SKIP
             d = self._copy(); p = os.path.join(d, "valid_signed.expected.json")
             e = json.load(open(p, encoding="utf-8")); del e["requires_backend"]; json.dump(e, open(p, "w", encoding="utf-8"))
@@ -538,7 +539,7 @@ class TestSignatureEntryNamesTheKey(unittest.TestCase):
         e0 = ev["producer_signatures"]["signatures"][0]
         e0.update({"zz_extra": 1, "1": 2, "\U0001F600k": 3, "\uFFFDk": 4, "zz": 5})   # integer-like key, non-BMP vs BMP order, a prefix after its extension
         del e0["signature_b64"]
-        d = tempfile.mkdtemp()
+        d = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, d, ignore_errors=True)   # 1.7.2: no directory left behind
         try:
             path = os.path.join(d, "p.json")
             with open(path, "w", encoding="utf-8") as f:
@@ -557,7 +558,7 @@ class TestSignatureEntryNamesTheKey(unittest.TestCase):
 
     def _both(self, ev):
         import subprocess
-        d = tempfile.mkdtemp()
+        d = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, d, ignore_errors=True)   # 1.7.2: no directory left behind
         try:
             path = os.path.join(d, "p.json")
             with open(path, "w", encoding="utf-8") as f:

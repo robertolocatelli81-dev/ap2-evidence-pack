@@ -1,0 +1,61 @@
+{
+ "description": "The pack of sd_number_fraction, byte for byte, under accept_integral_floats: 0.29 has no integer value, so it stays that artifact's error (float '0.29' in the SD-JWT: not an integer within +/-(2^53-1)), in both verifiers — the option reads only integral literals.",
+ "normative": {
+  "anchors_verified": 0,
+  "bindings_ok": false,
+  "digest_ok": true,
+  "policy_ok": true,
+  "pq_protected": false,
+  "producer_ok": null,
+  "producer_present": false,
+  "producer_trusted": null,
+  "rfc3161_claimed": false,
+  "rfc3161_verified": null,
+  "self_asserted_only": true,
+  "valid": false
+ },
+ "policy": {
+  "accept_integral_floats": true
+ },
+ "states": {
+  "admission": "admitted",
+  "policy": {
+   "met": true,
+   "unmet": []
+  },
+  "refusal_class": null,
+  "subjects": {
+   "holder_binding": {
+    "reasons": [
+     "not_present"
+    ],
+    "state": "not_evaluated"
+   },
+   "issuer_identity": {
+    "reasons": [
+     "not_present"
+    ],
+    "state": "not_evaluated"
+   },
+   "producer_signature": {
+    "reasons": [
+     "not_present"
+    ],
+    "state": "not_evaluated"
+   },
+   "sealed_content": {
+    "reasons": [
+     "artifact_invalid"
+    ],
+    "state": "contradicted"
+   },
+   "time_anchor": {
+    "reasons": [
+     "not_present"
+    ],
+    "state": "not_evaluated"
+   }
+  }
+ },
+ "vector": "sd_number_fraction_accepted"
+}
