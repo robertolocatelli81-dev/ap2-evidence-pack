@@ -186,6 +186,9 @@ class _Body:
     def read(self, n=-1):
         return self.raw if n < 0 else self.raw[:n]
 
+    def geturl(self):   # the URL after redirects (urllib's response has it); the in-process fake is never redirected
+        return "https://jwks.test/k"
+
     def __enter__(self):
         return self
 
@@ -280,12 +283,49 @@ class KeyChoiceLibrary(unittest.TestCase):
     def test_empty_or_wrongly_typed_caller_values_are_refusals_not_a_fallback(self):
         tok = T._sign_jwt(SK_S, {"alg": "ES256", "jwk": JWK_S}, {"iss": "u"}) + "~"   # a header key a fallback would use
         for kw, why in (({"keys": {"m": {}}}, "non-empty JSON object"), ({"keys": {"m": []}}, "non-empty JSON object"),
-                        ({"jwks_urls": {"m": ""}}, "starting https://"), ({"jwks_urls": {"m": 5}}, "starting https://")):
+                        ({"jwks_urls": {"m": ""}}, "starting https://"), ({"jwks_urls": {"m": 5}}, "starting https://"),
+                        # 1.7.3: a value that is None or falsy was taken for "no key" and the header jwk was used
+                        ({"keys": {"m": None}}, "non-empty JSON object"), ({"keys": {"m": 0}}, "non-empty JSON object"),
+                        ({"jwks_urls": {"m": None}}, "starting https://"), ({"jwks_urls": {"m": False}}, "starting https://"),
+                        ({"keys": [("m", JWK_S)]}, "must be objects")):
             out = os.path.join(self.d, "e.json")
             with self.assertRaises(ap2.Ap2EvidenceError, msg=kw) as cm:
                 ap2.build_evidence([{"name": "m", "sd_jwt": tok}], out, **kw)
             self.assertIn(why, str(cm.exception), kw)
             self.assertFalse(os.path.exists(out), kw)
+
+    def test_usable_keys_and_same_key_edges(self):
+        # SPEC §2 (c): x and y strings, `use`/`alg` present only with their value, `key_ops` a LIST containing "verify";
+        # SPEC §2 (d): the header jwk equals the key on kty AND crv AND x AND y. Each case was a surviving mutant of the 1.7.3 draft
+        tok = T._sign_jwt(SK_S, {"alg": "ES256"}, {"iss": "u"}) + "~"
+        for name, keys, built in (("x not a string beside the signer", [JWK_S, dict(JWK_O, x=5)], True),
+                                  ("use null", [dict(JWK_S, use=None)], False), ("alg null", [dict(JWK_S, alg=None)], False),
+                                  ("key_ops the string verify", [dict(JWK_S, key_ops="verify")], False)):
+            JWKS_SETS["edge"] = keys
+            out = os.path.join(self.d, "u.json")
+            try:
+                r = ap2.build_evidence([{"name": "m", "sd_jwt": tok}], out, jwks_urls={"m": self._url("edge")})
+                got = True
+                self.assertNotIn("key_material_not_used", r, name)   # SPEC §2 (d): present only when one is not empty
+            except ap2.Ap2EvidenceError as e:
+                got = False; self.assertIn("(SPEC §2 (c))", str(e), name)
+            finally:
+                JWKS_SETS.pop("edge", None)
+            self.assertEqual(got, built, name)
+            if built:
+                os.remove(out)
+        for name, hj in (("kty OKP", dict(JWK_S, kty="OKP")), ("crv P-384", dict(JWK_S, crv="P-384"))):
+            t = T._sign_jwt(SK_S, {"alg": "ES256", "jwk": hj}, {"iss": "u"}) + "~"
+            with self.assertRaises(ap2.Ap2EvidenceError, msg=name) as cm:
+                ap2.build_evidence([{"name": "m", "sd_jwt": t}], os.path.join(self.d, "s.json"), keys={"m": JWK_S})
+            self.assertIn("(SPEC §2 (d)", str(cm.exception), name)
+            p_ = os.path.join(self.d, "s.json")
+            with open(p_, "w") as fh:
+                json.dump(_pack_of({"alg": "ES256", "jwk": hj}, JWK_S, "supplied"), fh)
+            self.assertIn("(SPEC §2 (d)", ap2.verify_evidence(p_)["artifacts"][0].get("error", ""), name)
+            if _NODE:
+                js = json.loads(subprocess.run([_NODE, _JS, p_], capture_output=True, text=True, timeout=120).stdout)
+                self.assertIn("(SPEC §2 (d)", js["artifacts"][0].get("error", ""), name)
 
     def test_kid_not_a_string_is_a_refusal_before_the_fetch(self):
         for kid in (1, None, ["k1"], {"k": 1}):
@@ -335,7 +375,10 @@ class KeyChoiceVerify(unittest.TestCase):
         self.d = tempfile.mkdtemp(prefix="ap2keychoice-v-"); self.addCleanup(shutil.rmtree, self.d, ignore_errors=True)
 
     def test_generative_verify_both_verifiers(self):
-        X = dict(X5C, bad=["not base64!"]); J = JWK
+        import base64
+        # trail: the signer's leaf followed by one byte — not a DER certificate; node:crypto parsed it (the JS verifier said
+        # valid where the reference said error, measured 2026-11-03 on 1.7.2 for x5c_header and on the 1.7.3 draft for every class)
+        X = dict(X5C, bad=["not base64!"], trail=[base64.b64encode(base64.b64decode(LEAF_S) + b"\x00").decode()]); J = JWK
         cases, n = [], 0
         for pc, x5c, jwk, urls in itertools.product(sorted(ap2.PROVENANCE_CLASSES), X, J, URLS):
             h = {"alg": "ES256", "typ": "example+sd-jwt"}
@@ -350,7 +393,7 @@ class KeyChoiceVerify(unittest.TestCase):
             with open(path, "w") as fh:
                 json.dump(_pack_of(h, JWK_S, pc), fh)
             cases.append((path, (pc, x5c, jwk, urls), _expect_verify(pc, x5c, jwk, urls)))
-        self.assertEqual(n, 4 * 7 * 7 * 4)
+        self.assertEqual(n, 4 * 8 * 7 * 4)
         wrong = []
         for path, combo, want in cases:
             v = ap2.verify_evidence(path); a = v["artifacts"][0]
@@ -378,9 +421,13 @@ class KeyChoiceVerify(unittest.TestCase):
 class _JwksHandler(http.server.BaseHTTPRequestHandler):
     body = b""
     hits = []
+    redirect = None   # a URL to answer 302 with (test_a_redirect_off_https_is_a_refusal)
 
     def do_GET(self):  # noqa: N802
         type(self).hits.append(self.path)
+        if type(self).redirect and self.path == "/jwks.json":
+            self.send_response(302); self.send_header("Location", type(self).redirect); self.send_header("Content-Length", "0"); self.end_headers()
+            return
         self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers()
         self.wfile.write(type(self).body)
 
@@ -401,7 +448,7 @@ class KeyChoiceCli(unittest.TestCase):
             fh.write(cert.public_bytes(serialization.Encoding.PEM))
         with open(kp, "wb") as fh:
             fh.write(sk.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
-        _JwksHandler.body = json.dumps({"keys": [_k(JWK_S, "k1")]}).encode(); _JwksHandler.hits = []
+        _JwksHandler.body = json.dumps({"keys": [_k(JWK_S, "k1")]}).encode(); _JwksHandler.hits = []; _JwksHandler.redirect = None
         self.srv = http.server.HTTPServer(("127.0.0.1", 0), _JwksHandler)
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); ctx.load_cert_chain(self.ca, kp)
         self.srv.socket = ctx.wrap_socket(self.srv.socket, server_side=True)
@@ -454,6 +501,23 @@ class KeyChoiceCli(unittest.TestCase):
         rc, _, err = self._cli("--jwks-url", "m=" + self.url)
         self.assertEqual(rc, 1, err); self.assertIn("signature INVALID", err); self.assertFalse(os.path.exists(self.out))
         self.assertEqual(_JwksHandler.hits, ["/jwks.json"])
+
+    def test_a_redirect_off_https_is_a_refusal(self):
+        # measured 2026-11-03 on 1.7.2 and on the 1.7.3 draft: urllib followed a 302 from the https JWKS URL to plain http, read the
+        # set there and the pack recorded jwks_fetched under the https URL, exit 0
+        class Plain(_JwksHandler):
+            hits, redirect = [], None
+        Plain.body = _JwksHandler.body
+        plain = http.server.HTTPServer(("127.0.0.1", 0), Plain)
+        threading.Thread(target=plain.serve_forever, daemon=True).start()
+        self.addCleanup(plain.server_close); self.addCleanup(plain.shutdown)
+        _JwksHandler.redirect = f"http://127.0.0.1:{plain.server_address[1]}/jwks.json"
+        rc, _, err = self._cli("--jwks-url", "m=" + self.url)
+        self.assertEqual(rc, 1, err); self.assertIn("not https://", json.loads(err)["error"]); self.assertFalse(os.path.exists(self.out))
+        self.assertEqual((_JwksHandler.hits, Plain.hits), (["/jwks.json"], ["/jwks.json"]))   # the bench sees the downgrade
+        _JwksHandler.redirect = self.url.replace("/jwks.json", "/moved.json"); _JwksHandler.hits = []   # https -> https: allowed
+        rc, _, err = self._cli("--jwks-url", "m=" + self.url)
+        self.assertEqual(rc, 0, err); self.assertEqual(_JwksHandler.hits, ["/jwks.json", "/moved.json"])
 
     def test_key_and_jwks_url_for_one_artifact_is_a_usage_error_before_anything(self):
         for args in (("--key", "m=" + self.k, "--jwks-url", "m=" + self.url), ("--jwks-url", "m=" + self.url, "--key", "m=/nonexistent/k.json")):

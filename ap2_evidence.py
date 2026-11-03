@@ -898,8 +898,13 @@ def _snapshot_key(parsed: Dict, supplied_jwk: Optional[Dict] = None,
         try:   # r7: an unreachable endpoint or a non-JSON body used to be a URLError/JSONDecodeError traceback
             with urllib.request.urlopen(jwks_url, timeout=timeout) as r:  # nosec B310 - https enforced above
                 raw = r.read(1024 * 1024 + 1)      # cap: un JWKS gigante = DoS, non una chiave
+                final_url = r.geturl()
         except Exception as e:  # noqa: BLE001
             raise Ap2EvidenceError(f"JWKS fetch failed: {type(e).__name__}") from e
+        if not isinstance(final_url, str) or not final_url.startswith("https://"):   # 1.7.3 (SPEC §2 (c)): urllib follows a
+            # redirect to http; measured 2026-11-03 on 1.7.2 and on the 1.7.3 draft, a 302 https -> http was followed, the set read over plain http
+            # and snapshotted as jwks_fetched under the https URL, exit 0
+            raise Ap2EvidenceError("JWKS fetch was redirected to a URL that is not https:// (TLS is the whole witness): refused")
         if len(raw) > 1024 * 1024:
             raise Ap2EvidenceError("JWKS response exceeds 1MB cap (refused fail-closed)")
         try:
@@ -1340,6 +1345,8 @@ def _build_evidence(artifacts: List[Dict], out_path: str,
     fails to verify aborts the build (an evidence file must never contain a red light
     dressed as evidence — fail-closed at the source)."""
     keys, jwks_urls = keys or {}, jwks_urls or {}
+    if not isinstance(keys, dict) or not isinstance(jwks_urls, dict):
+        raise Ap2EvidenceError("keys and jwks_urls must be objects from artifact name to key / URL (SPEC §2 (b))")
     names = [a["name"] for a in artifacts]
     if any(not isinstance(n, str) or not n for n in names):   # r5: build wrote a pack with name "" that both verifiers then refused
         raise Ap2EvidenceError("artifact name must be a non-empty string (SPEC §2)")
@@ -1350,6 +1357,12 @@ def _build_evidence(artifacts: List[Dict], out_path: str,
         stray = [k for k in given if k not in names]               # this build; up to 1.7.1 a stray name was ignored in silence
         if stray:
             raise Ap2EvidenceError(f"{what}: no artifact named {stray[0]!r} in this build (SPEC §2)")
+    for name, v in keys.items():   # 1.7.3 (SPEC §2 (b)): a value is checked by its presence, not its truth — measured on
+        if not isinstance(v, dict) or not v:   # the 1.7.3 draft, keys {"m": None} built the pack with the header key (jwk_header)
+            raise Ap2EvidenceError(f"keys[{name!r}]: a supplied key must be a non-empty JSON object, a JWK (SPEC §2 (b))")
+    for name, v in jwks_urls.items():
+        if not isinstance(v, str) or not v.startswith("https://"):
+            raise Ap2EvidenceError(f"jwks_urls[{name!r}]: JWKS URL must be a string starting https:// (SPEC §2 (b))")
     both = sorted(set(keys) & set(jwks_urls))   # 1.7.3 (SPEC §2 (b)): two sources named for one artifact is ambiguous
     if both:
         raise Ap2EvidenceError(f"artifact {both[0]!r}: both a supplied key and a JWKS URL — ambiguous, refused (SPEC §2 (b))")

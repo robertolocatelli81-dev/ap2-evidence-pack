@@ -301,7 +301,7 @@ function checkProvenance(pc, parsed, key) {   // returns: is this key SELF-ASSER
   let leaf, ident;
   try {
     const der = b64Strict(x5c[0]); if (!der) throw new Error("leaf not base64");
-    const cert = new X509Certificate(der);
+    const cert = new X509Certificate(der); if (!Buffer.from(cert.raw).equals(der)) throw new Error("bytes after the certificate");   // 1.7.3: node:crypto parses a DER certificate followed by more bytes; the reference (strict DER) refuses it
     leaf = createPublicKey({ key: cert.publicKey.export({ format: "jwk" }), format: "jwk" }).export({ format: "jwk" });
     // r9: the receipt names WHO the certificate was issued to — a cleared flag means "a CA under your anchor certified this key",
     // never "the key belongs to the mandate's issuer", and an auditor cannot tell CN=the-bank from CN=attacker without this
@@ -337,7 +337,8 @@ function reconcileUnusedHeaderKeys(header, jwk, pc) {
     let leaf;
     try {
       const der = b64Strict(x5c[0]); if (!der) throw new Error("leaf not base64");
-      leaf = createPublicKey({ key: new X509Certificate(der).publicKey.export({ format: "jwk" }), format: "jwk" }).export({ format: "jwk" });
+      const cert = new X509Certificate(der); if (!Buffer.from(cert.raw).equals(der)) throw new Error("bytes after the certificate");   // as in checkProvenance
+      leaf = createPublicKey({ key: cert.publicKey.export({ format: "jwk" }), format: "jwk" }).export({ format: "jwk" });
     } catch (e) { throw new Refused("the header x5c leaf is unusable (SPEC §2 (d), RFC 7515 §4.1.6)"); }
     if (!sameKey(leaf, jwk)) throw new Refused("the header x5c leaf names another key than the one the artifact verifies under (SPEC §2 (d), RFC 7515 §4.1.6)");
   }

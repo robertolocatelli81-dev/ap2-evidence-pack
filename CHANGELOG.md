@@ -18,13 +18,14 @@ Issuer according to policy" — the caller's flag is that policy.
   `null` is no longer passed over (it is refused as unusable).
 - (b) both a supplied key and a JWKS URL for one artifact: the CLI exits 2 (usage, no file, before any key file is read
   or URL fetched), `build_evidence` raises `Ap2EvidenceError`. A `keys` value that is not a non-empty object, or a
-  `jwks_urls` value that is not an `https://` string, is a refusal: on 1.7.2 `{}`, `[]`, `""` and `5` each fell back
-  to the header key (`jwk_header`), measured.
+  `jwks_urls` value that is not an `https://` string, is a refusal, `null` included: on 1.7.2 `{}`, `[]`, `null`, `""`
+  and `5` each fell back to the header key (`jwk_header`), measured.
 - (c) the key of a JWKS: only usable ES256 keys count (EC, P-256, `x`/`y` strings, no other `use` or `alg`, `key_ops`
   containing `verify` when present; the others are not considered, RFC 7517 §5, and counted in the key's `note`); with
   a header `kid` (a string, else a refusal) exactly one usable key with that `kid`, without `kid` exactly one usable key;
   none or more than one is a refusal. On 1.7.2, without `kid`, the first entry was taken whatever its type (a set
-  `[RSA, P-256]` was a signature failure).
+  `[RSA, P-256]` was a signature failure). A redirect of the JWKS URL to a URL that is not `https://` is a refusal: on
+  1.7.2 a 302 to plain http was followed and the set read over http was snapshotted as `jwks_fetched`, exit 0, measured.
 - (d) every `jku`, `jwk`, `x5u`, `x5c` of the header that is not where the key came from is NAMED — in the build result
   (`key_material_not_used`, new, present when not empty), in the key's `note`, and in the receipt
   (`artifacts[i].ignored.key_material`, new slot, both verifiers). A `jwk` or `x5c` among them must name the snapshotted
@@ -34,15 +35,24 @@ Issuer according to policy" — the caller's flag is that policy.
   compared (declared).
 
 **Compatibility.** No change to the pack format or to `evidence_format`; no member is added to a closed object. A pack
-built by 1.7.3 verifies under 1.7.2 (the new `ignored` slot is only in 1.7.3 receipts). A pack whose header `jwk` or `x5c` names
-another key than its snapshotted key — 1.7.2 `build` wrote one whenever a supplied key verified the signature of such a
-token — is valid under 1.7.2 and an artifact error under 1.7.3. The build result gains `key_material_not_used`; the receipt gains `ignored.key_material`. A
-library call `_snapshot_key` (private) no longer treats a falsy key or URL as absent.
+built by 1.7.3 verifies under 1.7.2 (the new `ignored` slot is only in 1.7.3 receipts). A pack 1.7.2 wrote whose protected
+header carries a `jwk` or `x5c` that is not the source of its key and is not that same key — another key, or a value that
+is no key (`null`, a string, `[]`, a string that is not a certificate) — is valid under 1.7.2 and that artifact's error
+under 1.7.3, in both verifiers, in `verify` and in `restriction` (which verifies the pack, SPEC §11.2). 1.7.2 `build` wrote
+such packs in every class: `supplied` (the supplied key won over any header), `x5c_header` beside a `jwk` of another key or
+no key, `jwk_header` beside an `x5c` `null` or `[]`, `jwks_fetched` beside a `jwk` `null` or an `x5c` `null` or `[]`.
+Measured 2026-11-03 over {no key, supplied, JWKS} × six `x5c` × five `jwk` × {`jku`, `x5u`}: 1.7.2 built 208 packs, all
+valid under 1.7.2 in both verifiers, 164 of them an artifact error under 1.7.3 in both; the 44 packs 1.7.3 built there are
+all valid under 1.7.2. The build result gains `key_material_not_used`; the
+receipt gains `ignored.key_material`. A library call `_snapshot_key` (private) no longer treats a falsy key or URL as absent;
+`build_evidence` refuses `keys` / `jwks_urls` that are not objects.
 
 **Also fixed** (found by the generative test below, measured on 1.7.2): a JWK whose (x, y) is not a point of P-256 — a
 `--key` file, a header `jwk`, a JWKS key, a `cnf.jwk` — made `build` raise a `ValueError` traceback (exit 1, no reason);
 it is now a refusal, `JWK x/y is not a point of P-256`. The verifiers already reported it as that artifact's error; only
-the text changes.
+the text changes. And the JS verifier read an `x5c` leaf followed by more bytes as its certificate (node:crypto parses the
+prefix), where the reference refuses it as not DER: measured on 1.7.2 for an `x5c_header` pack (JS valid, reference that
+artifact's error); both now refuse it, in the provenance check and in the §2 (d) comparison.
 
 **Vectors** (50 → 53; JS 44/50 → 47/53, the six openssl vectors SKIP as before): `key_header_jwk_differs`,
 `key_header_x5c_differs` (artifact errors) and `key_material_not_used` (valid, `report.ignored` `key_material`
@@ -56,17 +66,19 @@ empty `x5c`, `jku`+`x5u` beside the same `jwk`). `verifiers/schema_mutants.py` a
 not a certificate: that artifact's error). `verifiers/sdk_crosscheck.py` counts a §2 (d) refusal as a layer the third
 stack has no notion of (it is handed the snapshotted key only).
 
-New tests: `test_ap2_key_choice.py` (10): the build over every combination of {no key / supplied right / supplied wrong /
+New tests: `test_ap2_key_choice.py` (12): the build over every combination of {no key / supplied right / supplied wrong /
 JWKS} × {thirteen JWK Sets, an http URL, an unreachable one} × {header `x5c`: absent, the signer's, another, the negated
 point of the signer's key, `[]`, `null`} × {header `jwk`: the same six kinds and one mixing two keys' coordinates} ×
 {`kid`: absent, matching, another, unknown, empty} × {`jku`, `x5u`: neither, one, both} — 15 120 builds, each compared with an
 outcome written from the SPEC text (class, names not used, or the reason of the refusal), every pack built verified in
-both verifiers; the verify side on 784 hand-made packs in both verifiers; the CLI against a local https JWKS
-(a certificate made in the test, no network); both sources at once; empty and mistyped caller values; a `kid` that is
-not a string (refused before any fetch); the note; a JWK off the curve.
+both verifiers; the verify side on 896 hand-made packs in both verifiers (one an `x5c` leaf followed by a byte); the CLI against a local https JWKS
+(a certificate made in the test, no network), and a redirect from it to plain http; both sources at once; empty, `null` and mistyped caller values; a `kid` that is
+not a string (refused before any fetch); the note; a JWK off the curve; the edges of a usable key (`x` not a string
+beside a usable key, `use` or `alg` `null`, `key_ops` a string) and of the same key (a header `jwk` with another `kty` or
+`crv`, same coordinates).
 
 Measured 2026-11-03 in one run on a `git archive` of this release (the tree of this text, before this paragraph was
-written): the 18 suites, 346 tests, pass on Python 3.9.25, 3.11.2 and 3.13.15 with `cryptography` 50.0.2 and on 3.11.2
+written): the 18 suites, 348 tests, pass on Python 3.9.25, 3.11.2 and 3.13.15 with `cryptography` 50.0.2 and on 3.11.2
 with 48.0.0, the declared floor, leaving no temporary directory (`test_packaging.py` skipped its `tomllib` tests on 3.9 and
 its wheel-contents test where the `build` package was not installed, as in 1.7.2); every module runs the same tests as a
 script and as a module; the gate (the sample pack exit 0, tampered exit 1); the oracle 0/210 (12 declared); the ablation
@@ -81,7 +93,10 @@ tests against 1.7.2: 10 of 10 fail; on the build space, 5 488 of the 15 120 comb
 (built against refused, or another class: 2 028 JWKS cases built with `x5c_header`, 864 with `jwk_header`; 960
 `ValueError` tracebacks for a jwk off the curve), 0 on 1.7.3. Fifty mutants of the changed lines (Python and JS), on a
 green bench: 49 killed; the survivor drops `!x5c.length` in the JS check, equivalent (`[][0]` is `undefined`, refused by the
-next clause with the same message). The third-party job (`verifiers/sdk_crosscheck.py --hostile` with the AP2 SDK) was
+next clause with the same message). Thirteen more mutants of an independent review of the same lines: six killed, seven
+survived (the `x`/`y` string check, `kty` and `crv` in the same-key comparison in Python and `kty` in JS, `use`/`alg`
+`null`, an empty `key_material_not_used` entry), none equivalent; the test of the usable-key and same-key edges kills
+all seven. The third-party job (`verifiers/sdk_crosscheck.py --hostile` with the AP2 SDK) was
 not run locally for this release.
 
 ## 1.7.2 — 2026-11-03 — numbers inside a token: an error by default, read under an explicit option; a supplied key names an artifact

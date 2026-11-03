@@ -447,6 +447,9 @@ class TestJwksBody(unittest.TestCase):
             def __enter__(self):
                 return self
 
+            def geturl(self):   # 1.7.3: the build reads the URL after redirects (SPEC §2 (c))
+                return "https://jwks.invalid/k"
+
             def __exit__(self, *a):
                 return False
         d = tempfile.mkdtemp(prefix="ap2jwks-"); self.addCleanup(shutil.rmtree, d, ignore_errors=True)

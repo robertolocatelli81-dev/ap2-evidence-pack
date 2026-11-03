@@ -143,14 +143,19 @@ any other and, being unusable, refused.
 (b) Both a supplied key and a JWKS URL for one artifact: refusal, ambiguous — the reference `build` as a usage error (exit
 2, no file, before any key file is read or any URL fetched), `build_evidence` as `Ap2EvidenceError` (no file). A `keys`
 value that is not a non-empty JSON object, or a `jwks_urls` value that is not a string starting `https://`, is a refusal
-(measured 2026-11-03 on 1.7.2: `keys` `{}` or `[]`, `jwks_urls` `""` or `5`, each built the pack with the header
-key, `jwk_header`).
+— `null` included: a name given is a key source named, whatever its value (measured 2026-11-03 on 1.7.2: `keys` `{}`, `[]`
+or `null`, `jwks_urls` `""`, `5` or `null`, each built the pack with the header key, `jwk_header`).
 
-(c) The key of a JWKS. The set is fetched over https and must be `{"keys": [object, ...]}` (RFC 7517 §5), as before. Its
+(c) The key of a JWKS. The set is fetched over https and must be `{"keys": [object, ...]}` (RFC 7517 §5), as before; a
+redirect to a URL that is not `https://` is a refusal (measured 2026-11-03 on 1.7.2: a 302 from the https URL to plain http
+was followed, the set read over http and snapshotted as `jwks_fetched` under the https URL, exit 0); a redirect to another
+https URL is followed, and the pack records the URL the caller gave. Its
 USABLE keys are the JWKs with `kty` `"EC"`, `crv` `"P-256"`, `x` and `y` strings, no `use` other than `"sig"`, no `alg`
 other than `"ES256"`, and, when `key_ops` is present, a list containing `"verify"`; the others are not considered (RFC 7517
 §5: "Implementations SHOULD ignore JWKs within a JWK Set that use "kty" (key type) values that are not understood by
-them, that are missing required members, or for which values are out of the supported ranges") and their number is
+them, that are missing required members, or for which values are out of the supported ranges"; for `use`, `alg` and
+`key_ops`, RFC 7515 Appendix D step 2, given there "for illustration purposes only": "keys with inappropriate values of
+those parameters would be excluded") and their number is
 written in the key's `note`. When the protected header carries `kid` it must be a string (RFC 7515 §4.1.4; any other type
 is a refusal) and EXACTLY ONE usable key must carry that `kid`, compared as a case-sensitive string (RFC 7517 §4.5): none
 is a refusal, two or more a refusal, ambiguous (RFC 7517 §4.5 only says distinct keys "SHOULD use distinct "kid"
@@ -158,8 +163,8 @@ values"). Without `kid` the set must hold exactly one usable key: none is a refu
 the caller can name the key with `--key`. Up to 1.7.2, without `kid` the first entry of the set was taken, of whatever
 type.
 
-(d) Key sources of the header that were not used. RFC 7515 defines four header parameters that name the signing key:
-`jku` (§4.1.2), `jwk` (§4.1.3, "the public key that corresponds to the key used to digitally sign the JWS"), `x5u`
+(d) Key sources of the header that were not used. RFC 7515 §6 lists seven header parameters that "can be used to identify
+the key used" (`jku`, `jwk`, `kid`, `x5u`, `x5c`, `x5t`, `x5t#S256`); four of them carry the key or point to it: `jku` (§4.1.2), `jwk` (§4.1.3, "the public key that corresponds to the key used to digitally sign the JWS"), `x5u`
 (§4.1.5) and `x5c` (§4.1.6, the certificate "corresponding to the key used to digitally sign the JWS"). Every one of them
 present in the protected header and not the source of the snapshotted key is NAMED: in the build result
 (`key_material_not_used`, an object from artifact name to the sorted names, present when one is not empty), in the
