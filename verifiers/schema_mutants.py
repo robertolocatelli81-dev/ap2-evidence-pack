@@ -415,6 +415,14 @@ class Corpus:
                       ("absent-name", dict(H, crit=["nothere"])), ("duplicate-name", dict(H, ap2_ext="x", crit=["ap2_ext", "ap2_ext"])), ("not-a-list", dict(H, crit="ap2_ext")),
                       ("list-of-int", dict(H, crit=[1])), ("null", dict(H, crit=None))):
             self.add(f"fresh/header/crit/{nm}", self.write(F.pack(h, P)), [], ARTERR, "base/fresh-plain", idx=0, needle="crit", obj="jose-header", key="crit", kind="crit")
+        # 1.7.3 (SPEC §2 (d), §9.2): key sources of the header that are not where the key came from (here jwk_header). jku and
+        # x5u are never fetched: any value is named in ignored.key_material; an x5c carries a key, so every value that is not a
+        # certificate of the same key is that artifact's error
+        for k in ("jku", "x5u"):
+            for v in self.hostile:
+                self.add(f"fresh/header/{k}={json.dumps(v)}", self.write(F.pack(dict(H, **{k: v}), P)), [], REPORT, "base/fresh-plain", idx=0, slot="key_material", key=k, obj="jose-header", kind="key-source")
+        for v in self.hostile + [[1], ["not base64!"], [base64.b64encode(b"x" * 40).decode()]]:
+            self.add(f"fresh/header/x5c={json.dumps(v)}", self.write(F.pack(dict(H, x5c=v), P)), [], ARTERR, "base/fresh-plain", idx=0, needle="header x5c", obj="jose-header", key="x5c", kind="key-source")
         # duplicate keys INSIDE the signed segments (SPEC §3.1: the profile applies inside the SD-JWT)
         ht = json.dumps(H, separators=(",", ":")).encode(); pt = json.dumps(P, separators=(",", ":")).encode()
         self.add("fresh/header/duplicate-key", self.write(F.pack(H, P, header_txt=ht[:-1] + b',"typ":"x"}')), [], ARTERR, "base/fresh-plain", idx=0, needle="uplicate", obj="jose-header", kind="duplicate-key")

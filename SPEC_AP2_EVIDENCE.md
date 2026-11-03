@@ -1,8 +1,15 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Copyright 2026 Roberto Locatelli -->
 
-# ap2-evidence-pack — normative format v1.0 (2026-09-05), specification revision 1.7.1 (2026-10-29)
+# ap2-evidence-pack — normative format v1.0 (2026-09-05), specification revision 1.7.3 (2026-11-03)
 
+> Revision 1.7.3 (2026-11-03): §2, the key the caller names for an artifact is the verification key, whatever the
+> protected header carries; the JWKS key is chosen by a written rule (`kid`, one usable key, otherwise a refusal); every
+> key source of the header that was not used is compared when it carries a key (a different key is a refusal) and named
+> (§6 step 2, §9.2 `ignored.key_material`); three vectors added (§7). Up to 1.7.2 a `--jwks-url` was never fetched for a
+> token that carried `jwk` or `x5c`, measured 2026-11-03. Revision 1.7.2 (2026-11-03) changed §2 and §3.1 (their 1.7.2
+> paragraphs) and §7 (the `accept_integral_floats` policy key) without a note here. §1, §3–§5, §8, §10 and §11 are unchanged.
+>
 > Revision 1.7.1 (2026-10-29): §6 step 2 refuses an artifact whose resolved claims nest deeper than 512, the bound of
 > §3.1 (`disclosures_too_deep`; up to 1.7.0 nothing bounded them, measured 2026-10-29; one vector added, §7); §3.1: a
 > producer does not write a pack the profile refuses. §1, §2, §4, §5 and §8–§11 are unchanged.
@@ -115,6 +122,57 @@ name given twice to the same flag, and `build_evidence` refuses (`Ap2EvidenceErr
 name that is not an artifact. Up to 1.7.1 such a name was ignored in silence — measured 2026-11-02 on 1.7.1: `--key
 nope=k.json` built the pack with the header keys (`jwk_header`) and exit 0; `--key payment=K1 --key payment=K2` used K2
 alone, exit 0 — so a mistyped name left the caller's trust decision out of the pack with no sign of it.
+
+1.7.3 — the key the caller names is the policy (NORMATIVE for a producer; the reference `build`). draft-ietf-oauth-sd-jwt-vc-23
+(31 October 2026) §2.5: "A recipient MUST determine and validate the public verification key for the Issuer-signed JWT
+using a supported key discovery and validation mechanism that is permitted for the given Issuer according to policy",
+and "If a recipient cannot validate that the public verification key corresponds to the Issuer of the Issuer-signed JWT
+using a permitted key discovery and validation mechanism, the SD-JWT VC MUST be rejected". Here the caller's flag IS that
+policy. Up to 1.7.2 the order was supplied key > header `x5c` > header `jwk` > JWKS: measured 2026-11-03 on 1.7.2, a
+`--jwks-url` given for a token that carries `jwk` or `x5c` was never fetched, the header key was snapshotted
+(`jwk_header` / `x5c_header`) and the build ended with exit 0 — the key the signer declared won over the source the caller
+chose, with no sign of it. From 1.7.3:
+
+(a) A key named by the caller for an artifact — `--key name=…` / `keys` (`supplied`) or `--jwks-url name=…` / `jwks_urls`
+(`jwks_fetched`) — is that artifact's verification key, whatever the protected header carries. Header key material is
+used only when the caller names none: `x5c` (the leaf's key; sd-jwt-vc-23 §2.5 "Inline X.509 Certificates"), otherwise
+`jwk` (self-asserted); neither: refusal, as before. A header parameter is "carried" when its name is present, whatever its
+value: up to 1.7.2 an `x5c` or `jwk` whose value was empty or `null` was passed over in silence; from 1.7.3 it is used as
+any other and, being unusable, refused.
+
+(b) Both a supplied key and a JWKS URL for one artifact: refusal, ambiguous — the reference `build` as a usage error (exit
+2, no file, before any key file is read or any URL fetched), `build_evidence` as `Ap2EvidenceError` (no file). A `keys`
+value that is not a non-empty JSON object, or a `jwks_urls` value that is not a string starting `https://`, is a refusal
+(measured 2026-11-03 on 1.7.2: `keys` `{}` or `[]`, `jwks_urls` `""` or `5`, each built the pack with the header
+key, `jwk_header`).
+
+(c) The key of a JWKS. The set is fetched over https and must be `{"keys": [object, ...]}` (RFC 7517 §5), as before. Its
+USABLE keys are the JWKs with `kty` `"EC"`, `crv` `"P-256"`, `x` and `y` strings, no `use` other than `"sig"`, no `alg`
+other than `"ES256"`, and, when `key_ops` is present, a list containing `"verify"`; the others are not considered (RFC 7517
+§5: "Implementations SHOULD ignore JWKs within a JWK Set that use "kty" (key type) values that are not understood by
+them, that are missing required members, or for which values are out of the supported ranges") and their number is
+written in the key's `note`. When the protected header carries `kid` it must be a string (RFC 7515 §4.1.4; any other type
+is a refusal) and EXACTLY ONE usable key must carry that `kid`, compared as a case-sensitive string (RFC 7517 §4.5): none
+is a refusal, two or more a refusal, ambiguous (RFC 7517 §4.5 only says distinct keys "SHOULD use distinct "kid"
+values"). Without `kid` the set must hold exactly one usable key: none is a refusal, two or more a refusal, ambiguous —
+the caller can name the key with `--key`. Up to 1.7.2, without `kid` the first entry of the set was taken, of whatever
+type.
+
+(d) Key sources of the header that were not used. RFC 7515 defines four header parameters that name the signing key:
+`jku` (§4.1.2), `jwk` (§4.1.3, "the public key that corresponds to the key used to digitally sign the JWS"), `x5u`
+(§4.1.5) and `x5c` (§4.1.6, the certificate "corresponding to the key used to digitally sign the JWS"). Every one of them
+present in the protected header and not the source of the snapshotted key is NAMED: in the build result
+(`key_material_not_used`, an object from artifact name to the sorted names, present when one is not empty), in the
+key's `note`, and at verification in `artifacts[i].ignored.key_material` (§9.2). `jku` and `x5u` are never fetched (as
+before). `jwk` and `x5c` carry a key, and that key MUST equal the snapshotted key on `kty`, `crv`, `x`, `y` (for `x5c`:
+the public key of the leaf, `x5c[0]`, strict base64 DER, EC P-256; the rest of the chain is not read for this
+comparison): a different key, or a value that is not such a key, is a refusal at build (after the signature check, so a
+wrong supplied key still reads `signature INVALID`) and that artifact's error at verification (§6 step 2), whatever the
+provenance class — also the `jwk` beside the `x5c` an `x5c_header` key came from. This is this format's choice: neither
+RFC 7515 nor sd-jwt-vc-23 says what a recipient does with a header that names another key than the one the signature
+verifies under; a header that contradicts the signature is refused, not ignored. Not compared (declared): `x5t` and
+`x5t#S256`, the header `kid` against the `kid` of a supplied key, and, at verification, the header `kid` against the `kid`
+of a `jwks_fetched` key (a capture-time fact).
 
 ## 3. Canonicalisation and digest (NORMATIVE)
 
@@ -367,7 +425,9 @@ flags: `require_producer`, `require_pq`, `require_anchor`, and `min_anchors` (1.
    with no `honest_scope` produced a receipt with `honest_scope: null`). Recompute the digest (§3) → `digest_ok`.
 2. For EVERY artifact: parse `sd_jwt_compact` (its JSON under the §3.1 profile, numbers in the SD-JWT layer as its 1.7.2
    paragraph says, with or without `accept_integral_floats`); apply the JOSE rules of §9.2 to the
-   protected header (`crit` → RFC 7515 §4.1.11, unknown parameters ignored and reported); verify the ES256 signature with
+   protected header (`crit` → RFC 7515 §4.1.11, unknown parameters ignored and reported); 1.7.3, compare every key source
+   of the header that is not the source of the snapshotted key (§2 (d)): a `jwk` or `x5c` naming another key, or not a
+   key, is that artifact's error, and the names go to `ignored.key_material`; verify the ES256 signature with
    the snapshotted JWK over the JWS signing input; resolve disclosures
    fail-closed (unmatched, duplicate, or malformed disclosure → reject — for an UNMATCHED
    disclosure this is RFC 9901 §7.1 step 5 verbatim, "the SD-JWT MUST be rejected"; 1.7.0, a digest value encountered
@@ -570,7 +630,12 @@ openssl ABSENT is neither: as in 1.5.x the field is `null` (`tsa_verified`, `cha
 Run every `spec/vectors/ap2/<name>.json` under the policy in
 `<name>.expected.json` and reproduce the `normative` block exactly
 (`run_ap2_conformance.py` does this for the reference; exit 0 = conformant).
-The set contains forty-six vectors (1.7.1: + 1, `sd_disclosures_too_deep`, the depth bound of §6 step 2 — an
+The set contains fifty-three vectors (1.7.3: + 3, the key sources of the header of §2 (d) — `key_header_jwk_differs`, a
+`supplied` key beside a header `jwk` naming another key, and `key_header_x5c_differs`, a `jwks_fetched` key beside an `x5c`
+whose leaf is another key, both an artifact error, `sealed_content` `contradicted` `artifact_invalid`; `key_material_not_used`,
+a `supplied` key beside a header `jwk` and `x5c` of the same key and a `jku`, valid, with `report.ignored` — no producer block,
+so no backend dependence; a 1.7.2 verifier, in both languages, reports the first two `valid` and the third with `ignored: {}`,
+measured 2026-11-03; 1.7.2: + 4, the numbers of §3.1; 1.7.1: + 1, `sd_disclosures_too_deep`, the depth bound of §6 step 2 — an
 artifact error, `sealed_content` `contradicted` `artifact_invalid`, no producer block, so no backend dependence; a 1.7.0
 verifier reports `issuer_identity` `self_asserted` on it, measured 2026-10-29; 1.7.0: + 3, the SD-JWT processing rules of §6 step 2 that 1.6.0 did not enforce —
 `sd_digest_repeated`, the same array placeholder twice in `delegate_payload`; `sd_digest_repeated_sd`, the same object
@@ -699,6 +764,7 @@ or JWK member is ignored and reported — `header_param_ignored`, `key_jwk_membe
 |---|---|---|
 | issuer JWT protected header | RFC 7515 §4: "all Header Parameters not defined by this specification MUST be ignored when not understood", unless listed in `crit`; §4.1.11: a `crit` naming an extension the recipient does not understand makes the JWS INVALID; `crit` MUST NOT be `[]`, MUST NOT list registered names, duplicates, or names absent from the header | names this format understands: `alg`, `jku`, `jwk`, `kid`, `x5u`, `x5c`, `x5t`, `x5t#S256`, `typ`, `cty`, `crit` (those defined by RFC 7515 §4.1 and RFC 7519 §5; other names of the IANA JOSE registry are not understood here, so they are ignored and reported like any other). This format understands NO extension: a `crit` that is present and well-formed is therefore always that artifact's error, and a malformed `crit` (not a list of strings, empty, duplicate, registered or absent names) is one too. Every other unregistered name is ignored and reported in `artifacts[i].ignored.header` |
 | `jwk` in the header, `key.jwk`, `cnf.jwk` | RFC 7517 §4: "Additional members can be present in the JWK; if not understood by implementations encountering them, they MUST be ignored" | registered members: `kty`, `use`, `key_ops`, `alg`, `kid`, `x5u`, `x5c`, `x5t`, `x5t#S256` (RFC 7517 §4) and `crv`, `x`, `y`, `d` (RFC 7518 §6.2). Others ignored and reported in `ignored.header_jwk` / `ignored.key_jwk` / `ignored.cnf_jwk` |
+| key sources of the issuer JWT protected header: `jku`, `jwk`, `x5u`, `x5c` (1.7.3) | RFC 7515 §4.1.2, §4.1.3, §4.1.5, §4.1.6 define each as naming the key that signed the JWS; draft-ietf-oauth-sd-jwt-vc-23 §2.5: the key comes from a mechanism "permitted for the given Issuer according to policy" — neither says what a recipient does with one it does not use | the one the snapshotted key came from (`jwk` for `jwk_header`, `x5c` for `x5c_header`) is reconciled as §2 says; every other one present is not used for the key and is reported in `ignored.key_material`; a `jwk` or `x5c` among them must name the snapshotted key (§2 (d)), otherwise that artifact's error — this format's choice, not the standards' |
 | issuer JWT payload | RFC 7519 §4: "all claims that are not understood by implementations MUST be ignored" | every claim is RECORDED: the resolved payload is the pack's content and `resolved_claims` lists it in full, so nothing is reported twice; the SD-JWT shapes of RFC 9901 (`_sd`, `_sd_alg`, `...`) are imposed as in §3.1 |
 | `cnf` | RFC 7800 §3.1: "all confirmation members that are not understood by implementations MUST be ignored" | understood: `jwk`, `jwe`, `jku`, `kid` (the members RFC 7800 defines, §3.2–§3.5; other confirmation methods of the IANA registry, e.g. `x5t#S256` of RFC 8705 or `jkt` of RFC 9449, are not understood here). Others ignored and reported in `ignored.cnf` |
 | KB-JWT header | RFC 7515 as above; RFC 9901 §4.3: `typ` REQUIRED, MUST be `kb+jwt`; `alg` REQUIRED | `typ` not exactly `"kb+jwt"` is that artifact's error (RFC 9901 §4.3; RFC 9901 §7.3 step 5.d asks a Verifier to check it when Key Binding is required — this format checks every KB-JWT it carries, whether or not the holder key is known); `alg` not `"ES256"` is that artifact's error by this format's profile (§6 step 2: `alg: "ES256"`; RFC 9901 §4.3 only forbids `none`); `crit` as above; other unregistered names ignored and reported in `ignored.kb_jwt_header` |

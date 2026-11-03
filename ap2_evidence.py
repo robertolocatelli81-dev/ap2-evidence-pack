@@ -508,7 +508,11 @@ def _pubkey_from_jwk(jwk: Dict):
         raise Ap2EvidenceError("JWK x/y must be exactly 32 bytes")
     x = int.from_bytes(xb, "big")
     y = int.from_bytes(yb, "big")
-    return ec.EllipticCurvePublicNumbers(x, y, ec.SECP256R1()).public_key()
+    try:   # 1.7.3: measured on 1.7.2, a JWK whose (x, y) is not a point of P-256 — a --key file, a header jwk, a JWKS key or
+        # cnf.jwk — was a ValueError traceback out of `build` (exit 1, no reason); verify already reported it as the artifact's error
+        return ec.EllipticCurvePublicNumbers(x, y, ec.SECP256R1()).public_key()
+    except ValueError as e:
+        raise Ap2EvidenceError("JWK x/y is not a point of P-256") from e
 
 
 def _load_x5c_leaf(x5c: List[str]):
@@ -819,42 +823,78 @@ def _verify_x5c_chain(x5c: List[str], trust_anchor: str, at_time: Optional[str] 
         shutil.rmtree(d, ignore_errors=True)
 
 
+_HEADER_KEY_SOURCES = ("jku", "jwk", "x5u", "x5c")   # RFC 7515 §4.1.2, §4.1.3, §4.1.5, §4.1.6: each names the signing key
+_SOURCE_OF_CLASS = {"jwk_header": "jwk", "x5c_header": "x5c"}
+
+
+def _key_material_not_used(header: Dict, pc) -> List[str]:
+    """1.7.3 (SPEC §2 (d)): the key sources of the protected header that are present and are not where the snapshotted key
+    came from, sorted. Up to 1.7.2 they were passed over in silence."""
+    used = _SOURCE_OF_CLASS.get(pc)
+    return sorted(k for k in _HEADER_KEY_SOURCES if k in header and k != used)
+
+
+def _same_key(a, b) -> bool:
+    return isinstance(a, dict) and isinstance(b, dict) and all(a.get(f) == b.get(f) for f in ("kty", "crv", "x", "y"))
+
+
+def _reconcile_unused_header_keys(header: Dict, jwk: Dict, pc) -> None:
+    """1.7.3 (SPEC §2 (d)): a header `jwk` or `x5c` that is not the source of the snapshotted key must still name that key
+    (RFC 7515 §4.1.3/§4.1.6 define both as the signing key). A different key, or a value that is not a key, is refused —
+    this format's choice: neither RFC 7515 nor draft-ietf-oauth-sd-jwt-vc-23 says what a recipient does with it."""
+    used = _SOURCE_OF_CLASS.get(pc)
+    if "jwk" in header and used != "jwk" and not _same_key(header["jwk"], jwk):
+        raise Ap2EvidenceError("the header jwk names another key than the one the artifact verifies under (SPEC §2 (d), RFC 7515 §4.1.3)")
+    if "x5c" in header and used != "x5c":
+        x5c = header["x5c"]
+        if not isinstance(x5c, list) or not x5c or not isinstance(x5c[0], str):
+            raise Ap2EvidenceError("the header x5c is not a non-empty list of certificates (SPEC §2 (d), RFC 7515 §4.1.6)")
+        try:
+            leaf = _jwk_from_pubkey(_load_x5c_leaf(x5c).public_key())
+        except Exception as e:  # noqa: BLE001
+            raise Ap2EvidenceError(f"the header x5c leaf is unusable: {type(e).__name__} (SPEC §2 (d), RFC 7515 §4.1.6)") from e
+        if not _same_key(leaf, jwk):
+            raise Ap2EvidenceError("the header x5c leaf names another key than the one the artifact verifies under (SPEC §2 (d), RFC 7515 §4.1.6)")
+
+
+def _usable_jwk(k: Dict) -> bool:
+    """1.7.3 (SPEC §2 (c)): a JWK of the set that can verify ES256; the others are not considered (RFC 7517 §5)."""
+    ops = k.get("key_ops")
+    return (k.get("kty") == "EC" and k.get("crv") == "P-256" and isinstance(k.get("x"), str) and isinstance(k.get("y"), str)
+            and k.get("use", "sig") == "sig" and k.get("alg", "ES256") == "ES256"
+            and (ops is None and "key_ops" not in k or isinstance(ops, list) and "verify" in ops))
+
+
+def _not_used_note(header: Dict, pc) -> str:
+    names = _key_material_not_used(header, pc)
+    return (f"; not used for the key: {', '.join(names)} in the header (SPEC §2 (d): a jwk or x5c there names this same key, "
+            "a jku or x5u is never fetched)") if names else ""
+
+
 def _snapshot_key(parsed: Dict, supplied_jwk: Optional[Dict] = None,
                   jwks_url: Optional[str] = None, timeout: int = 20) -> Dict:
     """Choose the verification key and record WHERE it came from (provenance class).
-    Precedence: SUPPLIED key first (the caller's explicit trust decision MUST override
-    self-asserted header material — otherwise a self-consistent forgery with an embedded
-    jwk would outrank the genuine key an auditor provides; found by pro-level self-attack
-    2026-08-21), then x5c header > jwk header > fetched JWKS. Fail-closed if none."""
+    1.7.3 (SPEC §2): the key the CALLER names — a supplied key or a JWKS URL — is the policy and is used whatever the header
+    carries (draft-ietf-oauth-sd-jwt-vc-23 §2.5: the key comes from a mechanism "permitted for the given Issuer according to
+    policy"); both for one artifact is refused by the callers (build_evidence, the CLI). Without one: x5c header > jwk header. Fail-closed if none.
+    Up to 1.7.2 the order was supplied > x5c > jwk > JWKS: a --jwks-url was never fetched for a token carrying jwk or x5c,
+    and the self-declared key won in silence (measured 2026-11-03). The header key sources not used are compared by
+    `_reconcile_unused_header_keys` after the signature check, and named in the note."""
     header = parsed["header"]
     if header.get("alg") != "ES256":
         raise Ap2EvidenceError(f"alg {header.get('alg')!r} unsupported: ES256 only "
                                "(other algs are rejected, never half-verified)")
-    if supplied_jwk:
+    if supplied_jwk is not None:
+        if not isinstance(supplied_jwk, dict) or not supplied_jwk:
+            raise Ap2EvidenceError("a supplied key must be a non-empty JSON object, a JWK (SPEC §2 (b))")
         return {"jwk": supplied_jwk, "provenance_class": "supplied",
                 "note": "key material supplied by the caller (caller vouches); "
-                        "overrides any self-asserted header key by design"}
-    if header.get("x5c"):
-        if not isinstance(header["x5c"], list) or len(header["x5c"]) > 10:
-            raise Ap2EvidenceError("x5c chain absent or too long (>10 certs): refused "
-                                   "(a huge chain is a DoS vector, not a key)")
-        pub = _pubkey_from_x5c_leaf(header["x5c"])
-        try:
-            chain_fp = [hashlib.sha256(_sigsuite._unb64(c)).hexdigest() for c in header["x5c"]]   # r6: strict, like the leaf
-        except Exception as e:  # noqa: BLE001 — r7: a receipt, not a traceback
-            raise Ap2EvidenceError(f"x5c chain entry is not strict base64: {type(e).__name__}") from e
-        return {"jwk": _jwk_from_pubkey(pub), "provenance_class": "x5c_header",
-                "x5c_chain_sha256": chain_fp,
-                "note": "leaf cert key verified the signature; chain recorded, PKI path "
-                        "NOT validated to a trust anchor here (declared)"}
-    if header.get("jwk"):
-        return {"jwk": {k: header["jwk"][k] for k in ("kty", "crv", "x", "y")
-                        if k in header["jwk"]},
-                "provenance_class": "jwk_header",
-                "note": "key embedded in the protected header (self-asserted)"}
-    if jwks_url:
-        if not jwks_url.startswith("https://"):
-            raise Ap2EvidenceError("JWKS URL must be https:// (TLS is the whole witness)")
+                        "the caller's choice is the policy, whatever the header carries" + _not_used_note(header, "supplied")}
+    if jwks_url is not None:
+        if not isinstance(jwks_url, str) or not jwks_url.startswith("https://"):
+            raise Ap2EvidenceError("JWKS URL must be a string starting https:// (TLS is the whole witness)")
+        if "kid" in header and not isinstance(header["kid"], str):
+            raise Ap2EvidenceError("the header kid is not a string (RFC 7515 §4.1.4): the JWKS key cannot be chosen")
         try:   # r7: an unreachable endpoint or a non-JSON body used to be a URLError/JSONDecodeError traceback
             with urllib.request.urlopen(jwks_url, timeout=timeout) as r:  # nosec B310 - https enforced above
                 raw = r.read(1024 * 1024 + 1)      # cap: un JWKS gigante = DoS, non una chiave
@@ -870,18 +910,53 @@ def _snapshot_key(parsed: Dict, supplied_jwk: Optional[Dict] = None,
         # and 1.7.1 with the fetch replaced in-process, a list, a string, null, "keys": 5 or "keys": [5] was a traceback
         if not isinstance(jwks, dict) or not isinstance(jwks.get("keys"), list) or any(not isinstance(k, dict) for k in jwks["keys"]):
             raise Ap2EvidenceError('JWKS body is not a JSON object with "keys", a list of JWK objects (RFC 7517 §5)')
-        kid = parsed["header"].get("kid")
-        keys = jwks["keys"]
-        match = [k for k in keys if not kid or k.get("kid") == kid]
-        if not match:
-            raise Ap2EvidenceError(f"no key in JWKS matches kid={kid!r}")
+        usable = [k for k in jwks["keys"] if _usable_jwk(k)]   # 1.7.3 (SPEC §2 (c)): the rule is written, not "the first entry"
+        unusable = len(jwks["keys"]) - len(usable)
+        if "kid" in header:
+            kid = header["kid"]
+            match = [k for k in usable if k.get("kid") == kid]
+            if not match:
+                raise Ap2EvidenceError(f"no usable ES256 key in the JWKS carries kid={kid!r} "
+                                       f"({len(jwks['keys'])} keys, {unusable} not usable) (SPEC §2 (c))")
+            if len(match) > 1:
+                raise Ap2EvidenceError(f"{len(match)} usable keys in the JWKS carry kid={kid!r}: ambiguous, refused (SPEC §2 (c))")
+        else:
+            match = usable
+            if not match:
+                raise Ap2EvidenceError(f"the JWKS holds no usable ES256 key ({len(jwks['keys'])} keys, {unusable} not usable) "
+                                       "(SPEC §2 (c))")
+            if len(match) > 1:
+                raise Ap2EvidenceError(f"the token carries no kid and the JWKS holds {len(match)} usable keys: ambiguous, refused "
+                                       "— name the key with --key (SPEC §2 (c))")
         return {"jwk": {k: match[0][k] for k in ("kty", "crv", "x", "y", "kid")
                         if k in match[0]},
                 "provenance_class": "jwks_fetched",
                 "jwks_url": jwks_url, "jwks_sha256": hashlib.sha256(raw).hexdigest(),
                 "fetched_utc": _utcnow(),
                 "note": "fetched over TLS at build time — a capture witness, "
-                        "not proof of issuer control of the key"}
+                        "not proof of issuer control of the key"
+                        + (f"; {unusable} JWK(s) of the set not usable for ES256, not considered (RFC 7517 §5)" if unusable else "")
+                        + _not_used_note(header, "jwks_fetched")}
+    if "x5c" in header:   # 1.7.3: present = carried, whatever its value (an empty or null x5c was passed over up to 1.7.2)
+        if not isinstance(header["x5c"], list) or not header["x5c"] or len(header["x5c"]) > 10:
+            raise Ap2EvidenceError("x5c chain absent or too long (>10 certs): refused "
+                                   "(a huge chain is a DoS vector, not a key)")
+        pub = _pubkey_from_x5c_leaf(header["x5c"])
+        try:
+            chain_fp = [hashlib.sha256(_sigsuite._unb64(c)).hexdigest() for c in header["x5c"]]   # r6: strict, like the leaf
+        except Exception as e:  # noqa: BLE001 — r7: a receipt, not a traceback
+            raise Ap2EvidenceError(f"x5c chain entry is not strict base64: {type(e).__name__}") from e
+        return {"jwk": _jwk_from_pubkey(pub), "provenance_class": "x5c_header",
+                "x5c_chain_sha256": chain_fp,
+                "note": "leaf cert key verified the signature; chain recorded, PKI path "
+                        "NOT validated to a trust anchor here (declared)" + _not_used_note(header, "x5c_header")}
+    if "jwk" in header:
+        if not isinstance(header["jwk"], dict):
+            raise Ap2EvidenceError("the header jwk is not a JSON object (RFC 7515 §4.1.3)")
+        return {"jwk": {k: header["jwk"][k] for k in ("kty", "crv", "x", "y")
+                        if k in header["jwk"]},
+                "provenance_class": "jwk_header",
+                "note": "key embedded in the protected header (self-asserted)" + _not_used_note(header, "jwk_header")}
     raise Ap2EvidenceError("no key material: JWT has neither x5c nor jwk header, and no "
                            "supplied key or JWKS URL was given (fail-closed)")
 
@@ -1275,6 +1350,10 @@ def _build_evidence(artifacts: List[Dict], out_path: str,
         stray = [k for k in given if k not in names]               # this build; up to 1.7.1 a stray name was ignored in silence
         if stray:
             raise Ap2EvidenceError(f"{what}: no artifact named {stray[0]!r} in this build (SPEC §2)")
+    both = sorted(set(keys) & set(jwks_urls))   # 1.7.3 (SPEC §2 (b)): two sources named for one artifact is ambiguous
+    if both:
+        raise Ap2EvidenceError(f"artifact {both[0]!r}: both a supplied key and a JWKS URL — ambiguous, refused (SPEC §2 (b))")
+    not_used = {}
     entries, for_bindings = [], []
     for a in artifacts:
         parsed = parse_sd_jwt(a["sd_jwt"])
@@ -1287,6 +1366,12 @@ def _build_evidence(artifacts: List[Dict], out_path: str,
         if not v["signature_ok"]:
             raise Ap2EvidenceError(f"artifact {a['name']!r}: ES256 signature INVALID "
                                    "(build refused — no evidence file for a red light)")
+        try:   # 1.7.3 (SPEC §2 (d)): after the signature, so a wrong supplied key still reads "signature INVALID"
+            _reconcile_unused_header_keys(parsed["header"], key["jwk"], key["provenance_class"])
+        except Ap2EvidenceError as e:
+            raise Ap2EvidenceError(f"artifact {a['name']!r}: {e} (build refused)") from e
+        if _key_material_not_used(parsed["header"], key["provenance_class"]):
+            not_used[a["name"]] = _key_material_not_used(parsed["header"], key["provenance_class"])
         kb = verify_kb_jwt(parsed, v["resolved_claims"]); kb.pop("_ignored", None)   # the receipt's report, not part of the sealed copy
         if kb.get("verified") is False:
             raise Ap2EvidenceError(f"artifact {a['name']!r}: KB-JWT holder binding "
@@ -1343,7 +1428,8 @@ def _build_evidence(artifacts: List[Dict], out_path: str,
             "bindings": len(evidence["bindings"]),
             "evidence_digest_sha256": evidence["evidence_digest_sha256"],
             "rfc3161_anchored": evidence["rfc3161_timestamp"].get("anchored", False),
-            "anchors_added": len(added), **({"anchors_failed": failed} if failed else {})}
+            "anchors_added": len(added), **({"anchors_failed": failed} if failed else {}),
+            **({"key_material_not_used": not_used} if not_used else {})}   # 1.7.3 (SPEC §2 (d))
 
 
 def add_anchor(path: str, tsa_url: str) -> Dict:
@@ -1753,6 +1839,8 @@ def _verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = F
                        "header_jwk": _unknown_members(parsed["header"].get("jwk"), _JWK_REGISTERED),
                        "key_jwk": _unknown_members(key["jwk"], _JWK_REGISTERED)}
             self_asserted, leaf_ident = _check_provenance(pc, parsed, key, trust_anchor, at_time=proven_time)   # r5: reconciled, not believed; r7/r8: it decides self_asserted_only; r9: at a proven time, and it names the leaf
+            _reconcile_unused_header_keys(parsed["header"], key["jwk"], pc)   # 1.7.3 (SPEC §2 (d), §6 step 2)
+            ignored["key_material"] = _key_material_not_used(parsed["header"], pc)   # SPEC §9.2: named, never dropped in silence
             sig_ok = verify_es256(parsed["signing_input"], parsed["signature"], key["jwk"])
             resolved = resolve_disclosures(parsed["payload"], parsed["disclosures"])
             claims_ok = _canon(resolved) == _canon(a.get("resolved_claims"))
@@ -2713,12 +2801,16 @@ def _main(argv: Optional[List[str]] = None) -> int:
                     p.error(f"{flag}: {name!r} given more than once")
                 out.append((name, val))
             return out
+        key_pairs, jwks_pairs = _named("--key", a.key), _named("--jwks-url", a.jwks_url)
+        both = sorted({n for n, _ in key_pairs} & {n for n, _ in jwks_pairs})   # 1.7.3 (SPEC §2 (b)): before any file is read
+        if both:
+            p.error(f"--key and --jwks-url both name {both[0]!r}: ambiguous (one key source per artifact)")
         keys = {}
-        for name, path in _named("--key", a.key):
+        for name, path in key_pairs:
             keys[name] = _read("--key", path, as_json=True)
             if not isinstance(keys[name], dict) or not keys[name]:   # a list was an AttributeError traceback; null and {}
                 p.error(f"--key: {path!r} is not a non-empty JSON object (a JWK)")   # fell back to the header key in silence
-        jwks = dict(_named("--jwks-url", a.jwks_url))
+        jwks = dict(jwks_pairs)
         try:
             res = build_evidence(arts, a.out, keys=keys, jwks_urls=jwks,
                                  tsa_url=(a.tsa[0] if a.tsa else None), subject=a.subject,

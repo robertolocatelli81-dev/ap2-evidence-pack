@@ -321,6 +321,27 @@ function checkProvenance(pc, parsed, key) {   // returns: is this key SELF-ASSER
   // chains, so it always reports the key as self-asserted and `chain_verified: null` (declared, like tsa_verified).
   return { selfAsserted: true, ident };   // this verifier cannot validate chains: always self-asserted (declared)
 }
+// 1.7.3 (SPEC §2 (d), §6 step 2, §9.2): the key sources of the protected header that are not where the snapshotted key came
+// from are NAMED (ignored.key_material), and a jwk or x5c among them must name that same key (RFC 7515 §4.1.3/§4.1.6),
+// otherwise that artifact's error — this format's choice, the reference does the same
+const HEADER_KEY_SOURCES = ["jku", "jwk", "x5u", "x5c"];
+const SOURCE_OF_CLASS = { jwk_header: "jwk", x5c_header: "x5c" };
+const sameKey = (a, b) => isObj(a) && isObj(b) && ["kty", "crv", "x", "y"].every((f) => a[f] === b[f]);
+function keyMaterialNotUsed(header, pc) { const used = SOURCE_OF_CLASS[pc]; return HEADER_KEY_SOURCES.filter((k) => Object.hasOwn(header, k) && k !== used).sort(cmp); }
+function reconcileUnusedHeaderKeys(header, jwk, pc) {
+  const used = SOURCE_OF_CLASS[pc];
+  if (Object.hasOwn(header, "jwk") && used !== "jwk" && !sameKey(header.jwk, jwk)) throw new Refused("the header jwk names another key than the one the artifact verifies under (SPEC §2 (d), RFC 7515 §4.1.3)");
+  if (Object.hasOwn(header, "x5c") && used !== "x5c") {
+    const x5c = header.x5c;
+    if (!Array.isArray(x5c) || !x5c.length || typeof x5c[0] !== "string") throw new Refused("the header x5c is not a non-empty list of certificates (SPEC §2 (d), RFC 7515 §4.1.6)");
+    let leaf;
+    try {
+      const der = b64Strict(x5c[0]); if (!der) throw new Error("leaf not base64");
+      leaf = createPublicKey({ key: new X509Certificate(der).publicKey.export({ format: "jwk" }), format: "jwk" }).export({ format: "jwk" });
+    } catch (e) { throw new Refused("the header x5c leaf is unusable (SPEC §2 (d), RFC 7515 §4.1.6)"); }
+    if (!sameKey(leaf, jwk)) throw new Refused("the header x5c leaf names another key than the one the artifact verifies under (SPEC §2 (d), RFC 7515 §4.1.6)");
+  }
+}
 function findBindings(arts) {
   const byValue = new Map();   // r5: inverse index (digest string -> [name, encoding]) — the per-leaf scan was O(artifacts), quadratic
   for (const a of arts) { const raw = Buffer.from(a.compact, "ascii"); const h = sha256(raw); for (const [v, enc] of [[h.toString("hex"), "hex"], [b64u(h), "b64url"]]) { if (!byValue.has(v)) byValue.set(v, []); byValue.get(v).push([a.name, enc]); } }
@@ -489,6 +510,7 @@ function verifyEvidenceInner(path, opts) {
       // SPEC §9.2 — the standards' rule for the unknown: ignored, and REPORTED (crit: RFC 7515 §4.1.11, a rejection)
       const ignored = { header: joseHeaderIgnored(parsed.header, "JWT header"), header_jwk: unknownMembers(parsed.header.jwk, JWK_REGISTERED), key_jwk: unknownMembers(a.key.jwk, JWK_REGISTERED) };
       const prov = checkProvenance(pc, parsed, a.key); const selfAsserted = prov.selfAsserted;   // r5: reconciled with the signed header; r7: decides self_asserted_only
+      reconcileUnusedHeaderKeys(parsed.header, a.key.jwk, pc); ignored.key_material = keyMaterialNotUsed(parsed.header, pc);   // 1.7.3 (SPEC §2 (d), §6 step 2, §9.2)
       const sigOk = es256Verify(parsed.signingInput, parsed.signature, a.key.jwk); const resolved = resolveDisclosures(parsed.payload, parsed.disclosures);
       const claimsOk = canon(resolved) === canon(a.resolved_claims ?? null); const kb = verifyKbJwt(parsed, resolved);
       for (const k of ["verified", "signature_ok", "sd_hash_ok", "claims_recorded_not_validated"]) if (Object.hasOwn(a.kb_jwt, k) && (!Object.hasOwn(kb, k) || canon(a.kb_jwt[k]) !== canon(kb[k]))) throw new Refused("artifact kb_jwt." + k + " contradicts the KB-JWT (SPEC §9.1)");   // SPEC §9.1 (NEMESIS 2026-10-11)

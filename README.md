@@ -25,9 +25,10 @@ This tool turns a set of SD-JWT mandates into **one evidence file** that verifie
 - parses SD-JWT compact serialization and resolves selective disclosures **fail-closed**
   (unmatched, duplicate, or malformed disclosures are rejected, never ignored);
 - verifies each **ES256** signature at build time and **snapshots the key material used**,
-  tagged with an explicit provenance class — `supplied` (caller vouches; always wins over
-  self-asserted header material), `x5c_header`, `jwk_header`, `jwks_fetched` (TLS witness
-  at capture) — declared rather than flattened;
+  tagged with an explicit provenance class — `supplied` (caller vouches), `x5c_header`, `jwk_header`,
+  `jwks_fetched` (TLS witness at capture) — declared rather than flattened; a key the caller names
+  (`--key` or `--jwks-url`) always wins over header material, and the header key sources not used are
+  named and must name the same key (1.7.3, below);
 - verifies **KB-JWT holder binding** against the issuer payload's `cnf.jwk` (three honest
   states: verified / invalid → build refused / present-but-unverifiable, never painted green);
 - recomputes **cross-mandate hash bindings** from the exact compact serializations
@@ -66,6 +67,18 @@ signed. The receipt then says `accept_integral_floats: true` and lists, per arti
 under the option verifies only under it. `0.29` is an error with or without the option. Measured 2026-11-03 on six open
 payment mandates the SDK at `e1ea56d` minted (`max` 10, 10.0, 0.29, 250, 1000 JPY, 100 EUR): 1.7.2 refuses all six by
 default; under the option it builds and verifies the five integral ones in both verifiers and refuses `0.29`.
+
+**The key the caller names is the policy (1.7.3, SPEC §2 (a)–(d)).** `--key name=jwk.json` or `--jwks-url
+name=https://…` is that artifact's verification key, whatever its protected header carries; the header's `x5c`, then
+`jwk`, is used only when the caller names none (draft-ietf-oauth-sd-jwt-vc-23 §2.5: the key comes from a mechanism
+"permitted for the given Issuer according to policy"). Measured 2026-11-03 on 1.7.2: a `--jwks-url` for a token carrying
+`jwk` or `x5c` was never fetched and the header key was snapshotted, exit 0. Both flags for one artifact are a usage error
+(exit 2). From a JWKS the key is the one usable ES256 key (EC P-256, no other `use`/`alg`, `key_ops` with `verify`) with
+the token's `kid`, or the only usable key when the token has no `kid`; none or more than one is a refusal (up to 1.7.2
+the first entry was taken). A header `jku`, `x5u`, `jwk` or `x5c` that is not where the key came from is named — in the
+build result (`key_material_not_used`), the key's `note`, and the receipt (`ignored.key_material`) — and a `jwk` or `x5c`
+there must name the same key: otherwise the build refuses and both verifiers report that artifact's error (this format's
+choice, neither RFC 7515 nor sd-jwt-vc says what to do with it).
 
 **Reading the verdict (1.6.0, SPEC §6.9).** Beside the twelve fields of §6 every receipt states `admission`
 (`admitted`, or `refused` with a `refusal_class`: `format_unsupported`, `unknown_member`, `malformed`), and for an admitted
@@ -191,7 +204,7 @@ The format is defined by `SPEC_AP2_EVIDENCE.md` plus the test vectors in
 `spec/vectors/ap2/` — seven ACCEPTs (`valid_signed`, the positive control; `anchor_valid`,
 a real RFC 3161 token from a probe TSA whose certificate ships beside it; and, since 1.4.0,
 `header_param_ignored`, `kb_jwt_valid`, `key_jwk_member_ignored`; since 1.5.0 `anchors_two_valid` and `anchors_only`)
-and twenty-six REJECTs
+and twenty-six REJECTs (since 1.7.2 four number vectors and since 1.7.3 three key-source vectors more, named in SPEC §7)
 (stripped-signature downgrade, valid-but-unpinned producer key, digest mismatch, time
 anchor required-but-missing, time anchor claimed-but-invalid, a real token issued for
 another digest; since 1.4.0 an unknown key at the top level / inside the anchor block / inside
@@ -223,8 +236,8 @@ python3 spec/vectors/ap2/run_ap2_conformance.py   # exit 0 = conformant
 
 | Implementation | Runtime / deps | Status |
 |---|---|---|
-| `ap2_evidence.py` | Python 3 + `cryptography`; `openssl` for `--tsa-cert` / `--trust-anchor` | reference — conformant 50/50 (1.7.2); ACVP ML-DSA-65 sigVer 9/9 |
-| `verifiers/js/ap2-verify.mjs` | Node with OpenSSL ≥ 3.5 for ML-DSA-65 (measured: Node 22.23.2 / OpenSSL 3.5.7 locally, Node 24 in CI), `node:crypto` only; on an older build ML-DSA-65 is SKIP = incomplete, never a pass, and the ML-DSA vectors are not measured (the JS conformance test skips, it does not pass); no TSA signature check — `tsa_verified` null, `time_anchor` `instrument_failure`; no x5c chain validation — `--trust-anchor` is a usage error (1.6.0) | independent — conformant on 44/50 (1.7.2) on every normative field, the `report` and the `states` block, through `run_ap2_conformance.run(verify_fn=…)` (`test_ap2_conformance.py`); the 6 vectors whose `requires` lists openssl are SKIP (1.6.0: the five under `tsa_cert` / `trust_anchor`, and `anchor_invalid`, which the differential oracle runs in both verifiers) |
+| `ap2_evidence.py` | Python 3 + `cryptography`; `openssl` for `--tsa-cert` / `--trust-anchor` | reference — conformant 53/53 (1.7.3); ACVP ML-DSA-65 sigVer 9/9 |
+| `verifiers/js/ap2-verify.mjs` | Node with OpenSSL ≥ 3.5 for ML-DSA-65 (measured: Node 22.23.2 / OpenSSL 3.5.7 locally, Node 24 in CI), `node:crypto` only; on an older build ML-DSA-65 is SKIP = incomplete, never a pass, and the ML-DSA vectors are not measured (the JS conformance test skips, it does not pass); no TSA signature check — `tsa_verified` null, `time_anchor` `instrument_failure`; no x5c chain validation — `--trust-anchor` is a usage error (1.6.0) | independent — conformant on 47/53 (1.7.3) on every normative field, the `report` and the `states` block, through `run_ap2_conformance.run(verify_fn=…)` (`test_ap2_conformance.py`); the 6 vectors whose `requires` lists openssl are SKIP (1.6.0: the five under `tsa_cert` / `trust_anchor`, and `anchor_invalid`, which the differential oracle runs in both verifiers) |
 
 **Closed schema (1.4.0, SPEC §9; 1.4.1).** Measured on 1.3.0 on 2026-10-10: a key nobody had defined, written inside
 `rfc3161_timestamp`, `producer_signatures` or a `signatures[i]` entry, was `valid: true` in both verifiers with nothing in
@@ -294,7 +307,10 @@ REJECT to everything is caught; through 1.2.0 this sentence said more than the o
 controls, and two verifiers refusing one alike were an agreement — measured by ablation on 25/09/2026, see CHANGELOG). The CA-issued `x5c` leaf under `--trust-anchor`, the only case
 where `self_asserted_only` is false, is one of the hostile files, not one of those three — this sentence said
 otherwise through 1.1.2:
-Re-measured 2026-11-03 on 1.7.2: **202 cases, 0 disagreements, of which 12 are declared divergences** (`53 vector runs +
+Re-measured 2026-11-03 on 1.7.3: **210 cases, 0 disagreements, of which 12 are declared divergences** (`56 vector runs +
+131 hostile files + 4 positive controls + 19 CLI cases = 210`: the three 1.7.3 vectors and five signed tokens whose
+header carries a key source the key did not come from; the oracle also compares each artifact's `ignored` report, which
+includes `key_material`). Re-measured 2026-11-03 on 1.7.2: **202 cases, 0 disagreements, of which 12 are declared divergences** (`53 vector runs +
 126 hostile files + 4 positive controls + 19 CLI cases = 202`: the four 1.7.2 vectors, each under its own policy; four
 signed tokens with number literals, and five runs under `--accept-integral-floats`. The oracle also compares
 `accept_integral_floats` and each artifact's `integral_literals_read`, and stops on a policy key it does not know — up to

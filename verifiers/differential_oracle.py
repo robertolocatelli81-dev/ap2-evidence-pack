@@ -220,7 +220,9 @@ def run(cmd, path, flags):
                None if st is None else tuple((k, v.get("state"), tuple(v.get("reasons") or ())) for k, v in st.items()),
                None if r.get("policy") is None else (r["policy"].get("met"), tuple(r["policy"].get("unmet") or ())), "ok" in prod,
                r.get("accept_integral_floats"),   # 1.7.2 — SPEC §3.1: the option, and the literals each artifact had read that way
-               tuple(tuple(a["integral_literals_read"]) if "integral_literals_read" in a else None for a in (r.get("artifacts") or [])))
+               tuple(tuple(a["integral_literals_read"]) if "integral_literals_read" in a else None for a in (r.get("artifacts") or [])),
+               # 1.7.3 — SPEC §9.2: each artifact's ignored names (key_material included), or that it is an error
+               tuple("error" if "error" in a else json.dumps(a.get("ignored"), sort_keys=True) for a in (r.get("artifacts") or [])))
         return (r.get("valid"), r.get("digest_ok"), r.get("bindings_ok"), prod.get("present"), prod.get("ok"), prod.get("trusted"),
                 r.get("pq_protected"), ts.get("claimed"), ts.get("verified"), ts.get("granted"), ts.get("imprint_ok"), ts.get("gen_time"),
                 r.get("policy_ok"), r.get("self_asserted_only"), r.get("chain_verified"), tuple(r.get("provenance_classes") or ()),
@@ -331,6 +333,19 @@ def build_cases(d):
     for nm in ("token-number-integral-signed-rehashed", "token-number-fraction-signed-rehashed",
                "token-number-past-range-signed-rehashed", "token-number-binary64-would-round-signed-rehashed", "float-1.0-rehashed"):
         cases[nm + "+accept-integral-floats"] = (cases[nm][0], cases[nm][1] + ["--accept-integral-floats"])
+    # 1.7.3 (SPEC §2 (d), §6 step 2, §9.2): header key sources that are not where the snapshotted key came from — a jwk naming
+    # another key, an unusable x5c or jwk beside a supplied key: that artifact's error; jku/x5u/a matching jwk: named in
+    # ignored.key_material. The key is labelled `supplied` after signing; _fresh_pack adds the signer's own jwk to a header
+    # that names none, so the x5c cases carry a matching jwk beside the x5c that decides.
+    sk7, n7 = _fresh_key(); _, n7o = _fresh_key()
+    b64u7 = lambda b: base64.urlsafe_b64encode(b).decode().rstrip("=")  # noqa: E731
+    other7 = json.dumps({"kty": "EC", "crv": "P-256", "x": b64u7(n7o.x.to_bytes(32, "big")), "y": b64u7(n7o.y.to_bytes(32, "big"))}, separators=(",", ":"))
+    for nm, hdr in (("jwk-other", '{"alg":"ES256","jwk":%s}' % other7), ("jwk-null", '{"alg":"ES256","jwk":null}'),
+                    ("x5c-not-base64", '{"alg":"ES256","x5c":["not base64!"]}'), ("x5c-empty", '{"alg":"ES256","x5c":[]}'),
+                    ("jku-x5u-same-jwk", '{"alg":"ES256","jku":"https://a.invalid/j","x5u":"https://a.invalid/c"}')):
+        e = _fresh_pack(base, sk7, n7, hdr, '{"iss":"x"}', {"iss": "x"})
+        for a_ in e["artifacts"]: a_["key"]["provenance_class"] = "supplied"
+        cases["key-source-supplied-" + nm] = (w("ks" + nm, json.dumps(rehash(e))), [])
     # r6: the x5c_header branch had NO coverage at all (no vector carries an x5c) — a real self-signed leaf, canonical and
     # non-canonically spelled, plus a leaf whose key differs from the snapshotted jwk
     x5c_built = _x5c_cases(base)
