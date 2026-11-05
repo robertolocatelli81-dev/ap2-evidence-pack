@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.7.3 — 2026-11-03 — the key the caller names is the policy; header key sources not used are named and compared
+## 1.7.3 — 2026-11-06 — the key the caller names is the policy; header key sources not used are named and compared
 
 **The defect** (SPEC §2, measured 2026-11-03 on 1.7.2). The key was chosen in the order supplied key > header `x5c` >
 header `jwk` > `--jwks-url`. A `--jwks-url name=https://…` given for a token whose protected header carries `jwk` or
@@ -18,13 +18,15 @@ Issuer according to policy" — the caller's flag is that policy.
   `null` is no longer passed over (it is refused as unusable).
 - (b) both a supplied key and a JWKS URL for one artifact: the CLI exits 2 (usage, no file, before any key file is read
   or URL fetched), `build_evidence` raises `Ap2EvidenceError`. A `keys` value that is not a non-empty object, or a
-  `jwks_urls` value that is not an `https://` string, is a refusal, `null` included: on 1.7.2 `{}`, `[]`, `null`, `""`
-  and `5` each fell back to the header key (`jwk_header`), measured.
+  `jwks_urls` value that is not an `https://` string, is a refusal, `null` included: on 1.7.2 a `keys` value `{}`, `[]`, `null` or `""`
+  and a `jwks_urls` value `""`, `5` or `null` each fell back to the header key (`jwk_header`), and a `keys` value `5` was an
+  `AttributeError` traceback, measured.
 - (c) the key of a JWKS: only usable ES256 keys count (EC, P-256, `x`/`y` strings, no other `use` or `alg`, `key_ops`
   containing `verify` when present; the others are not considered, RFC 7517 §5, and counted in the key's `note`); with
   a header `kid` (a string, else a refusal) exactly one usable key with that `kid`, without `kid` exactly one usable key;
   none or more than one is a refusal. On 1.7.2, without `kid`, the first entry was taken whatever its type (a set
-  `[RSA, P-256]` was a signature failure). A redirect of the JWKS URL to a URL that is not `https://` is a refusal: on
+  `[RSA, P-256]` was refused, `only EC/P-256 JWKs are supported`, its P-256 key never tried; a set of two P-256 keys with the
+  signer's second was a signature failure). A redirect of the JWKS URL to a URL that is not `https://` is a refusal: on
   1.7.2 a 302 to plain http was followed and the set read over http was snapshotted as `jwks_fetched`, exit 0, measured.
 - (d) every `jku`, `jwk`, `x5u`, `x5c` of the header that is not where the key came from is NAMED — in the build result
   (`key_material_not_used`, new, present when not empty), in the key's `note`, and in the receipt
@@ -44,8 +46,8 @@ no key, `jwk_header` beside an `x5c` `null` or `[]`, `jwks_fetched` beside a `jw
 Measured 2026-11-03 over {no key, supplied, JWKS} × six `x5c` × five `jwk` × {`jku`, `x5u`}: 1.7.2 built 208 packs, all
 valid under 1.7.2 in both verifiers, 164 of them an artifact error under 1.7.3 in both; the 44 packs 1.7.3 built there are
 all valid under 1.7.2. The build result gains `key_material_not_used`; the
-receipt gains `ignored.key_material`. A library call `_snapshot_key` (private) no longer treats a falsy key or URL as absent;
-`build_evidence` refuses `keys` / `jwks_urls` that are not objects.
+receipt gains `ignored.key_material`. A library call `_snapshot_key` (private) no longer treats a falsy key or URL other than `None` as absent;
+`build_evidence` refuses `keys` / `jwks_urls` that are neither `None` nor objects, `[]`, `""` and `0` included.
 
 **Also fixed** (found by the generative test below, measured on 1.7.2): a JWK whose (x, y) is not a point of P-256 — a
 `--key` file, a header `jwk`, a JWKS key, a `cnf.jwk` — made `build` raise a `ValueError` traceback (exit 1, no reason);
@@ -77,21 +79,21 @@ not a string (refused before any fetch); the note; a JWK off the curve; the edge
 beside a usable key, `use` or `alg` `null`, `key_ops` a string) and of the same key (a header `jwk` with another `kty` or
 `crv`, same coordinates).
 
-Measured 2026-11-03 in one run on a `git archive` of this release (the tree of this text, before this paragraph was
+Measured 2026-11-06 in one run on a `git archive` of this release (the tree of this text, before this paragraph was
 written): the 18 suites, 348 tests, pass on Python 3.9.25, 3.11.2 and 3.13.15 with `cryptography` 50.0.2 and on 3.11.2
 with 48.0.0, the declared floor, leaving no temporary directory (`test_packaging.py` skipped its `tomllib` tests on 3.9 and
 its wheel-contents test where the `build` package was not installed, as in 1.7.2); every module runs the same tests as a
 script and as a module; the gate (the sample pack exit 0, tampered exit 1); the oracle 0/210 (12 declared); the ablation
 (each strict layer red alone); the type fuzz 1 390/1 390 inputs answered with a verdict; the wheel built, installed alone
 in a clean venv, imported and verifying a vector, shipping `ap2_pqcrypto/` and no `pqcrypto/`; cryptovalid-opencore
-master at `12234a4` against the wheel, its five AP2 suites and its front-end (built pack exit 0 under `ap2` and `auto`,
+master at `c94a439` against the wheel, its five AP2 suites and its front-end (built pack exit 0 under `ap2` and `auto`,
 tampered exit 1). The schema-mutation bench (`--full`): 25 098 files, every mutation its SPEC class in both verifiers, 0
 disagreements; against the 1.7.2 verifiers the same run leaves the 27 new mutations without their class in each language
 and nothing else. The oracle with the 1.7.2 reference against this JS verifier: 9 disagreements, the eight key-source
 cases and `provenance-supplied-unverifiable` (a `supplied` key beside a header `jwk`: `ignored.key_material`). The new
-tests against 1.7.2: 10 of 10 fail; on the build space, 5 488 of the 15 120 combinations get another verdict there
-(built against refused, or another class: 2 028 JWKS cases built with `x5c_header`, 864 with `jwk_header`; 960
-`ValueError` tracebacks for a jwk off the curve), 0 on 1.7.3. Fifty mutants of the changed lines (Python and JS), on a
+tests against 1.7.2: 12 of 12 fail; on the build space, 5 488 of the 15 120 combinations get another verdict there
+(built against refused, or another class: 2 100 JWKS cases built with `x5c_header`, 900 with `jwk_header`; 960
+`ValueError` tracebacks for a jwk off the curve), 0 on 1.7.3. Measured 2026-11-03, on the commit before the review: fifty mutants of the changed lines (Python and JS), on a
 green bench: 49 killed; the survivor drops `!x5c.length` in the JS check, equivalent (`[][0]` is `undefined`, refused by the
 next clause with the same message). Thirteen more mutants of an independent review of the same lines: six killed, seven
 survived (the `x`/`y` string check, `kty` and `crv` in the same-key comparison in Python and `kty` in JS, `use`/`alg`

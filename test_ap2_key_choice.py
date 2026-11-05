@@ -287,12 +287,16 @@ class KeyChoiceLibrary(unittest.TestCase):
                         # 1.7.3: a value that is None or falsy was taken for "no key" and the header jwk was used
                         ({"keys": {"m": None}}, "non-empty JSON object"), ({"keys": {"m": 0}}, "non-empty JSON object"),
                         ({"jwks_urls": {"m": None}}, "starting https://"), ({"jwks_urls": {"m": False}}, "starting https://"),
-                        ({"keys": [("m", JWK_S)]}, "must be objects")):
+                        ({"keys": [("m", JWK_S)]}, "must be objects"), ({"keys": []}, "must be objects"), ({"keys": ""}, "must be objects"),
+                        ({"keys": 0}, "must be objects"), ({"jwks_urls": []}, "must be objects"), ({"jwks_urls": False}, "must be objects")):
             out = os.path.join(self.d, "e.json")
             with self.assertRaises(ap2.Ap2EvidenceError, msg=kw) as cm:
                 ap2.build_evidence([{"name": "m", "sd_jwt": tok}], out, **kw)
             self.assertIn(why, str(cm.exception), kw)
             self.assertFalse(os.path.exists(out), kw)
+        for kw in ({"supplied_jwk": {}}, {"supplied_jwk": []}, {"jwks_url": ""}, {"jwks_url": 0}):   # the private call on its own
+            with self.assertRaises(ap2.Ap2EvidenceError, msg=kw):
+                ap2._snapshot_key(ap2.parse_sd_jwt(tok), **kw)
 
     def test_usable_keys_and_same_key_edges(self):
         # SPEC §2 (c): x and y strings, `use`/`alg` present only with their value, `key_ops` a LIST containing "verify";

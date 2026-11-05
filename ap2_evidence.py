@@ -1344,7 +1344,7 @@ def _build_evidence(artifacts: List[Dict], out_path: str,
     used, records bindings, and writes ONE self-contained evidence file. Any artifact that
     fails to verify aborts the build (an evidence file must never contain a red light
     dressed as evidence — fail-closed at the source)."""
-    keys, jwks_urls = keys or {}, jwks_urls or {}
+    keys, jwks_urls = {} if keys is None else keys, {} if jwks_urls is None else jwks_urls   # 1.7.3: None only; [] or 0 is no object
     if not isinstance(keys, dict) or not isinstance(jwks_urls, dict):
         raise Ap2EvidenceError("keys and jwks_urls must be objects from artifact name to key / URL (SPEC §2 (b))")
     names = [a["name"] for a in artifacts]
