@@ -6,8 +6,10 @@ SPEC §12, the optional top-level block `not_before`, inside the §3 digest: one
 payer's and payee's IBANs (MOD 97-10 checked before committing) and, optionally, to the names and the payer's details —
 no personal data in clear; disclosure {member, salt, value} on request, deletion by destroying the salts — the amount, the
 currency, a payment id (Max35Text, SEPA set), a record salt and a NIST Beacon 2.0 value, beside the named pulse, its
-predecessor and the certificate. Member names and commitment encoding: SHA-256("cryptovalid-payment/1/" || member || 0x00
-|| 16-byte salt || value), the rules decided for cryptovalid-payment/1 (§12.6 names what cryptovalid's text said). `verify` checks the pulses (signatures, outputValue, chain, commitment, pinned
+predecessor and the certificate. Commitment encoding and the five commitment member names: SHA-256("cryptovalid-payment/1/"
+|| member || 0x00 || 16-byte salt || normalised value), as cryptovalid-payment/1; a committed or disclosed name uses only
+code points assigned in Unicode 13.0.0, so that NFC gives the same bytes in Python and JavaScript (§12.6 names where the
+block differs from cryptovalid's payment entry). NB3 compares a genTime with any number of fraction digits exactly. `verify` checks the pulses (signatures, outputValue, chain, commitment, pinned
 certificate), the amount against the AP2 mandate the block names (NB2), and the window [T, the earliest TSA-verified
 genTime] (NB3); a failed check makes the pack not `valid`. `build_evidence(..., not_before=...)` writes it and refuses a
 block that does not verify; `make_payment` makes the commitments from clear values; `check_disclosure` checks a disclosure. New module `ap2_nist_beacon.py`
