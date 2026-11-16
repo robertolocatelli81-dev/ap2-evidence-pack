@@ -29,7 +29,11 @@ from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 VDIR = os.path.join(_HERE, "spec", "vectors", "beacon")
 HAVE_OPENSSL = shutil.which("openssl") is not None
 IBAN_PAYER, IBAN_PAYEE = "GB82WEST12345698765432", "DE89370400440532013000"   # SWIFT IBAN registry examples
-SALT_PAYER, SALT_PAYEE = "11" * 32, "22" * 32
+SALTS = {"payer_iban_commitment": bytes(range(16)), "payee_iban_commitment": bytes(range(16, 32)),
+         "payer_name_commitment": bytes(range(32, 48)), "payer_details_commitment": bytes(range(48, 64)),
+         "payee_name_commitment": bytes(range(64, 80))}
+CLEAR = {"payer_iban": IBAN_PAYER, "payee_iban": IBAN_PAYEE, "payer_name": "Test Payer One",
+         "payer_details": "1 Test Street, Testville, XX", "payee_name": "Example Test Merchant"}
 
 
 def _rb(name):
@@ -69,13 +73,13 @@ def mandate(amount=1250, currency="EUR", extra=None):
     return K.token(c)
 
 
-def block(**over):
+def block(drop=(), **over):
     p, prev = pulse("chain2_2030310.json"), pulse("chain2_2030309.json")
-    pay = {"amount": "12.50", "currency": "EUR", "payer_iban": IBAN_PAYER, "payee_iban": IBAN_PAYEE,
-           "payment_id": "E2E-TEST-0001",
-           "payer_name_commitment": ap2.name_commitment("Test Payer One", bytes.fromhex(SALT_PAYER)),
-           "payee_name_commitment": ap2.name_commitment("Example Test Merchant", bytes.fromhex(SALT_PAYEE)),
-           "beacon": {"source": "nist-beacon-2.0", "chain_index": 2, "pulse_index": 2030310, "output_value": p["outputValue"]}}
+    pay = ap2.make_payment(payment_id="E2E-TEST-0001", amount="12.50", currency="EUR", salts=SALTS, record_salt=b"\x5a" * 16,
+                           beacon={"source": "nist-beacon-2.0", "chain_index": 2, "pulse_index": 2030310,
+                                   "output_value": p["outputValue"]}, **CLEAR)
+    for k in drop:
+        del pay[k]
     pay.update(over)
     return {"profile": "ap2-evidence-pack.not-before/1", "payment": pay,
             "mandate": {"artifact": "payment", "amount_claim": "payment_amount"},
@@ -169,11 +173,22 @@ class TestVectorsAndHelpers(unittest.TestCase):
                             n += 1
         self.assertEqual(n, 9 * sum(c.isdigit() for c in IBAN_PAYER + IBAN_PAYEE))
 
-    def test_name_commitment_known_answer(self):
-        want = hashlib.sha256(b"name-commitment/1\x00" + bytes.fromhex(SALT_PAYER) + "Test Payer One".encode()).hexdigest()
-        self.assertEqual(ap2.name_commitment("Test Payer One", bytes.fromhex(SALT_PAYER)), want)
-        # NFC: a composed and a decomposed "é" commit to the same value
-        self.assertEqual(ap2.name_commitment("Café Test", b"\0" * 32), ap2.name_commitment("Café Test", b"\0" * 32))
+    def test_commitment_known_answer(self):
+        """The encoding written out here, not taken from ap2_evidence (a mutant of it must not pass)."""
+        salt = bytes(range(16))
+        want = hashlib.sha256(b"cryptovalid-payment/1/payer_iban_commitment\x00" + salt + IBAN_PAYER.encode()).hexdigest()
+        self.assertEqual(ap2.payment_commitment("payer_iban_commitment", salt, IBAN_PAYER), want)
+        self.assertEqual(ap2.payment_commitment("payer_iban_commitment", salt, "gb82 west 1234 5698 7654 32"), want)
+        self.assertNotEqual(ap2.payment_commitment("payee_iban_commitment", salt, IBAN_PAYER), want)   # the member is hashed
+        want = hashlib.sha256(b"cryptovalid-payment/1/payee_name_commitment\x00" + salt + "Caf\u00e9 Test".encode()).hexdigest()
+        self.assertEqual(ap2.payment_commitment("payee_name_commitment", salt, "Cafe\u0301 Test"), want)   # NFC
+        for bad in (("payer_iban_commitment", salt, "GB82WEST12345698765433"), ("payer_iban_commitment", salt[:15], IBAN_PAYER),
+                    ("payer_iban_commitment", salt + b"\0", IBAN_PAYER), ("payer_name_commitment", salt, ""),
+                    ("payer_name_commitment", salt, "x" * 1025), ("payer_iban", salt, IBAN_PAYER),
+                    ("payer_iban_commitment", salt, "GB82WE\u00dfT12345698765432"),   # non-ASCII refused before upper case
+                    ("payer_iban_commitment", salt, "GB82WE\u017fT12345698765432")):  # long s: its upper case IS the example
+            with self.assertRaises(ValueError):
+                ap2.payment_commitment(*bad)
 
     def test_amount_minor_units(self):
         f = ap2._amount_equals_minor
@@ -199,9 +214,9 @@ class TestPositive(Base):
         self.assertEqual(nb["window"]["not_before"], "2026-11-16T13:11:00Z")
         self.assertEqual(nb["window"]["not_before_operator_promise"], "2026-11-16T13:10:00Z")
         self.assertIsNotNone(nb["window"]["not_after"])
-        self.assertEqual(nb["payer_iban_in_mandate"], []); self.assertEqual(nb["payee_iban_in_mandate"], [])
         self.assertEqual(nb["mandate_payee"], {"id": "merchant-test-1", "name": "Example Test Merchant"})
-        self.assertIn("payer_iban", nb["covers"])
+        self.assertIn("payer_iban_commitment", nb["covers"]); self.assertIn("record_salt", nb["covers"])
+        self.assertNotIn("beacon", nb["covers"])               # the beacon value is the bound, not a covered field
 
     def test_without_tsa_cert_the_window_stays_open(self):
         r = ap2.verify_evidence(self.build())
@@ -209,17 +224,48 @@ class TestPositive(Base):
         self.assertEqual(r["not_before"]["state"], "not_evaluated")
         self.assertTrue(r["valid"])
 
-    def test_iban_signed_by_the_mandate_is_named(self):
-        tok = mandate(extra={"payment_instrument": {"id": IBAN_PAYER, "type": "sepa_account"}})
-        r = self.verify(self.build(tok=tok))
-        self.assertEqual(r["not_before"]["payer_iban_in_mandate"], ["payment_instrument.id"])
-
-    def test_name_disclosure(self):
+    def test_no_clear_personal_data_in_the_pack(self):
         p = self.build()
-        self.assertTrue(ap2.check_name_disclosure(p, "payer", "Test Payer One", SALT_PAYER)["matches"])
-        self.assertFalse(ap2.check_name_disclosure(p, "payer", "Test Payer Two", SALT_PAYER)["matches"])
-        self.assertFalse(ap2.check_name_disclosure(p, "payee", "Example Test Merchant", SALT_PAYER)["matches"])
-        self.assertTrue(ap2.check_name_disclosure(p, "payee", "Example Test Merchant", SALT_PAYEE)["matches"])
+        text = open(p, encoding="utf-8").read()
+        ev = json.loads(text)
+        block_text = json.dumps(ev["not_before"], ensure_ascii=False)
+        for v in list(CLEAR.values()) + ["GB82 WEST", "DE89 3704"]:
+            self.assertNotIn(v, block_text, v)                 # nothing in clear in OUR block
+        for k in ("payer_iban", "payee_iban", "payer_name", "payer_details"):
+            self.assertNotIn(CLEAR[k], text, k)                  # nor anywhere in the file
+        # the merchant's name is in clear inside the AP2 mandate (AP2's format, payee.name, signed by its issuer): not ours
+        self.assertIn(CLEAR["payee_name"], json.dumps(ev["artifacts"][0]["resolved_claims"]))
+
+    def test_disclosure(self):
+        p = self.build()
+        D = lambda m, salt, v: ap2.check_disclosure(p, {"member": m, "salt": salt.hex() if isinstance(salt, bytes) else salt, "value": v})["outcome"]
+        for m, key in (("payer_iban_commitment", "payer_iban"), ("payee_iban_commitment", "payee_iban"),
+                       ("payer_name_commitment", "payer_name"), ("payer_details_commitment", "payer_details"),
+                       ("payee_name_commitment", "payee_name")):
+            self.assertEqual(D(m, SALTS[m], CLEAR[key]), "matches", m)
+            other = SALTS["payee_name_commitment" if m != "payee_name_commitment" else "payer_name_commitment"]
+            self.assertEqual(D(m, other, CLEAR[key]), "disclosure_mismatch", m)                       # another member's salt
+        self.assertEqual(D("payer_iban_commitment", SALTS["payer_iban_commitment"], "gb82 west1234 5698765432"), "matches")
+        self.assertEqual(D("payer_iban_commitment", SALTS["payer_iban_commitment"], IBAN_PAYEE), "disclosure_mismatch")
+        self.assertEqual(D("payee_iban_commitment", SALTS["payer_iban_commitment"], IBAN_PAYER), "disclosure_mismatch")   # value of another member
+        self.assertEqual(D("payer_iban_commitment", SALTS["payer_iban_commitment"], "GB82WEST12345698765433"), "disclosure_iban_invalid")
+        self.assertEqual(D("payer_iban_commitment", SALTS["payer_iban_commitment"], "GB82WE\u00dfT12345698765432"), "disclosure_iban_invalid")
+        self.assertEqual("GB82WE\u017fT12345698765432".upper(), IBAN_PAYER)          # so only the ASCII rule refuses it
+        self.assertEqual(D("payer_iban_commitment", SALTS["payer_iban_commitment"], "GB82WE\u017fT12345698765432"), "disclosure_iban_invalid")
+        self.assertEqual(D("payer_name_commitment", SALTS["payer_name_commitment"], "Test Payer Two"), "disclosure_mismatch")
+        self.assertEqual(D("payee_name_commitment", SALTS["payee_name_commitment"], "Example Test Merchant "), "disclosure_mismatch")
+        p2 = self.build(nb=block(drop=("payer_details_commitment",)), name="p2.json")
+        self.assertEqual(ap2.check_disclosure(p2, {"member": "payer_details_commitment", "salt": "00" * 16, "value": "x"})["outcome"], "member_absent")
+        ev = self.load(p); ev["not_before"]["payment"]["payer_iban_commitment"] = ev["not_before"]["payment"]["payer_iban_commitment"].upper()
+        with self.assertRaises(ap2.Ap2EvidenceError):           # a block outside §12.2 is never used to open a commitment
+            ap2.check_disclosure(self.write(ev, "bad.json"), {"member": "payee_iban_commitment",
+                                                              "salt": SALTS["payee_iban_commitment"].hex(), "value": IBAN_PAYEE})
+        for bad in ({"member": "payer_iban", "salt": "00" * 16, "value": "x"}, {"member": "payer_iban_commitment", "salt": "00" * 15, "value": "x"},
+                    {"member": "payer_iban_commitment", "salt": "AA" * 16, "value": "x"}, {"member": "payer_iban_commitment", "salt": "00" * 16, "value": ""},
+                    {"member": "payer_iban_commitment", "salt": "00" * 16, "value": 5}, {"member": "payer_iban_commitment", "salt": "00" * 16},
+                    {"member": "payer_iban_commitment", "salt": "00" * 16, "value": "x", "extra": 1}, ["payer_iban_commitment"]):
+            with self.assertRaises(ap2.Ap2EvidenceError):
+                ap2.check_disclosure(p, bad)
 
     def test_without_the_block_nothing_changes(self):
         out = os.path.join(self.d, "plain.json")
@@ -232,8 +278,8 @@ class TestAfterSealing(Base):
     """A change after sealing breaks the digest; the same change re-sealed by the producer is judged by NB2/NB3."""
     def test_changed_after_sealing(self):
         ev = self.load(self.build())
-        for path, val in ((("amount",), "12.51"), (("currency",), "USD"), (("payee_iban",), IBAN_PAYER),
-                          (("payer_iban",), IBAN_PAYEE), (("payment_id",), "E2E-TEST-0002"),
+        for path, val in ((("amount",), "12.51"), (("currency",), "USD"), (("payee_iban_commitment",), "1" * 64),
+                          (("payer_iban_commitment",), "2" * 64), (("payment_id",), "E2E-TEST-0002"), (("record_salt",), "5b" * 16),
                           (("payer_name_commitment",), "0" * 64), (("beacon", "output_value"), pulse("chain2_2030309.json")["outputValue"])):
             e = copy.deepcopy(ev)
             tgt = e["not_before"]["payment"]
@@ -377,11 +423,17 @@ class TestClosed(Base):
             for k in path:
                 tgt0 = tgt0[k]
             for k in list(tgt0):
+                if k in ap2.TEXT_MEMBERS:
+                    continue            # optional: absent is allowed (test_optional_members)
                 nb = copy.deepcopy(nb0); tgt = nb
                 for p in path:
                     tgt = tgt[p]
                 del tgt[k]
                 self.refused(nb, "malformed")
+
+    def test_optional_members(self):
+        r = self.verify(self.build(nb=block(drop=ap2.TEXT_MEMBERS)))
+        self.assertTrue(r["valid"]); self.assertNotIn("payer_name_commitment", r["not_before"]["covers"])
 
     def test_wrong_types(self):
         wrong = [None, True, 0, 1.5, "x", [], {}]
@@ -400,13 +452,23 @@ class TestClosed(Base):
                     self.refused(nb)
 
     def test_malformed_values(self):
-        for over in ({"payer_iban": "GB82WEST12345698765433"}, {"payee_iban": "de89370400440532013000"},
-                     {"payee_iban": "DE89 3704 0044 0532 0130 00"}, {"amount": "0"}, {"amount": "0.00"}, {"amount": "012.50"},
+        for over in ({"payer_iban_commitment": "AB" * 32}, {"payee_iban_commitment": "ab" * 31}, {"payer_name_commitment": "g" * 64},
+                     {"payer_details_commitment": ""}, {"payee_name_commitment": "ab" * 33}, {"record_salt": "ab" * 15},
+                     {"record_salt": "ab" * 65}, {"record_salt": "AB" * 16}, {"record_salt": "a" * 33},
+                     {"amount": "0"}, {"amount": "0.00"}, {"amount": "012.50"},
                      {"amount": "12.50000"}, {"amount": "1e3"}, {"amount": "-1"}, {"amount": " 12.50"}, {"currency": "eur"},
                      {"currency": "EURO"}, {"payment_id": ""}, {"payment_id": "x" * 36}, {"payment_id": " E2E"},
-                     {"payment_id": "E2E\n1"}, {"payment_id": "E2E_1"}, {"payer_name_commitment": "AB" * 32},
-                     {"payee_name_commitment": "ab" * 31}, {"amount": 12.5}, {"amount": 1250}):
-            self.refused(block(**over), "malformed")
+                     {"payment_id": "E2E "}, {"payment_id": "E2E\n1"}, {"payment_id": "E2E_1"}, {"payment_id": "E2E\u00e91"},
+                     {"amount": 12.5}, {"amount": 1250}, {"payer_iban": IBAN_PAYER}):
+            self.refused(block(**over))
+        for rs in (b"\0" * 15, b"\0" * 65, "00" * 16):        # record salt: 16 to 64 bytes
+            with self.assertRaises(ValueError):
+                ap2.make_payment(payment_id="E", amount="1", currency="EUR", payer_iban=IBAN_PAYER, payee_iban=IBAN_PAYEE,
+                                 beacon={}, salts=SALTS, record_salt=rs)
+        with self.assertRaises(ValueError):                    # an IBAN that fails MOD 97-10 is never committed
+            ap2.make_payment(
+                payment_id="E", amount="1", currency="EUR", payer_iban="GB82WEST12345698765433", payee_iban=IBAN_PAYEE,
+                beacon={}, salts=SALTS, record_salt=b"\0" * 16)
         nb = block(); nb["payment"]["beacon"]["source"] = "curby"; self.refused(nb)
         nb = block(); nb["profile"] = "ap2-evidence-pack.not-before/2"; self.refused(nb)
         nb = block(); nb["pulses"]["certificate"] += nb["pulses"]["certificate"]; self.refused(nb)

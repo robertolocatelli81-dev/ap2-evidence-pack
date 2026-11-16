@@ -1689,27 +1689,37 @@ def derive_states(*, digest_ok, art_results, binding_set_match, ts_block, rfc_bl
 
 
 # ────────────────────────────────────────────────────────── not-before block (SPEC §12, 1.8.0-draft)
-# OURS: a NIST Beacon value inside the sealed content, in one object with the payment it dates — the payer's and payee's
-# IBANs, the amount, the currency, a unique payment id and salted commitments to the two names (Regulation (EU) 2023/1113
-# Art. 5(1) minimum; names disclosable on request, Art. 5(2)). The field names and rules of amount, currency, payer_iban,
-# payee_iban and beacon are those of cryptovalid-opencore SPEC §18-§19 (cryptovalid-payment/1). The AP2 mandates are not
+# OURS: a NIST Beacon value inside the sealed content, in one object with the payment it dates — salted commitments to the
+# payer's and payee's IBANs (and names, details), the amount, the currency, a payment id and a record salt (Regulation (EU)
+# 2023/1113 Art. 5(1) minimum; disclosure on request, Art. 5(2); no personal data in clear). Member names and commitment
+# encoding: the cryptovalid-payment/1 rules decided for the three projects (SPEC §12.2, §12.6). The AP2 mandates are not
 # changed: the block names the mandate artifact and the path where its issuer signed the amount.
 NOT_BEFORE_PROFILE = "ap2-evidence-pack.not-before/1"
-NAME_COMMITMENT_LABEL = b"name-commitment/1\x00"
+COMMITMENT_LABEL = b"cryptovalid-payment/1/"
+IBAN_MEMBERS = ("payer_iban_commitment", "payee_iban_commitment")
+TEXT_MEMBERS = ("payer_name_commitment", "payer_details_commitment", "payee_name_commitment")
+COMMITMENT_MEMBERS = IBAN_MEMBERS + TEXT_MEMBERS
 # ISO 4217 minor units of the currencies whose amount NB2 can compare with an AP2 integer (closed; another currency:
 # not_evaluated). Values as published in the ISO 4217 list (USD, EUR, GBP, CHF 2; JPY 0); not re-read online today.
 MINOR_UNITS = {"EUR": 2, "USD": 2, "GBP": 2, "CHF": 2, "JPY": 0}
 _AMOUNT = re.compile(r"(0|[1-9][0-9]{0,17})(?:\.([0-9]{1,4}))?")
 _HEX64L = re.compile(r"[0-9a-f]{64}")
+_HEX32L = re.compile(r"[0-9a-f]{32}")
+_RECORD_SALT = re.compile(r"(?:[0-9a-f]{2}){16,64}")
 _HEX128 = re.compile(r"[0-9A-Fa-f]{128}")
 _PAYMENT_ID = re.compile(r"[A-Za-z0-9/?:().,'+ -]{1,35}")
 _NB_KEYS = {"profile": (lambda v: v == NOT_BEFORE_PROFILE, repr(NOT_BEFORE_PROFILE), True),
             "payment": (_is_obj, "an object", True), "mandate": (_is_obj, "an object", True),
             "pulses": (_is_obj, "an object", True)}
-_NB_PAYMENT_KEYS = {"amount": (_is_str, "a string", True), "currency": (_is_str, "a string", True),
-                    "payer_iban": (_is_str, "a string", True), "payee_iban": (_is_str, "a string", True),
-                    "payment_id": (_is_str, "a string", True), "payer_name_commitment": (_is_str, "a string", True),
-                    "payee_name_commitment": (_is_str, "a string", True), "beacon": (_is_obj, "an object", True)}
+_NB_PAYMENT_KEYS = {"payment_id": (_is_str, "a string", True), "amount": (_is_str, "a string", True),
+                    "currency": (_is_str, "a string", True),
+                    "payer_iban_commitment": (_is_str, "a string", True), "payee_iban_commitment": (_is_str, "a string", True),
+                    "record_salt": (_is_str, "a string", True), "beacon": (_is_obj, "an object", True),
+                    "payer_name_commitment": (_is_str, "a string", False), "payer_details_commitment": (_is_str, "a string", False),
+                    "payee_name_commitment": (_is_str, "a string", False)}
+_DISCLOSURE_KEYS = {"member": (lambda v: v in COMMITMENT_MEMBERS, "one of the five commitment members", True),
+                    "salt": (lambda v: _is_str(v) and _HEX32L.fullmatch(v) is not None, "32 lowercase hexadecimal characters", True),
+                    "value": (lambda v: _is_str(v) and 0 < len(v) <= 1024, "a non-empty string of at most 1024 characters", True)}
 _NB_BEACON_KEYS = {"source": (lambda v: v == "nist-beacon-2.0", '"nist-beacon-2.0"', True),
                    "chain_index": (lambda v: type(v) is int and v >= 0, "an integer >= 0", True),
                    "pulse_index": (lambda v: type(v) is int and v >= 1, "an integer >= 1", True),
@@ -1739,26 +1749,73 @@ def iban_problem(s) -> Optional[str]:
     return None if n % 97 == 1 else "iban_checksum"
 
 
-def name_commitment(name: str, salt: bytes) -> str:
-    """SPEC §12.2: lowercase hex SHA-256("name-commitment/1" || 0x00 || salt (32 bytes) || UTF-8 of the name in NFC)."""
+def normalise_commitment_value(member: str, value: str) -> str:
+    """SPEC §12.2: an IBAN member's value upper case with every space removed, then the IBAN rule (ValueError with the
+    reason); a name or details member's value in Unicode NFC."""
     import unicodedata
-    if not isinstance(name, str) or not name or len(salt) != 32:
-        raise ValueError("a non-empty name and a 32-byte salt")
-    return hashlib.sha256(NAME_COMMITMENT_LABEL + salt + unicodedata.normalize("NFC", name).encode("utf-8")).hexdigest()
+    if member not in COMMITMENT_MEMBERS:
+        raise ValueError(f"{member!r} is not a commitment member")
+    if not isinstance(value, str) or not 0 < len(value) <= 1024:
+        raise ValueError("a value is a non-empty string of at most 1024 characters")
+    if member in IBAN_MEMBERS:
+        if not value.isascii():                       # refused before upper case: "ß".upper() is "SS"
+            raise ValueError("iban_charset")
+        v = value.replace(" ", "").upper()
+        why = iban_problem(v)
+        if why:
+            raise ValueError(why)
+        return v
+    return unicodedata.normalize("NFC", value)
 
 
-def check_name_disclosure(path: str, which: str, name: str, salt_hex: str) -> Dict:
-    """SPEC §12.4: a name disclosed on request (Art. 5(2)) against the commitment the pack sealed. Read-only."""
-    if which not in ("payer", "payee") or not (isinstance(salt_hex, str) and _HEX64L.fullmatch(salt_hex)):
-        raise ValueError("which is payer or payee; the salt 64 lowercase hex digits")
+def payment_commitment(member: str, salt: bytes, value: str) -> str:
+    """SPEC §12.2: lowercase hex SHA-256("cryptovalid-payment/1/" || member || 0x00 || salt (16 bytes) || UTF-8(value)),
+    the value normalised first (normalise_commitment_value)."""
+    if not isinstance(salt, (bytes, bytearray)) or len(salt) != 16:
+        raise ValueError("the salt is exactly 16 bytes")
+    v = normalise_commitment_value(member, value)
+    return hashlib.sha256(COMMITMENT_LABEL + member.encode("ascii") + b"\x00" + bytes(salt) + v.encode("utf-8")).hexdigest()
+
+
+def make_payment(*, payment_id: str, amount: str, currency: str, payer_iban: str, payee_iban: str, beacon: Dict,
+                 salts: Dict[str, bytes], record_salt: bytes, payer_name: Optional[str] = None,
+                 payer_details: Optional[str] = None, payee_name: Optional[str] = None) -> Dict:
+    """SPEC §12.2: the `payment` object from clear values — only commitments are returned; the caller keeps the clear
+    values and `salts` (member -> 16 bytes) outside the pack."""
+    if not isinstance(record_salt, (bytes, bytearray)) or not 16 <= len(record_salt) <= 64:
+        raise ValueError("record_salt is 16 to 64 bytes")
+    pay = {"payment_id": payment_id, "amount": amount, "currency": currency, "record_salt": bytes(record_salt).hex(),
+           "beacon": beacon}
+    for member, value in (("payer_iban_commitment", payer_iban), ("payee_iban_commitment", payee_iban),
+                          ("payer_name_commitment", payer_name), ("payer_details_commitment", payer_details),
+                          ("payee_name_commitment", payee_name)):
+        if value is not None:
+            pay[member] = payment_commitment(member, salts[member], value)
+    return pay
+
+
+def check_disclosure(path: str, disclosure) -> Dict:
+    """SPEC §12.2: a disclosure {member, salt, value} (Art. 5(2)) against the commitment the pack sealed. Read-only.
+    Returns {"member", "outcome": "matches" | "disclosure_mismatch" | "member_absent" | "disclosure_iban_invalid",
+    "reason"?} (the names of cryptovalid-opencore SPEC §18).
+    Raises Ap2EvidenceError for a disclosure outside its grammar or a pack without a valid block."""
+    _check_closed(disclosure, "disclosure", _DISCLOSURE_KEYS)
     ev = read_evidence_file(path)
     nb = ev.get("not_before")
     if not isinstance(nb, dict):
         raise Ap2EvidenceError("the pack carries no not_before block (SPEC §12)")
     parse_not_before(nb)
-    want = nb["payment"][which + "_name_commitment"]
-    return {"which": which, "matches": name_commitment(name, bytes.fromhex(salt_hex)) == want,
-            "note": "the pack's digest must also verify (verify) for the commitment to be the sealed one"}
+    m = disclosure["member"]
+    out = {"member": m, "note": "the pack must also verify (verify) for the commitment to be the sealed one"}
+    if m in IBAN_MEMBERS:
+        v = disclosure["value"]
+        why = "iban_charset" if not v.isascii() else iban_problem(v.replace(" ", "").upper())
+        if why:
+            return dict(out, outcome="disclosure_iban_invalid", reason=why)
+    if m not in nb["payment"]:
+        return dict(out, outcome="member_absent")
+    got = payment_commitment(m, bytes.fromhex(disclosure["salt"]), disclosure["value"])
+    return dict(out, outcome="matches" if got == nb["payment"][m] else "disclosure_mismatch")
 
 
 def _resolve_path(node, path: str):
@@ -1789,19 +1846,6 @@ def _resolve_path(node, path: str):
     return _MISSING if first else node
 
 
-def _paths_of_string(node, value, path=""):
-    out = []
-    if isinstance(node, dict):
-        for k, v in node.items():
-            out += _paths_of_string(v, value, f"{path}.{k}" if path else k)
-    elif isinstance(node, list):
-        for i, v in enumerate(node):
-            out += _paths_of_string(v, value, f"{path}[{i}]")
-    elif isinstance(node, str) and node == value:
-        out.append(path)
-    return out
-
-
 def parse_not_before(nb) -> Dict:
     """SPEC §12.2: the closed block. Raises Ap2UnknownMember / Ap2EvidenceError naming the member and the reason."""
     if _nb is None:
@@ -1819,14 +1863,12 @@ def parse_not_before(nb) -> Dict:
         raise Ap2EvidenceError("not_before.payment.amount: not greater than zero (SPEC §12.2)")
     if not re.fullmatch(r"[A-Z]{3}", pay["currency"]):
         raise Ap2EvidenceError("not_before.payment.currency: not three capital letters A-Z (SPEC §12.2)")
-    for k in ("payer_iban", "payee_iban"):
-        why = iban_problem(pay[k])
-        if why:
-            raise Ap2EvidenceError(f"not_before.payment.{k}: {why} (SPEC §12.2)")
+    if not _RECORD_SALT.fullmatch(pay["record_salt"]):
+        raise Ap2EvidenceError("not_before.payment.record_salt: not 32 to 128 lowercase hexadecimal characters, an even number (SPEC §12.2)")
     p = pay["payment_id"]
     if not _PAYMENT_ID.fullmatch(p) or p != p.strip(" "):
         raise Ap2EvidenceError("not_before.payment.payment_id: not 1 to 35 characters of the allowed set (SPEC §12.2)")
-    for k in ("payer_name_commitment", "payee_name_commitment"):
+    for k in (m for m in COMMITMENT_MEMBERS if m in pay):
         if not _HEX64L.fullmatch(pay[k]):
             raise Ap2EvidenceError(f"not_before.payment.{k}: not 64 lowercase hexadecimal characters (SPEC §12.2)")
     for k in ("pulse", "previous_pulse"):
@@ -1865,10 +1907,9 @@ def check_not_before(nb: Dict, ev: Dict, art_results: List[Dict], proven_time: O
     pay = nb["payment"]
     out = {"profile": NOT_BEFORE_PROFILE, "source": "nist-beacon-2.0", "chain": r["chain"], "pulse": r["pulse"],
            "time": T.strftime(fmt), "certificate_id": r["certificate_id"], "checks": {},
-           "covers": ["payer_iban", "payee_iban", "amount", "currency", "payment_id", "payer_name_commitment",
-                      "payee_name_commitment", "mandate:" + nb["mandate"]["artifact"]],
+           "covers": sorted(k for k in pay if k != "beacon") + ["mandate:" + nb["mandate"]["artifact"]],
            "window": {"not_before": None, "not_before_operator_promise": None, "not_after": None},
-           "payer_iban_in_mandate": [], "payee_iban_in_mandate": [], "mandate_payee": None}
+           "mandate_payee": None}
     c = out["checks"]
     b = pay["beacon"]
     if not r["ok"]:
@@ -1896,8 +1937,6 @@ def check_not_before(nb: Dict, ev: Dict, art_results: List[Dict], proven_time: O
                 eq = _amount_equals_minor(pay["amount"], pay["currency"], v["amount"])
                 c["NB2"] = ("not_evaluated:currency_minor_unit_unknown" if eq is None
                             else "verified" if eq else "failed:amount_not_the_mandate_amount")
-            out["payer_iban_in_mandate"] = _paths_of_string(claims, pay["payer_iban"])
-            out["payee_iban_in_mandate"] = _paths_of_string(claims, pay["payee_iban"])
             dp = claims.get("delegate_payload") if isinstance(claims, dict) else None
             for holder in (claims, dp[0] if isinstance(dp, list) and dp else None):
                 if isinstance(holder, dict) and isinstance(holder.get("payee"), dict):

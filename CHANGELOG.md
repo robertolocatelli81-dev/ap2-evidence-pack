@@ -2,13 +2,15 @@
 
 ## Unreleased (1.8.0-draft, local) — a "not before" bound: a NIST Beacon value sealed with the payment
 
-SPEC §12, the optional top-level block `not_before`, inside the §3 digest: one object with the payer's and payee's IBANs
-(ISO 13616 MOD 97-10), the amount and currency (the names and rules of cryptovalid-opencore SPEC §18), a payment id, salted
-commitments to the two names (never in clear; disclosable on request), and a NIST Beacon 2.0 value, beside the named pulse,
-its predecessor and the certificate. `verify` checks the pulses (signatures, outputValue, chain, commitment, pinned
+SPEC §12, the optional top-level block `not_before`, inside the §3 digest: one object with salted commitments to the
+payer's and payee's IBANs (MOD 97-10 checked before committing) and, optionally, to the names and the payer's details —
+no personal data in clear; disclosure {member, salt, value} on request, deletion by destroying the salts — the amount, the
+currency, a payment id (Max35Text, SEPA set), a record salt and a NIST Beacon 2.0 value, beside the named pulse, its
+predecessor and the certificate. Member names and commitment encoding: SHA-256("cryptovalid-payment/1/" || member || 0x00
+|| 16-byte salt || value), the rules decided for cryptovalid-payment/1 (§12.6 names what cryptovalid's text said). `verify` checks the pulses (signatures, outputValue, chain, commitment, pinned
 certificate), the amount against the AP2 mandate the block names (NB2), and the window [T, the earliest TSA-verified
 genTime] (NB3); a failed check makes the pack not `valid`. `build_evidence(..., not_before=...)` writes it and refuses a
-block that does not verify. `check_name_disclosure` recomputes a name commitment. New module `ap2_nist_beacon.py`
+block that does not verify; `make_payment` makes the commitments from clear values; `check_disclosure` checks a disclosure. New module `ap2_nist_beacon.py`
 (prototype, standard library). The AP2 mandates are unchanged; a pack without the block is read as by 1.7.3; a 1.7.3
 verifier refuses a pack with it (unknown top-level key). The JavaScript verifier does not read the block yet (SPEC §12.6).
 
