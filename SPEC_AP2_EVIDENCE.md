@@ -3,6 +3,10 @@
 
 # ap2-evidence-pack — normative format v1.0 (2026-09-05), specification revision 1.7.3 (2026-11-03)
 
+> Revision 1.8.0-draft (2026-11-16, local, not released): §12, the `not_before` block — a NIST Beacon pulse inside the sealed
+> content, in one object with the payer's and payee's IBANs, the amount, the currency, a payment id and salted commitments
+> to the names; a lower time bound to go with the RFC 3161 upper one. A pack without the block is read exactly as by 1.7.3; a 1.7.3 verifier refuses a pack with it (unknown top-level key).
+>
 > Revision 1.7.3 (2026-11-03): §2, the key the caller names for an artifact is the verification key, whatever the
 > protected header carries; the JWKS key is chosen by a written rule (`kid`, one usable key, otherwise a refusal); every
 > key source of the header that was not used is compared when it carries a key (a different key is a refusal) and named
@@ -730,7 +734,7 @@ after JSON unescaping — `"subj\u0065ct"` IS `subject`).
 
 | Object | Keys (type) | Unknown / wrong type / missing MUST |
 |---|---|---|
-| top level | `evidence_format` (string, MUST), `subject` (string, MUST), `created_utc` (string, MUST), `artifacts` (list, MUST), `bindings` (list; absent reads as `[]`), `honest_scope` (string, MUST), `evidence_digest_sha256` (string, MUST), `rfc3161_timestamp` (object), `producer_signatures` (object), `anchors` (non-empty list, 1.5.0) | refusal |
+| top level | `evidence_format` (string, MUST), `subject` (string, MUST), `created_utc` (string, MUST), `artifacts` (list, MUST), `bindings` (list; absent reads as `[]`), `honest_scope` (string, MUST), `evidence_digest_sha256` (string, MUST), `rfc3161_timestamp` (object), `producer_signatures` (object), `anchors` (non-empty list, 1.5.0), `not_before` (object, 1.8.0-draft, closed at every level as §12.2 states) | refusal |
 | `anchors[i]` (1.5.0) | `mechanism` (string, MUST, one of the mechanisms of §3.3: `"rfc3161"`); for `rfc3161`: `tsr_b64` (string, MUST), `tsa_url` (string), `note` (string); an entry that is not an object | refusal (an unknown `mechanism` is named: `anchors[i]: mechanism "x" is not defined by this revision (SPEC §3.3)`) |
 | `rfc3161_timestamp` | `anchored` (boolean, MUST), `tsr_b64` (string; when `anchored` is true and it is ABSENT the §6.4 rule applies: `rfc3161_verified: false`, not a refusal), `tsa_url` (string), `tsa` (string, 1.0–1.3 spelling), `note` (string) | refusal |
 | `producer_signatures` | `scheme` (`"hybrid"` or `"classical-only"`, MUST), `over` (`"evidence_digest_sha256"`, MUST), `signatures` (list, MUST) | refusal |
@@ -1154,3 +1158,132 @@ not account for what O already authorised), and AP2 revisions after `e1ea56d`. A
 the equalities of §11.4 in three places (allowed lists, date forms, the order of `checkout.line_items` entries): there the
 profile can say `contradicted` or `not_evaluated` where AP2 would find the terms equivalent — never `verified` where they
 are broader.
+
+## 12. Not-before block `not_before` (revision 1.8.0-draft, 2026-11-16, local; NORMATIVE when present)
+
+### 12.1 Why, what binds the payment today, and what is ours
+Up to 1.7.3 a pack has an upper time bound only: an RFC 3161 token over the digest (§3.2, §3.3) shows the sealed content
+existed by the TSA's time. Nothing bounds it from below: `created_utc` is the producer's statement. A value published by a
+randomness beacon at time T and unpredictable before T, placed INSIDE the sealed content, bounds the sealing from below.
+
+What binds the payment today, measured on 1.7.3 and on AP2 at `e1ea56d` (`code/sdk/schemas/ap2/payment_mandate.json`,
+`types/amount.json`, `types/merchant.json`, `types/payment_instrument.json`): the AP2 Payment Mandate carries
+`payment_amount` `{amount (integer, ISO 4217 minor units), currency (ISO 4217 code)}`, `payee` `{id, name[, website]}` (the
+merchant), `payment_instrument` `{id, type[, description]}`, optionally `pisp`, and `transaction_id` (a hash of the
+checkout); its issuer signs it (ES256, an SD-JWT) and the holder's KB-JWT signs its `sd_hash`. The payer is not named by a
+field: it is the holder of the key in `cnf`. AP2 defines no IBAN and no bank account field (no member named or described
+as one in the schemas or in `docs/ap2/*.md` at `e1ea56d`). These mandates are AP2's (Google's), NOT ours: this section
+changes nothing in them. OURS is the pack: its top level and §3 digest, which covers every artifact's `sd_jwt_compact` and
+`resolved_claims` byte for byte, and the producer signatures over that digest (§5).
+
+Against the minimum of a transfer of funds in Regulation (EU) 2023/1113 Art. 5(1) (read 2026-11-16: the payer's and
+payee's payment account numbers, or a unique transaction identifier; names and the rest of Art. 4 on request within three
+working days, Art. 5(2)), a 1.7.3 pack binds: the amount and currency (the mandate's issuer signed them); a unique id of
+AP2's (`transaction_id`); NOT the payer's or payee's IBAN (no field); the payee's name in clear (`payee.name`, the
+merchant, signed by the issuer); no payer name. The block below adds, in OUR layer, the missing items and the beacon.
+
+### 12.2 The block (closed at every level, §9.1; inside the digest: §3 does not exclude it)
+```
+"not_before": {
+  "profile": "ap2-evidence-pack.not-before/1",
+  "payment": {"amount": <decimal string>, "currency": <3 capital letters>,
+              "payer_iban": <IBAN>, "payee_iban": <IBAN>,
+              "payment_id": <1..35 characters>,
+              "payer_name_commitment": <64 lowercase hex>, "payee_name_commitment": <64 lowercase hex>,
+              "beacon": {"source": "nist-beacon-2.0", "chain_index": <integer ≥ 0>, "pulse_index": <integer ≥ 1>,
+                         "output_value": <128 hex digits, either case>}},
+  "mandate": {"artifact": <name of an artifact of this pack>, "amount_claim": <path in its resolved claims, §4 syntax>},
+  "pulses":  {"pulse": <the NIST pulse `pulse_index`, as served under "pulse">,
+              "previous_pulse": <the pulse before it, as served>,
+              "certificate": <the PEM certificate served at /beacon/2.0/certificate/<certificateId>>}
+}
+```
+Every member is MUST. A key outside these lists: refusal `unknown_member`; a missing key, a wrong JSON type (a boolean is
+not an integer, a number is not an amount string) or a value of another form: refusal `malformed`, naming the member and
+the reason. The rules of `amount`, `currency`, `payer_iban`, `payee_iban` and `beacon` are those of cryptovalid-opencore
+SPEC §18 and §19 rule 1 (profile `cryptovalid-payment/1`, read 2026-11-16 at f27c828 and its working tree), with the same
+names, so that the three projects write one payment the same way:
+- `amount`: a string, `0` or 1 to 18 digits not starting with 0, then optionally `.` and 1 to 4 digits; greater than zero.
+- `currency`: three capital letters A-Z (membership of the ISO 4217 list is not checked).
+- IBAN: ISO 13616-1 electronic form — two capital letters, check digits 02-98, then 11 to 30 capital letters or digits, 15
+  to 34 characters, no space; ISO 7064 MOD 97-10 = 1. Reasons: `iban_charset`, `iban_length`, `iban_check_digits`,
+  `iban_checksum`. The SWIFT registry's per-country length and BBAN structure are not checked (12.6).
+- `payment_id`: 1 to 35 characters of `A-Z a-z 0-9 / ? : ( ) . , ' + -` and space, not starting or ending with a space (the
+  length of the ISO 20022 `EndToEndId`, Max35Text; the character set is the SEPA Latin set as commonly published, NOT
+  re-read against the EPC rulebook or the ISO 20022 schema today). Uniqueness is the producer's: a verifier sees one pack.
+- `payer_name_commitment`, `payee_name_commitment`: lowercase hex SHA-256(UTF-8 "name-commitment/1" || 0x00 || salt (32
+  bytes) || UTF-8 of the name in Unicode NFC). The names are never written in clear (GDPR data minimisation); the producer
+  keeps each salt and, on request (Art. 5(2)), discloses name and salt; `check_name_disclosure` recomputes the commitment.
+  NOTE: cryptovalid-opencore SPEC §18 did not define `payment_id` or the name commitments on 2026-11-16; these three
+  names and this encoding are PROVISIONAL and must be made equal to its definition when it exists.
+- `beacon.source` a closed list (`nist-beacon-2.0`); the pulses are closed as `ap2_nist_beacon.check_grammar` states (their
+  fifteen members, `external` three, `listValues` the five types once each, fixed-length hex, the `uri` naming its own
+  chain and index, `cipherSuite` 0, `version` "2.0"); the certificate one PEM block with an RSA key.
+A producer does not write a block this section refuses, nor one whose NB1 or NB2 is not `verified` at build.
+
+### 12.3 Checks (receipt member `not_before`, present only when the pack carries the block)
+- NB1 (beacon), the checks of cryptovalid-opencore SPEC §19 rules 2-9 written again here (`ap2_nist_beacon.verify_pair`):
+  `statusCode` 0 in both pulses (`status_not_supported`); one chain, consecutive indexes (`pulse_mismatch`); equal
+  `period` and `certificateId` (`chain_inconsistent`); for each pulse, the certificate's SHA-512 = `certificateId`
+  (`certificate_not_the_certificate_id`), that id pinned for the chain in the closed list `ap2_nist_beacon.PINNED`
+  (`certificate_not_pinned_for_chain`; chain 2, the certificate measured 2026-11-16, valid 2026-10-21 to 2027-03-20), the
+  pulse time inside its validity, the RSA PKCS#1 v1.5 SHA-512 signature (`pulse_signature_invalid`) and outputValue =
+  SHA-512(signed message || signature) (a failure of the predecessor is named `previous_<reason>`); the named pulse's
+  `previous` = the predecessor's outputValue (`previous_mismatch`), its time = the predecessor's + period
+  (`period_mismatch`), SHA-512(its localRandomValue) = the predecessor's `precommitmentValue` (`commitment_mismatch`); and
+  `payment.beacon` names that pulse and carries its outputValue (compared as bytes; `beacon_value_mismatch`).
+- NB2 (the amount, against the mandate) `mandate.artifact` names an artifact of the pack (`failed:mandate_not_in_pack`)
+  whose issuer signature and claims verified (§6 step 2; else `not_evaluated:mandate_not_verified`); the value at
+  `amount_claim` is an object of exactly `amount` and `currency` (`failed:amount_claim_not_found` when there is none), its
+  currency is `payment.currency`, and its integer amount equals `payment.amount` in minor units (`failed:amount_not_the_
+  mandate_amount`), with the minor unit of the closed table `MINOR_UNITS` (EUR, USD, GBP, CHF 2; JPY 0; another currency:
+  `not_evaluated:currency_minor_unit_unknown`). The receipt names, for each IBAN, the paths of the mandate's resolved
+  claims whose string value equals it (`payer_iban_in_mandate`, `payee_iban_in_mandate`: empty when AP2's signer did not
+  sign it), and the mandate's `payee` (top level or `delegate_payload[0]`, informative).
+- NB3 (window) T = the named pulse's `timeStamp`. `created_utc` before T: `failed:created_before_beacon`. The upper bound
+  is the earliest TSA-verified genTime of §3.2/§3.3 (a token whose TSA signature verified with the relying party's
+  `--tsa-cert`): genTime before T `failed:window_inverted` (one of the two time sources is wrong or was subverted;
+  cryptovalid-opencore §19.5 uses the same name); genTime = T is one instant; no such token:
+  `not_evaluated:no_verified_time_anchor` (the window stays open above). NB3 runs only when NB1 is `verified`.
+`state` is `failed` when any of NB1-NB3 failed, `verified` when all three are, else `not_evaluated`. A pack whose
+`not_before` state is `failed` is not `valid`. `window`: `{"not_before": T, "not_before_operator_promise": T − period,
+"not_after": the genTime or null}`, the first two filled only when NB1 and NB2 are `verified`. `covers` lists the fields
+the bound covers.
+
+### 12.4 What a verified block proves, worded exactly
+With NB1, NB2 and NB3 `verified`: "the sealed content of this pack — the AP2 artifacts byte for byte, among them the mandate
+whose issuer signed amount A in currency C at path P, and, written by the producer in one object with the beacon value,
+the payer's and payee's IBANs, the amount, the currency, the payment id and the two name commitments — was put together
+after T against anyone but NIST, after T − 60 s if NIST kept its freshness promise, and existed by the TSA's genTime;
+against a NIST that breaks its promises there is no lower bound" (the bounds of cryptovalid-opencore §19.4: every input
+of outputValue is in NIST's hands; the commitment only shows the local random value was fixed by T − period).
+It does NOT prove: that the mandate was SIGNED after T (its issuer did not sign the beacon value; a mandate signed earlier
+can be sealed later); that the IBANs are the accounts of the payer and payee, or the names those of the parties (they are
+the producer's statements, sealed with the digest and signed by the producer's key when §5 signatures are present; AP2's
+issuer signed an IBAN only when `*_iban_in_mandate` is not empty, and AP2 says nothing of what that member means); that
+any money moved. A change after sealing (an IBAN, the amount, the id) breaks the digest; the same change re-sealed by the
+producer after the TSA's token is no longer the content that token binds (§3.2) — the window is what shows a later change.
+
+### 12.5 Tests (test_ap2_not_before.py)
+Real pulses and certificates (`spec/vectors/beacon/`, fetched 2026-11-16, with SHA256SUMS); the IBANs are the published
+examples of the SWIFT IBAN registry (`GB82WEST12345698765432`, `DE89370400440532013000`; a changed IBAN is the other example); mandates, names and amounts are test data. Positive control first: the 1.7.3 verifier refuses a pack
+with the block (`unknown_member`, top level) and 25 of the 28 tests fail on 1.7.3 (the three that pass there: the vectors' hashes, the pulse-pair rules of
+the beacon module, a pack without the block). Generative cases: the beacon outside the
+sealed content (beside the seal in `rfc3161_timestamp`, in `anchors`: refused); every payment field changed after sealing
+(digest); amount and currency re-sealed against the mandate (NB2), and the producer refusing to build them; the mandate's
+amount or currency changed; the mandate named wrongly; a pulse of chain 1 (refused, "Version 2.0"), the certificate of
+chain 1, another chain index, the output value in lower case (accepted, as cryptovalid); a genTime before T (window
+inverted) and equal to T; `created_utc` before T; one bit flipped in each hex field of both pulses; an unknown key at every
+level; a missing key at every level; every member with each wrong JSON type; malformed IBANs, amounts, currencies, payment
+ids and commitments; a duplicate key in the file; a copy of the verifier without the beacon module (refused,
+`format_unsupported`). The rules of the predecessor that no real NIST pair can break with valid signatures are tested on the
+pulses of a TEST beacon made by the test (a throwaway RSA key and certificate, pinned only there).
+
+### 12.6 Open
+The JavaScript verifier (`verifiers/js`) does not read the block yet: it refuses such a pack as an unknown top-level key
+(fail closed; a divergence of the two verifiers until it does). cryptovalid-opencore vendors `ap2_evidence.py` alone: that
+copy refuses a pack with the block (`format_unsupported`) until it vendors `ap2_nist_beacon.py` too. The SWIFT registry's
+per-country BBAN rules; ISO 4217 minor units beyond the closed table; the payment-id character set re-read on the official
+schema; a second beacon (CURBy, drand); the relying party's own pinned certificates; the KB-JWT `nonce` (RFC 9901 §4.3,
+chosen by the verifier) as the place where a beacon value would be inside bytes the HOLDER signs — a profile of AP2's flow,
+not of this pack. `ap2_nist_beacon.py` is a prototype, to be replaced by the beacon verifier of cryptovalid-opencore.

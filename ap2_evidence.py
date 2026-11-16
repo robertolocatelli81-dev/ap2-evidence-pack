@@ -64,7 +64,7 @@ import re
 import stat
 import sys
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from contextvars import ContextVar
 from typing import Dict, List, Optional, Tuple
 
@@ -75,6 +75,10 @@ for _pqc in ("pqcrypto", "ap2_pqcrypto"):        # the clone has pqcrypto/; the 
         sys.path.insert(0, os.path.join(_HERE, _pqc))
         break
 import sigsuite as _sigsuite  # noqa: E402  (crypto-agile hybrid classical + ML-DSA-65 producer signatures)
+try:   # SPEC §12, 1.8.0-draft: the NIST Beacon pulse check. A copy of this file without it (cryptovalid-opencore vendors
+    import ap2_nist_beacon as _nb  # noqa: E402  ap2_evidence.py alone) reads every pack but one with `not_before`
+except ImportError:   # which it refuses (format_unsupported), never verifies
+    _nb = None
 
 EVIDENCE_FORMAT = "ap2-evidence-pack/1.0"
 
@@ -617,7 +621,8 @@ def _check_unknown(obj, what: str, allowed) -> None:
 _TOP_KEYS = {"evidence_format": (_is_str, "a string", True), "subject": (_is_str, "a string", True), "created_utc": (_is_str, "a string", True),
              "artifacts": (_is_list, "a list", True), "bindings": (_is_list, "a list", False), "honest_scope": (_is_str, "a string", True),
              "evidence_digest_sha256": (_is_str, "a string", True), "rfc3161_timestamp": (_is_obj, "an object", False), "producer_signatures": (_is_obj, "an object", False),
-             "anchors": (lambda v: isinstance(v, list) and len(v) > 0, "a non-empty list", False)}   # 1.5.0 — SPEC §3.3
+             "anchors": (lambda v: isinstance(v, list) and len(v) > 0, "a non-empty list", False),   # 1.5.0 — SPEC §3.3
+             "not_before": (_is_obj, "an object", False)}   # 1.8.0-draft — SPEC §12
 _ANCHOR_MECHANISMS = ("rfc3161",)   # SPEC §3.3: the mechanisms this revision defines; any other is a refusal naming it
 _ANCHOR_RFC3161_KEYS = {"mechanism": (lambda v: v == "rfc3161", '"rfc3161"', True), "tsr_b64": (_is_str, "a string", True),
                         "tsa_url": (_is_str, "a string", False), "note": (_is_str, "a string", False)}
@@ -1314,7 +1319,7 @@ def build_evidence(artifacts: List[Dict], out_path: str,
                    tsa_url: Optional[str] = None,
                    subject: str = "agentic-payment mandate evidence",
                    extra_tsa_urls: Optional[List[str]] = None,
-                   accept_integral_floats: bool = False) -> Dict:
+                   accept_integral_floats: bool = False, not_before: Optional[Dict] = None) -> Dict:
     """See `_build_evidence`. 1.7.2 (SPEC §3.1): without `accept_integral_floats` a token whose JSON writes a number with a
     fraction or an exponent (`10.0`, as the AP2 SDK writes every budget) is refused; with it an integral one is read as its
     integer, the pack records the integer (`resolved_claims`), and the result says so and lists the literals. A pack built
@@ -1324,7 +1329,7 @@ def build_evidence(artifacts: List[Dict], out_path: str,
     tok = _INTEGRAL_READ.set([] if accept_integral_floats else None)
     try:
         r = _build_evidence(artifacts, out_path, keys=keys, jwks_urls=jwks_urls, tsa_url=tsa_url, subject=subject,
-                            extra_tsa_urls=extra_tsa_urls)
+                            extra_tsa_urls=extra_tsa_urls, not_before=not_before)
         read = _INTEGRAL_READ.get()
     finally:
         _INTEGRAL_READ.reset(tok)
@@ -1339,8 +1344,9 @@ def _build_evidence(artifacts: List[Dict], out_path: str,
                     jwks_urls: Optional[Dict[str, str]] = None,
                     tsa_url: Optional[str] = None,
                     subject: str = "agentic-payment mandate evidence",
-                    extra_tsa_urls: Optional[List[str]] = None) -> Dict:
-    """artifacts: [{name, sd_jwt}]. Verifies every artifact NOW, snapshots the key material
+                    extra_tsa_urls: Optional[List[str]] = None, not_before: Optional[Dict] = None) -> Dict:
+    """artifacts: [{name, sd_jwt}]. not_before (1.8.0-draft, SPEC §12): the block, sealed with the artifacts; refused
+    (no file) when §12.2 refuses it or when its NB1/NB2 check does not verify at build. Verifies every artifact NOW, snapshots the key material
     used, records bindings, and writes ONE self-contained evidence file. Any artifact that
     fails to verify aborts the build (an evidence file must never contain a red light
     dressed as evidence — fail-closed at the source)."""
@@ -1403,6 +1409,13 @@ def _build_evidence(artifacts: List[Dict], out_path: str,
         "bindings": find_bindings(for_bindings),
         "honest_scope": HONEST_SCOPE,
     }
+    if not_before is not None:   # 1.8.0-draft — SPEC §12: inside the digest; a producer does not write a block §12 refuses
+        parse_not_before(not_before)
+        chk = check_not_before(not_before, evidence, [{"signature_ok": True, "claims_match": True}] * len(entries), None)
+        bad = {k: v for k, v in chk["checks"].items() if k in ("NB1", "NB2") and v != "verified"}
+        if bad or chk["checks"]["NB3"].startswith("failed"):
+            raise Ap2EvidenceError(f"not_before does not verify at build: {dict(chk['checks'])} (SPEC §12)")
+        evidence["not_before"] = not_before
     try:   # 1.7.1 (SPEC §3.1): a pack the verifier's profile refuses is not written — measured on 1.7.0, `build` wrote packs
         # `verify` refused as json_too_deep (a chain of nested disclosures, a deep member of a --key JWK) or for a float
         canonical = _canon(evidence)   # a supplied key is not bounded before this line: one nested ~990 deep was a RecursionError
@@ -1675,6 +1688,246 @@ def derive_states(*, digest_ok, art_results, binding_set_match, ts_block, rfc_bl
             "producer_signature": _subject(prod), "issuer_identity": _subject(issuer)}
 
 
+# ────────────────────────────────────────────────────────── not-before block (SPEC §12, 1.8.0-draft)
+# OURS: a NIST Beacon value inside the sealed content, in one object with the payment it dates — the payer's and payee's
+# IBANs, the amount, the currency, a unique payment id and salted commitments to the two names (Regulation (EU) 2023/1113
+# Art. 5(1) minimum; names disclosable on request, Art. 5(2)). The field names and rules of amount, currency, payer_iban,
+# payee_iban and beacon are those of cryptovalid-opencore SPEC §18-§19 (cryptovalid-payment/1). The AP2 mandates are not
+# changed: the block names the mandate artifact and the path where its issuer signed the amount.
+NOT_BEFORE_PROFILE = "ap2-evidence-pack.not-before/1"
+NAME_COMMITMENT_LABEL = b"name-commitment/1\x00"
+# ISO 4217 minor units of the currencies whose amount NB2 can compare with an AP2 integer (closed; another currency:
+# not_evaluated). Values as published in the ISO 4217 list (USD, EUR, GBP, CHF 2; JPY 0); not re-read online today.
+MINOR_UNITS = {"EUR": 2, "USD": 2, "GBP": 2, "CHF": 2, "JPY": 0}
+_AMOUNT = re.compile(r"(0|[1-9][0-9]{0,17})(?:\.([0-9]{1,4}))?")
+_HEX64L = re.compile(r"[0-9a-f]{64}")
+_HEX128 = re.compile(r"[0-9A-Fa-f]{128}")
+_PAYMENT_ID = re.compile(r"[A-Za-z0-9/?:().,'+ -]{1,35}")
+_NB_KEYS = {"profile": (lambda v: v == NOT_BEFORE_PROFILE, repr(NOT_BEFORE_PROFILE), True),
+            "payment": (_is_obj, "an object", True), "mandate": (_is_obj, "an object", True),
+            "pulses": (_is_obj, "an object", True)}
+_NB_PAYMENT_KEYS = {"amount": (_is_str, "a string", True), "currency": (_is_str, "a string", True),
+                    "payer_iban": (_is_str, "a string", True), "payee_iban": (_is_str, "a string", True),
+                    "payment_id": (_is_str, "a string", True), "payer_name_commitment": (_is_str, "a string", True),
+                    "payee_name_commitment": (_is_str, "a string", True), "beacon": (_is_obj, "an object", True)}
+_NB_BEACON_KEYS = {"source": (lambda v: v == "nist-beacon-2.0", '"nist-beacon-2.0"', True),
+                   "chain_index": (lambda v: type(v) is int and v >= 0, "an integer >= 0", True),
+                   "pulse_index": (lambda v: type(v) is int and v >= 1, "an integer >= 1", True),
+                   "output_value": (lambda v: _is_str(v) and _HEX128.fullmatch(v) is not None, "128 hexadecimal characters", True)}
+_NB_MANDATE_KEYS = {"artifact": (lambda v: _is_str(v) and v != "", "a non-empty string", True),
+                    "amount_claim": (lambda v: _is_str(v) and v != "", "a non-empty string", True)}
+_NB_PULSES_KEYS = {"pulse": (_is_obj, "an object", True), "previous_pulse": (_is_obj, "an object", True),
+                   "certificate": (_is_str, "a string", True)}
+_IBAN = re.compile(r"[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}")
+_PATH_TOKEN = re.compile(r"([^.\[\]]+)|\[(0|[1-9][0-9]*)\]")
+_MISSING = object()
+
+
+def iban_problem(s) -> Optional[str]:
+    """None for an IBAN in the electronic form of ISO 13616-1 (as cryptovalid-opencore SPEC §18): two capital letters,
+    check digits 02-98, 11 to 30 capital letters or digits; ISO 7064 MOD 97-10 = 1. Else the reason. The registry's
+    per-country length and BBAN structure are not checked (§12.6)."""
+    if not isinstance(s, str) or not re.fullmatch(r"[A-Z0-9]*", s):
+        return "iban_charset"
+    if not 15 <= len(s) <= 34:
+        return "iban_length"
+    if not _IBAN.fullmatch(s):
+        return "iban_charset"
+    if not 2 <= int(s[2:4]) <= 98:
+        return "iban_check_digits"
+    n = int("".join(str(int(c, 36)) for c in s[4:] + s[:4]))
+    return None if n % 97 == 1 else "iban_checksum"
+
+
+def name_commitment(name: str, salt: bytes) -> str:
+    """SPEC §12.2: lowercase hex SHA-256("name-commitment/1" || 0x00 || salt (32 bytes) || UTF-8 of the name in NFC)."""
+    import unicodedata
+    if not isinstance(name, str) or not name or len(salt) != 32:
+        raise ValueError("a non-empty name and a 32-byte salt")
+    return hashlib.sha256(NAME_COMMITMENT_LABEL + salt + unicodedata.normalize("NFC", name).encode("utf-8")).hexdigest()
+
+
+def check_name_disclosure(path: str, which: str, name: str, salt_hex: str) -> Dict:
+    """SPEC §12.4: a name disclosed on request (Art. 5(2)) against the commitment the pack sealed. Read-only."""
+    if which not in ("payer", "payee") or not (isinstance(salt_hex, str) and _HEX64L.fullmatch(salt_hex)):
+        raise ValueError("which is payer or payee; the salt 64 lowercase hex digits")
+    ev = read_evidence_file(path)
+    nb = ev.get("not_before")
+    if not isinstance(nb, dict):
+        raise Ap2EvidenceError("the pack carries no not_before block (SPEC §12)")
+    parse_not_before(nb)
+    want = nb["payment"][which + "_name_commitment"]
+    return {"which": which, "matches": name_commitment(name, bytes.fromhex(salt_hex)) == want,
+            "note": "the pack's digest must also verify (verify) for the commitment to be the sealed one"}
+
+
+def _resolve_path(node, path: str):
+    """The value at a §4 path (`a.b[0].c`), or _MISSING."""
+    pos, first = 0, True
+    while pos < len(path):
+        if path[pos] == ".":
+            if first:
+                return _MISSING
+            pos += 1
+            m = _PATH_TOKEN.match(path, pos)
+            if not m or m.group(1) is None:
+                return _MISSING
+        else:
+            m = _PATH_TOKEN.match(path, pos)
+            if not m or (m.group(1) is not None and not first):
+                return _MISSING
+        if m.group(1) is not None:
+            if not isinstance(node, dict) or m.group(1) not in node:
+                return _MISSING
+            node = node[m.group(1)]
+        else:
+            i = int(m.group(2))
+            if not isinstance(node, list) or i >= len(node):
+                return _MISSING
+            node = node[i]
+        pos, first = m.end(), False
+    return _MISSING if first else node
+
+
+def _paths_of_string(node, value, path=""):
+    out = []
+    if isinstance(node, dict):
+        for k, v in node.items():
+            out += _paths_of_string(v, value, f"{path}.{k}" if path else k)
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            out += _paths_of_string(v, value, f"{path}[{i}]")
+    elif isinstance(node, str) and node == value:
+        out.append(path)
+    return out
+
+
+def parse_not_before(nb) -> Dict:
+    """SPEC §12.2: the closed block. Raises Ap2UnknownMember / Ap2EvidenceError naming the member and the reason."""
+    if _nb is None:
+        raise Ap2EvidenceError("not_before: the ap2_nist_beacon module is not installed (SPEC §12)")
+    _check_closed(nb, "not_before", _NB_KEYS)
+    _check_closed(nb["payment"], "not_before.payment", _NB_PAYMENT_KEYS)
+    _check_closed(nb["payment"]["beacon"], "not_before.payment.beacon", _NB_BEACON_KEYS)
+    _check_closed(nb["mandate"], "not_before.mandate", _NB_MANDATE_KEYS)
+    _check_closed(nb["pulses"], "not_before.pulses", _NB_PULSES_KEYS)
+    pay = nb["payment"]
+    m = _AMOUNT.fullmatch(pay["amount"])
+    if m is None:
+        raise Ap2EvidenceError("not_before.payment.amount: not a decimal string (SPEC §12.2)")
+    if int(m.group(1)) == 0 and int(m.group(2) or "0") == 0:
+        raise Ap2EvidenceError("not_before.payment.amount: not greater than zero (SPEC §12.2)")
+    if not re.fullmatch(r"[A-Z]{3}", pay["currency"]):
+        raise Ap2EvidenceError("not_before.payment.currency: not three capital letters A-Z (SPEC §12.2)")
+    for k in ("payer_iban", "payee_iban"):
+        why = iban_problem(pay[k])
+        if why:
+            raise Ap2EvidenceError(f"not_before.payment.{k}: {why} (SPEC §12.2)")
+    p = pay["payment_id"]
+    if not _PAYMENT_ID.fullmatch(p) or p != p.strip(" "):
+        raise Ap2EvidenceError("not_before.payment.payment_id: not 1 to 35 characters of the allowed set (SPEC §12.2)")
+    for k in ("payer_name_commitment", "payee_name_commitment"):
+        if not _HEX64L.fullmatch(pay[k]):
+            raise Ap2EvidenceError(f"not_before.payment.{k}: not 64 lowercase hexadecimal characters (SPEC §12.2)")
+    for k in ("pulse", "previous_pulse"):
+        try:
+            _nb.check_grammar(nb["pulses"][k])
+        except _nb.PulseError as e:
+            if str(e).startswith("pulse_unknown_member"):
+                raise Ap2UnknownMember(f"not_before.pulses.{k}: unknown key ({e}) (SPEC §12.2)")
+            raise Ap2EvidenceError(f"not_before.pulses.{k}: {e} (SPEC §12.2)")
+    try:
+        _nb.read_certificate(nb["pulses"]["certificate"])
+    except _nb.PulseError as e:
+        raise Ap2EvidenceError(f"not_before.pulses.certificate: {e} (SPEC §12.2)")
+    return nb
+
+
+def _amount_equals_minor(amount: str, currency: str, minor) -> Optional[bool]:
+    """amount (decimal string) in currency equals `minor` integer minor units; None when the currency's minor unit is
+    not in MINOR_UNITS."""
+    e = MINOR_UNITS.get(currency)
+    if e is None:
+        return None
+    whole, _, frac = amount.partition(".")
+    if len(frac.rstrip("0")) > e:
+        return False
+    return type(minor) is int and int(whole) * 10 ** e + int((frac + "0" * e)[:e] or "0") == minor
+
+
+def check_not_before(nb: Dict, ev: Dict, art_results: List[Dict], proven_time: Optional[str], pinned=None) -> Dict:
+    """SPEC §12.3: NB1-NB3, the window, the IBAN occurrences. `proven_time`: the earliest TSA-verified genTime or None."""
+    pinned = _nb.PINNED if pinned is None else pinned
+    pul = nb["pulses"]
+    r = _nb.verify_pair(pul["pulse"], pul["previous_pulse"], pul["certificate"], pinned)
+    T = r["time"]
+    fmt = "%Y-%m-%dT%H:%M:%SZ"
+    pay = nb["payment"]
+    out = {"profile": NOT_BEFORE_PROFILE, "source": "nist-beacon-2.0", "chain": r["chain"], "pulse": r["pulse"],
+           "time": T.strftime(fmt), "certificate_id": r["certificate_id"], "checks": {},
+           "covers": ["payer_iban", "payee_iban", "amount", "currency", "payment_id", "payer_name_commitment",
+                      "payee_name_commitment", "mandate:" + nb["mandate"]["artifact"]],
+           "window": {"not_before": None, "not_before_operator_promise": None, "not_after": None},
+           "payer_iban_in_mandate": [], "payee_iban_in_mandate": [], "mandate_payee": None}
+    c = out["checks"]
+    b = pay["beacon"]
+    if not r["ok"]:
+        c["NB1"] = "failed:" + r["reason"]
+    elif (b["chain_index"], b["pulse_index"]) != (r["chain"], r["pulse"]) or bytes.fromhex(b["output_value"]) != r["output"]:
+        c["NB1"] = "failed:beacon_value_mismatch"
+    else:
+        c["NB1"] = "verified"
+    md = nb["mandate"]
+    idx = [i for i, a in enumerate(ev["artifacts"]) if a.get("name") == md["artifact"]]
+    if not idx:
+        c["NB2"] = "failed:mandate_not_in_pack"
+    else:
+        ar = art_results[idx[0]]
+        if not (ar.get("signature_ok") is True and ar.get("claims_match") is True):
+            c["NB2"] = "not_evaluated:mandate_not_verified"
+        else:
+            claims = ev["artifacts"][idx[0]]["resolved_claims"]
+            v = _resolve_path(claims, md["amount_claim"])
+            if v is _MISSING:
+                c["NB2"] = "failed:amount_claim_not_found"
+            elif not (isinstance(v, dict) and set(v) == {"amount", "currency"}) or v["currency"] != pay["currency"]:
+                c["NB2"] = "failed:amount_not_the_mandate_amount"
+            else:
+                eq = _amount_equals_minor(pay["amount"], pay["currency"], v["amount"])
+                c["NB2"] = ("not_evaluated:currency_minor_unit_unknown" if eq is None
+                            else "verified" if eq else "failed:amount_not_the_mandate_amount")
+            out["payer_iban_in_mandate"] = _paths_of_string(claims, pay["payer_iban"])
+            out["payee_iban_in_mandate"] = _paths_of_string(claims, pay["payee_iban"])
+            dp = claims.get("delegate_payload") if isinstance(claims, dict) else None
+            for holder in (claims, dp[0] if isinstance(dp, list) and dp else None):
+                if isinstance(holder, dict) and isinstance(holder.get("payee"), dict):
+                    out["mandate_payee"] = holder["payee"]
+                    break
+    if c["NB1"] != "verified":
+        c["NB3"] = "not_evaluated:beacon_not_verified"
+    else:
+        created = datetime.strptime(ev["created_utc"], fmt).replace(tzinfo=timezone.utc)
+        if created < T:
+            c["NB3"] = "failed:created_before_beacon"
+        elif proven_time is None:
+            c["NB3"] = "not_evaluated:no_verified_time_anchor"
+        else:
+            whole, _, frac = proven_time.rstrip("Z").partition(".")
+            gt = datetime.strptime(whole, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+            if gt + (timedelta(seconds=float("0." + frac)) if frac else timedelta()) < T:
+                c["NB3"] = "failed:window_inverted"
+            else:
+                c["NB3"] = "verified"
+                out["window"]["not_after"] = proven_time
+    if c["NB1"] == "verified" and c["NB2"] == "verified":
+        out["window"]["not_before"] = T.strftime(fmt)
+        out["window"]["not_before_operator_promise"] = (T - timedelta(seconds=r["period_s"])).strftime(fmt)
+    vals = list(c.values())
+    out["state"] = ("failed" if any(x.startswith("failed") for x in vals)
+                    else "verified" if all(x == "verified" for x in vals) else "not_evaluated")
+    return out
+
+
 def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = False,
                     require_producer: bool = False, require_anchor: bool = False, tsa_cert: Optional[str] = None,
                     trust_anchor: Optional[str] = None, min_anchors: Optional[int] = None,
@@ -1758,6 +2011,8 @@ def _verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = F
     if "producer_signatures" in ev and not isinstance(ev["producer_signatures"], dict):
         return refusal("producer_signatures must be an object")
     # 1.4.0 — SPEC §9.1: the top-level object, the anchor block, the producer block and every binding entry are CLOSED
+    if "not_before" in ev and _nb is None:   # 1.8.0-draft — SPEC §12: a copy without the beacon module never verifies one
+        return refusal("not_before: this copy of the verifier has no ap2_nist_beacon module (SPEC §12)", "format_unsupported")
     try:
         _check_closed(ev, "top level", _TOP_KEYS)
         if "rfc3161_timestamp" in ev:
@@ -1787,6 +2042,8 @@ def _verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = F
         sigs = ev.get("producer_signatures", {}).get("signatures")
         for i, e in enumerate(sigs if isinstance(sigs, list) else []):
             _check_unknown(e, f"producer_signatures.signatures[{i}]", _sigsuite.ENTRY_KEYS)
+        if "not_before" in ev:   # 1.8.0-draft — SPEC §12.2: closed at every level, IBANs checked, before any check runs
+            parse_not_before(ev["not_before"])
     except Ap2UnknownMember as e:
         return refusal(str(e), "unknown_member")
     except Ap2EvidenceError as e:
@@ -1951,6 +2208,9 @@ def _verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = F
     if rfc is not rfc_block:
         rfc.pop("_not_run", None)
 
+    nb_rep = None
+    if "not_before" in ev:   # 1.8.0-draft — SPEC §12.3: NB1-NB3 after the time anchors (proven_time) and the artifacts
+        nb_rep = check_not_before(ev["not_before"], ev, art_results, proven_time)
     receipt = {"digest_ok": digest_ok, "artifacts": art_results,
             "producer_signatures": producer, "pq_protected": producer.get("pq_protected", False),
             "bindings_ok": bindings_ok, "rfc3161": rfc,
@@ -1970,7 +2230,8 @@ def _verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = F
             # un evidence senza artefatti non prova NULLA: mai 'valid' (falso-verde per l'auditor)
             "policy_ok": policy_ok,
             "valid": bool(art_results and digest_ok and all_ok and bindings_ok
-                          and rfc.get("verified") is not False and policy_ok),
+                          and rfc.get("verified") is not False and policy_ok
+                          and (nb_rep is None or nb_rep["state"] != "failed")),   # 1.8.0-draft — SPEC §12.3
             "honest_scope": ev.get("honest_scope"),
             "admission": "admitted", "refusal_class": None,   # 1.6.0 — SPEC §6.9
             "states_vocabulary": STATES_VOCABULARY, "states": states,
@@ -1978,6 +2239,8 @@ def _verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = F
             # informative, both verifiers (SPEC §6): whether THIS verifier can check ML-DSA-65 at all — without it a
             # producer signature is SKIP, never a pass, and the reader of the receipt should not have to guess why
             "mldsa_backend": bool(_sigsuite.MLDSA_AVAILABLE)}
+    if nb_rep is not None:   # 1.8.0-draft — SPEC §12.3: only when the pack carries the block
+        receipt["not_before"] = nb_rep
     if not_run:   # 1.6.0 — SPEC §6.10: a check asked for could not be run here — the COMPLETE receipt travels with the error
         raise Ap2WriteError(not_run[0], receipt=receipt)
     return receipt
