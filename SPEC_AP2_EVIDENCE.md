@@ -1205,9 +1205,9 @@ merchant, signed by the issuer); no payer name. The block below adds, in OUR lay
 ```
 Every member is MUST except the three marked `?`. A key outside these lists: refusal `unknown_member`; a missing key, a
 wrong JSON type (a boolean is not an integer, a number is not an amount string) or a value of another form: refusal
-`malformed`, naming the member and the reason. The member names, the commitment encoding and the payment-id rule are the
-ones fixed for the three projects on 2026-11-16 (the coordinator's decision for cryptovalid-opencore SPEC §18,
-`cryptovalid-payment/1`); see 12.6 for what cryptovalid's text said when this was written.
+`malformed`, naming the member and the reason. The commitment encoding and the names of the five commitment members are
+the ones of cryptovalid-opencore SPEC §18 (`cryptovalid-payment/1`); the other members are this block's own, and 12.6
+lists where they differ from cryptovalid's payment entry.
 
 **No personal data in clear in the pack.** The IBANs, the names and the payer's details are recorded only as salted
 commitments (Regulation (EU) 2016/679 Art. 5(1)(c), 17 — in force; EUR-Lex lists one consolidated version, 4.5.2016; the
@@ -1218,8 +1218,11 @@ secondary sources (springlex.eu), Art. 77 itself read in secondary sources, not 
 clear values and their salts stay with the payment service provider, outside the pack. To disclose (Regulation (EU)
 2023/1113 Art. 5(2)) the provider gives `{member, salt, value}` and anyone checks it (`check_disclosure`); to delete, the
 provider destroys values and salts: the pack, its digest, its signatures and its time anchors stay intact and the
-commitments can no longer be opened. Amount, currency, payment id and beacon value are not personal data and stay in
-clear. What the AP2 artifacts themselves carry is AP2's, sealed byte for byte and not changed here: a Payment Mandate
+commitments can no longer be opened. Amount, currency, payment id, record salt and beacon value stay in clear; whether
+they are personal data depends on what else their holder keeps (EDPB Guidelines 02/2025 on processing of personal data
+through blockchain technologies, version 2.0 adopted 2026-07-07, §52: a salted hash "will also be considered personal
+data, as will any other identifiers that might exist"; after deletion of the salt it "should not be linkable to the
+original data" under the conditions that paragraph sets); this format does not decide it. What the AP2 artifacts themselves carry is AP2's, sealed byte for byte and not changed here: a Payment Mandate
 writes the merchant's name in clear (`payee.name`), and a destroyed salt does not remove it.
 
 - Commitment: 64 lowercase hex = SHA-256(ASCII "cryptovalid-payment/1/" || the member's name in ASCII || 0x00 || salt
@@ -1228,7 +1231,12 @@ writes the merchant's name in clear (`payee.name`), and a destroyed salt does no
   fixed length, so the hashed bytes split one way only. Value: for `payer_iban_commitment` and `payee_iban_commitment`
   the IBAN normalised — a value with a character outside ASCII refused first ("ß" in upper case is "SS"), then every
   space (U+0020) removed and the letters in upper case — and checked by the IBAN rule BEFORE it is committed; for the
-  name and details members the text in Unicode NFC. A value is a non-empty string of at most 1024 characters.
+  name and details members the text in Unicode NFC. A value is a non-empty string of at most 1024 characters, every one
+  a code point assigned in Unicode 13.0.0 (as cryptovalid-opencore §18): NFC of such a string is the same in every
+  later Unicode version, and of a code point assigned later it is not (measured on 2026-11-16: "a" U+1E08F U+0316 is
+  reordered by CPython 3.13 and not by 3.9; U+105D2 U+0307 is composed by Node 22, Unicode 17.0, and by no CPython from
+  3.9 to 3.13), so the two verifiers of this repository, or two Python versions, would otherwise disagree on a
+  disclosure. Another value is refused (a disclosure outside the grammar; an error for the writer).
 - Disclosure: exactly `{"member": <one of the five commitment members>, "salt": <32 lowercase hex>, "value": <string>}`.
   It matches when the commitment recomputed from it (the value normalised as above) equals the pack's member byte for
   byte (`disclosure_mismatch` otherwise); for an IBAN member the normalised value must also pass the IBAN rule
@@ -1239,7 +1247,8 @@ writes the merchant's name in clear (`payee.name`), and a destroyed salt does no
   cited; whether it is still the current one was not confirmed on 2026-11-16). Reasons: `iban_charset`, `iban_length`, `iban_check_digits`,
   `iban_checksum`. The SWIFT registry's per-country length and BBAN structure are not checked (12.6).
 - `record_salt`: at least 128 bits drawn at random by the provider for this payment, so that the members in clear (amount,
-  id, beacon value) cannot be searched behind the pack's digest either. Not personal data; never deleted.
+  id, beacon value) cannot be searched behind the pack's digest either. Kept in the pack (it is not deleted with the
+  commitments' salts).
 - `amount`: a string, `0` or 1 to 18 digits not starting with 0, then optionally `.` and 1 to 4 digits; greater than zero.
 - `currency`: three capital letters A-Z (NB2 compares it with the mandate; minor units: 12.3).
 - `payment_id`: 1 to 35 characters (ISO 20022 Max35Text) of the SEPA Latin set `A-Z a-z 0-9 / - ? : ( ) . , ' +` and space,
@@ -1276,7 +1285,7 @@ A producer does not write a block this section refuses, nor one whose NB1 or NB2
   (`2026-02-30T00:00:00Z`): `failed:created_utc_not_a_time` (§1 checks the pattern only; up to the first draft of this
   section the reference stopped there with a traceback). `created_utc` before T: `failed:created_before_beacon`. The upper bound
   is the earliest TSA-verified genTime of §3.2/§3.3 (a token whose TSA signature verified with the relying party's
-  `--tsa-cert`): genTime before T `failed:window_inverted` (one of the two time sources is wrong or was subverted;
+  `--tsa-cert`): genTime before T `failed:window_inverted` (compared exactly, whatever the number of fraction digits) (one of the two time sources is wrong or was subverted;
   cryptovalid-opencore §19.5 uses the same name); genTime = T is one instant; no such token:
   `not_evaluated:no_verified_time_anchor` (the window stays open above). NB3 runs only when NB1 is `verified`.
 `state` is `failed` when any of NB1-NB3 failed, `verified` when all three are, else `not_evaluated`. A pack whose
@@ -1308,9 +1317,10 @@ producer after the TSA's token is no longer the content that token binds (§3.2)
 Real pulses and certificates (`spec/vectors/beacon/`, fetched 2026-11-16, with SHA256SUMS); the IBANs are the published
 examples of the SWIFT IBAN registry (`GB82WEST12345698765432`, `DE89370400440532013000`; a changed IBAN is the other
 example); mandates, names, details and amounts are test data. Positive control first: the 1.7.3 verifier refuses a pack
-with the block (`unknown_member`, top level) and 26 of the 29 tests fail on 1.7.3 (the three that pass
-there: the vectors' hashes, the pulse-pair rules of the beacon module, a pack without the block); 22 of the 29 fail on the
-first draft of this section, which wrote the IBANs in clear. Generative cases: no clear IBAN or name anywhere in a
+with the block (`unknown_member`, top level) and, with `ap2_nist_beacon.py` beside it, 27 of the 30 tests of
+`test_ap2_not_before.py` fail on 1.7.3 (the three that pass there: the vectors' hashes, the pulse-pair rules of the beacon
+module, a pack without the block); 23 of the 30 fail on the first draft of this section, which wrote the IBANs in clear
+(measured on 2026-11-16, before the corrections of the section's second review). Generative cases: no clear IBAN or name anywhere in a
 built pack (the file is searched for each value); the beacon outside the sealed content (beside the seal in
 `rfc3161_timestamp`, in `anchors`: refused); every payment member changed after sealing (digest); amount and currency
 re-sealed against the mandate (NB2), and the producer refusing to build them; the mandate's amount or currency changed; the
@@ -1326,8 +1336,8 @@ a copy of the verifier without the beacon module (refused, `format_unsupported`)
 NIST pair can break with valid signatures are tested on the pulses of a TEST beacon made by the test (a throwaway RSA key
 and certificate, pinned only there). The JavaScript verifier: `test_js_not_before.py` runs the not_before cases of
 `verifiers/differential_oracle.py` (the variants above, generated, plus the window rule with genTimes before, at and
-after T and the disclosures, called directly in both); positive control: with the JavaScript verifier of `cf008bd` it
-fails, 278 disagreements of 281.
+after T and the disclosures, called directly in both); positive control: with the JavaScript verifier as it was before it read the
+block (2026-11-16) it fails, 278 disagreements of 281.
 
 ### 12.6 Open
 Both verifiers read the block (1.8.0-draft, 2026-11-16): `verifiers/js/ap2-verify.mjs` checks the same closed grammar,
@@ -1343,10 +1353,15 @@ per-country BBAN rules; ISO 4217 minor units beyond the closed table; the paymen
 schema; a second beacon (CURBy, drand); the relying party's own pinned certificates; the KB-JWT `nonce` (RFC 9901 §4.3,
 chosen by the verifier; RFC 9901, Proposed Standard, November 2025, per datatracker on 2026-11-16) as the place where a beacon value would be inside bytes the HOLDER signs — a profile of AP2's flow,
 not of this pack. `ap2_nist_beacon.py` is a prototype, to be replaced by the beacon verifier of cryptovalid-opencore.
-Alignment with cryptovalid-opencore SPEC §18, re-read at `26bd3a2` (2026-11-16 16:31, commit `ffcb6ef` "one commitment
-encoding with ap2"): the same member names, the same commitment encoding (domain, member name, 0x00, 16-byte salt,
-normalised value; non-ASCII IBAN refused before upper case), the same disclosure grammar and outcome names, the same
-payment-id rule and record salt. Still different: cryptovalid takes `currency` from the ISO 4217 list (165 codes) and
-allows only as many decimals as the currency's minor units, where this section takes any three capital letters and up
-to 4 decimals and lets NB2 compare against the mandate with its closed table; cryptovalid checks `payment_id`
-uniqueness within a ledger, a pack holds one payment.
+Alignment with cryptovalid-opencore SPEC §18-§19, re-read on 2026-11-16 in the version that adds the beacon payment
+entry (v0.10, not yet released; its second review's corrections included): the
+same commitment encoding (domain, member name, 0x00, 16-byte salt, normalised value; non-ASCII IBAN refused before upper
+case; code points of Unicode 13.0.0), the same five commitment member names, the same disclosure grammar and outcome
+names, the same `record_salt`. Different: `payment_id` (cryptovalid: a version 4 UUID in lowercase canonical form; here:
+Max35Text of the SEPA set); the beacon (cryptovalid: `beacons`, a list of 1 to 8 values with `chain_index` 2 and
+`output_value` in upper case; here: one `beacon` object, any `chain_index` ≥ 0 that `ap2_nist_beacon.PINNED` then must
+pin, either case); the commitments (cryptovalid: 13 members, the IBANs optional with at least one party identifier, and
+`execution_date`, `payee_entity_id`, `psp_id` in clear; here: 5 members, both IBANs required); `currency` (cryptovalid:
+the ISO 4217 list, 165 codes, exactly the currency's minor units; here: any three capital letters and up to 4 decimals,
+NB2 comparing against the mandate with its closed table); `payment_id` uniqueness (cryptovalid: within a ledger; a pack
+holds one payment).
