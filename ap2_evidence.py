@@ -1700,7 +1700,7 @@ IBAN_MEMBERS = ("payer_iban_commitment", "payee_iban_commitment")
 TEXT_MEMBERS = ("payer_name_commitment", "payer_details_commitment", "payee_name_commitment")
 COMMITMENT_MEMBERS = IBAN_MEMBERS + TEXT_MEMBERS
 # ISO 4217 minor units of the currencies whose amount NB2 can compare with an AP2 integer (closed; another currency:
-# not_evaluated). Values as published in the ISO 4217 list (USD, EUR, GBP, CHF 2; JPY 0); not re-read online today.
+# not_evaluated). Checked against ISO 4217 list one as published by SIX on 2026-09-17 (USD, EUR, GBP, CHF 2; JPY 0).
 MINOR_UNITS = {"EUR": 2, "USD": 2, "GBP": 2, "CHF": 2, "JPY": 0}
 _AMOUNT = re.compile(r"(0|[1-9][0-9]{0,17})(?:\.([0-9]{1,4}))?")
 _HEX64L = re.compile(r"[0-9a-f]{64}")

@@ -1167,7 +1167,8 @@ Up to 1.7.3 a pack has an upper time bound only: an RFC 3161 token over the dige
 existed by the TSA's time. Nothing bounds it from below: `created_utc` is the producer's statement. A value published by a
 randomness beacon at time T and unpredictable before T, placed INSIDE the sealed content, bounds the sealing from below.
 
-What binds the payment today, measured on 1.7.3 and on AP2 at `e1ea56d` (`code/sdk/schemas/ap2/payment_mandate.json`,
+What binds the payment today, measured on 1.7.3 and on AP2 at `e1ea56d` (the head of `main` of
+google-agentic-commerce/AP2 on 2026-11-16, `git ls-remote`; `code/sdk/schemas/ap2/payment_mandate.json`,
 `types/amount.json`, `types/merchant.json`, `types/payment_instrument.json`): the AP2 Payment Mandate carries
 `payment_amount` `{amount (integer, ISO 4217 minor units), currency (ISO 4217 code)}`, `payee` `{id, name[, website]}` (the
 merchant), `payment_instrument` `{id, type[, description]}`, optionally `pisp`, and `transaction_id` (a hash of the
@@ -1177,9 +1178,12 @@ as one in the schemas or in `docs/ap2/*.md` at `e1ea56d`). These mandates are AP
 changes nothing in them. OURS is the pack: its top level and §3 digest, which covers every artifact's `sd_jwt_compact` and
 `resolved_claims` byte for byte, and the producer signatures over that digest (§5).
 
-Against the minimum of a transfer of funds in Regulation (EU) 2023/1113 Art. 5(1) (read 2026-11-16: the payer's and
-payee's payment account numbers, or a unique transaction identifier; names and the rest of Art. 4 on request within three
-working days, Art. 5(2)), a 1.7.3 pack binds: the amount and currency (the mandate's issuer signed them); a unique id of
+Against the minimum of a transfer of funds within the Union in Regulation (EU) 2023/1113 Art. 5(1) (OJ L 150, 9.6.2023;
+in force, applicable from 30 December 2024 (Art. 40), repealing Regulation (EU) 2015/847 (Art. 39); EUR-Lex lists one
+consolidated version, of 9.6.2023, so no amendment; Art. 5(1)-(2) read on EUR-Lex on 2026-11-16: "at least the payment
+account number of both the payer and the payee or, where Article 4(3) applies, the unique transaction identifier"; on
+request within three working days the information of Art. 4 above EUR 1 000, at least the names and the account numbers
+up to it, Art. 5(2)), a 1.7.3 pack binds: the amount and currency (the mandate's issuer signed them); a unique id of
 AP2's (`transaction_id`); NOT the payer's or payee's IBAN (no field); the payee's name in clear (`payee.name`, the
 merchant, signed by the issuer); no payer name. The block below adds, in OUR layer, the missing items and the beacon.
 
@@ -1206,7 +1210,11 @@ ones fixed for the three projects on 2026-11-16 (the coordinator's decision for 
 `cryptovalid-payment/1`); see 12.6 for what cryptovalid's text said when this was written.
 
 **No personal data in clear in the pack.** The IBANs, the names and the payer's details are recorded only as salted
-commitments (GDPR Art. 5(1)(c), 17; the retention of Regulation (EU) 2024/1624 Art. 77 as read in secondary sources). The
+commitments (Regulation (EU) 2016/679 Art. 5(1)(c), 17 — in force; EUR-Lex lists one consolidated version, 4.5.2016; the
+"Digital Omnibus" amendment proposed by the Commission on 19.11.2025 was not found adopted on 2026-11-16 (searched in
+secondary sources up to August 2026: not confirmed); and the retention of Regulation (EU) 2024/1624 Art. 77 — in force
+per EUR-Lex (OJ L 19.6.2024, one consolidated version of that date), applicable from 10 July 2027 by Art. 90 as read in
+secondary sources (springlex.eu), Art. 77 itself read in secondary sources, not on EUR-Lex). The
 clear values and their salts stay with the payment service provider, outside the pack. To disclose (Regulation (EU)
 2023/1113 Art. 5(2)) the provider gives `{member, salt, value}` and anyone checks it (`check_disclosure`); to delete, the
 provider destroys values and salts: the pack, its digest, its signatures and its time anchors stay intact and the
@@ -1225,8 +1233,10 @@ writes the merchant's name in clear (`payee.name`), and a destroyed salt does no
   It matches when the commitment recomputed from it (the value normalised as above) equals the pack's member byte for
   byte (`disclosure_mismatch` otherwise); for an IBAN member the normalised value must also pass the IBAN rule
   (`disclosure_iban_invalid`, checked first). A disclosure of a member the pack does not carry: `member_absent`.
-- IBAN rule (ISO 13616-1 electronic form): two capital letters, check digits 02-98, then 11 to 30 capital letters or digits,
-  15 to 34 characters; ISO 7064 MOD 97-10 = 1. Reasons: `iban_charset`, `iban_length`, `iban_check_digits`,
+- IBAN rule (ISO 13616-1:2020 electronic form — edition 2, which replaced ISO 13616-1:2007, per the ISO catalogue as
+  quoted by search results on 2026-11-16; iso.org refused a direct read, 403): two capital letters, check digits 02-98,
+  then 11 to 30 capital letters or digits, 15 to 34 characters; ISO/IEC 7064 MOD 97-10 = 1 (the 2003 edition is the one
+  cited; whether it is still the current one was not confirmed on 2026-11-16). Reasons: `iban_charset`, `iban_length`, `iban_check_digits`,
   `iban_checksum`. The SWIFT registry's per-country length and BBAN structure are not checked (12.6).
 - `record_salt`: at least 128 bits drawn at random by the provider for this payment, so that the members in clear (amount,
   id, beacon value) cannot be searched behind the pack's digest either. Not personal data; never deleted.
@@ -1257,7 +1267,8 @@ A producer does not write a block this section refuses, nor one whose NB1 or NB2
   whose issuer signature and claims verified (§6 step 2; else `not_evaluated:mandate_not_verified`); the value at
   `amount_claim` is an object of exactly `amount` and `currency` (`failed:amount_claim_not_found` when there is none), its
   currency is `payment.currency`, and its integer amount equals `payment.amount` in minor units (`failed:amount_not_the_
-  mandate_amount`), with the minor unit of the closed table `MINOR_UNITS` (EUR, USD, GBP, CHF 2; JPY 0; another currency:
+  mandate_amount`), with the minor unit of the closed table `MINOR_UNITS` (EUR, USD, GBP, CHF 2; JPY 0 — checked against ISO
+  4217:2015 list one as published by the maintenance agency SIX on 2026-09-17, file sha256 33139b438657d1ce…; another currency:
   `not_evaluated:currency_minor_unit_unknown`). The receipt names the mandate's `payee` (top level or
   `delegate_payload[0]`, informative). The IBANs are not compared with the mandate: the pack holds only their commitments
   (a disclosed IBAN can be searched in the mandate's claims by the relying party).
@@ -1278,9 +1289,13 @@ With NB1, NB2 and NB3 `verified`: "the sealed content of this pack — the AP2 a
 whose issuer signed amount A in currency C at path P, and, written by the producer in one object with the beacon value,
 the commitments to the payer's and payee's IBANs (and to the names and details when present), the amount, the currency,
 the payment id and the record salt — was put together
-after T against anyone but NIST, after T − 60 s if NIST kept its freshness promise, and existed by the TSA's genTime;
-against a NIST that breaks its promises there is no lower bound" (the bounds of cryptovalid-opencore §19.4: every input
-of outputValue is in NIST's hands; the commitment only shows the local random value was fixed by T − period).
+after T against anyone but NIST or whoever controls its engine or key before T, after T − 60 s if NIST kept its freshness
+promise, and existed by the TSA's genTime; against a NIST that breaks its promises there is no lower bound" (the bounds of
+cryptovalid-opencore §19.4, on the promises of NIST IR 8213 — an Initial Public Draft of May 2019, still a draft on
+csrc.nist.gov on 2026-11-16, with no final version; NIST names the service "NIST Randomness Beacon (Version 2.0 Beta)", "a beta release" (csrc.nist.gov
+Projects/interoperable-randomness-beacons/beacon-20, updated 5 November 2026, read on 2026-11-16): every input of outputValue
+is in NIST's hands; the commitment only shows the local random value was fixed by T − period). It is technical evidence,
+not a time stamp with a legal category.
 A disclosure that matches proves the disclosed IBAN or name is the one committed in that sealed content. It does NOT
 prove: that the mandate was SIGNED after T (its issuer did not sign the beacon value; a mandate signed earlier can be
 sealed later); that the committed IBANs are the accounts of the payer and payee, or the names those of the parties (they
@@ -1326,7 +1341,7 @@ is the same, compared by calling both functions with the same genTimes (`verifie
 (`format_unsupported`) until it vendors `ap2_nist_beacon.py` too. The SWIFT registry's
 per-country BBAN rules; ISO 4217 minor units beyond the closed table; the payment-id character set re-read on the official
 schema; a second beacon (CURBy, drand); the relying party's own pinned certificates; the KB-JWT `nonce` (RFC 9901 §4.3,
-chosen by the verifier) as the place where a beacon value would be inside bytes the HOLDER signs — a profile of AP2's flow,
+chosen by the verifier; RFC 9901, Proposed Standard, November 2025, per datatracker on 2026-11-16) as the place where a beacon value would be inside bytes the HOLDER signs — a profile of AP2's flow,
 not of this pack. `ap2_nist_beacon.py` is a prototype, to be replaced by the beacon verifier of cryptovalid-opencore.
 Alignment with cryptovalid-opencore SPEC §18, re-read at `26bd3a2` (2026-11-16 16:31, commit `ffcb6ef` "one commitment
 encoding with ap2"): the same member names, the same commitment encoding (domain, member name, 0x00, 16-byte salt,
