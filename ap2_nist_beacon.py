@@ -170,7 +170,12 @@ def check_grammar(p):
             raise PulseError("pulse_hex_malformed:" + k)
     if not re.fullmatch(r"(?:[0-9A-F]{2})+\Z", p["signatureValue"]):
         raise PulseError("pulse_hex_malformed:signatureValue")
-    if not _TS.match(p["timeStamp"]):
+    m = _TS.match(p["timeStamp"])
+    if not m:
+        raise PulseError("pulse_timestamp_malformed")
+    try:                                 # a real calendar time (2026-02-30 matches the pattern; datetime refuses it)
+        datetime(*(int(x) for x in m.groups()), tzinfo=timezone.utc)
+    except ValueError:
         raise PulseError("pulse_timestamp_malformed")
     if p["uri"] != "https://beacon.nist.gov/beacon/2.0/chain/%d/pulse/%d" % (p["chainIndex"], p["pulseIndex"]):
         raise PulseError("pulse_uri_not_its_index")

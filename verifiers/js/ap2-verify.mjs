@@ -7,6 +7,9 @@
 // +/-(2^53-1), nesting <= 512, no lone surrogate escape, 64 MiB bound. A refused file is a receipt with valid=false.
 // Inside the SD-JWTs (1.7.2) a literal with a fraction or an exponent is that artifact's error; with --accept-integral-floats
 // one whose value is an integer in that range is read as it, and the receipt names it.
+// 1.8.0-draft (SPEC §12): the `not_before` block — closed grammar, NIST Beacon pulse pair, NB1-NB3 and the receipt member
+// `not_before` as the reference; `paymentCommitment` / `checkDisclosure` exported. No TSA verification here, so NB3 never
+// closes the window (declared, as tsa_verified).
 // Usage: ap2-verify.mjs <evidence.json> [--trusted-producer-key ALG=B64]... [--require-producer] [--require-pq] [--require-anchor] [--min-anchors N] [--tsa-cert PEM] [--trust-set-complete] [--accept-integral-floats]
 import { statSync, accessSync, openSync, fstatSync, readSync, closeSync, writeSync, constants as FS } from "node:fs";
 import { createHash, createPublicKey, verify as cryptoVerify, X509Certificate } from "node:crypto";
@@ -248,7 +251,8 @@ const T = {
 // [type, required]
 const TOP_KEYS = { evidence_format: [T.str, 1], subject: [T.str, 1], created_utc: [T.str, 1], artifacts: [T.list, 1], bindings: [T.list, 0], honest_scope: [T.str, 1],
                    evidence_digest_sha256: [T.str, 1], rfc3161_timestamp: [T.obj, 0], producer_signatures: [T.obj, 0],
-                   anchors: [[(v) => isList(v) && v.length > 0, "a non-empty list"], 0] };   // 1.5.0 — SPEC §3.3
+                   anchors: [[(v) => isList(v) && v.length > 0, "a non-empty list"], 0],   // 1.5.0 — SPEC §3.3
+                   not_before: [T.obj, 0] };   // 1.8.0-draft — SPEC §12
 const ANCHOR_MECHANISMS = ["rfc3161"];   // SPEC §3.3: the mechanisms this revision defines; any other is a refusal naming it
 const ANCHOR_RFC3161_KEYS = { mechanism: [[(v) => v === "rfc3161", '"rfc3161"'], 1], tsr_b64: [T.str, 1], tsa_url: [T.str, 0], note: [T.str, 0] };
 const DIGEST_EXCLUDED = ["evidence_digest_sha256", "rfc3161_timestamp", "producer_signatures", "anchors"];   // SPEC §3 (1.5.0: + anchors)
@@ -448,6 +452,265 @@ function readEvidenceBytes(path) {
     return Buffer.concat(chunks, total);
   } finally { closeSync(fd); }
 }
+// ---- not-before block (SPEC §12, 1.8.0-draft): written again here from the SPEC and the reference's rules, line for line
+// (ap2_evidence.parse_not_before / check_not_before, ap2_nist_beacon), node:crypto for SHA-2 only; RSA by BigInt as the
+// reference does it (pure modular exponentiation), so both verifiers decide the same pulses the same way.
+const NB_PROFILE = "ap2-evidence-pack.not-before/1";
+const NB_IBAN_MEMBERS = ["payer_iban_commitment", "payee_iban_commitment"];
+const NB_TEXT_MEMBERS = ["payer_name_commitment", "payer_details_commitment", "payee_name_commitment"];
+const NB_COMMITMENT_MEMBERS = NB_IBAN_MEMBERS.concat(NB_TEXT_MEMBERS);
+const NB_MINOR_UNITS = { EUR: 2, USD: 2, GBP: 2, CHF: 2, JPY: 0 };
+const NB_PINNED = { "5b6386e6ac8a993bac8d99d6549deda44af82f2fa4a0e9c0025b6474ab0cbfcab67bfff264fda41aac003b0c9ee7fb77d2938dc0f286fb73cc8fa79864ec0c18": 2 };
+const NB_AMOUNT = /^(0|[1-9][0-9]{0,17})(?:\.([0-9]{1,4}))?$/, NB_HEX64L = /^[0-9a-f]{64}$/, NB_RECORD_SALT = /^(?:[0-9a-f]{2}){16,64}$/;
+const NB_HEX128 = /^[0-9A-Fa-f]{128}$/, NB_PAYMENT_ID = /^[A-Za-z0-9/?:().,'+ -]{1,35}$/;
+const nbStr = (v) => typeof v === "string", nbInt = (v) => typeof v === "number" && Number.isInteger(v);
+const NB_KEYS = { profile: [[(v) => v === NB_PROFILE, JSON.stringify(NB_PROFILE).replace(/^"|"$/g, "'")], 1], payment: [T.obj, 1], mandate: [T.obj, 1], pulses: [T.obj, 1] };
+const NB_PAYMENT_KEYS = { payment_id: [T.str, 1], amount: [T.str, 1], currency: [T.str, 1], payer_iban_commitment: [T.str, 1], payee_iban_commitment: [T.str, 1],
+  record_salt: [T.str, 1], beacon: [T.obj, 1], payer_name_commitment: [T.str, 0], payer_details_commitment: [T.str, 0], payee_name_commitment: [T.str, 0] };
+const NB_BEACON_KEYS = { source: [[(v) => v === "nist-beacon-2.0", '"nist-beacon-2.0"'], 1], chain_index: [[(v) => nbInt(v) && v >= 0, "an integer >= 0"], 1],
+  pulse_index: [[(v) => nbInt(v) && v >= 1, "an integer >= 1"], 1], output_value: [[(v) => nbStr(v) && NB_HEX128.test(v), "128 hexadecimal characters"], 1] };
+const NB_MANDATE_KEYS = { artifact: [[(v) => nbStr(v) && v !== "", "a non-empty string"], 1], amount_claim: [[(v) => nbStr(v) && v !== "", "a non-empty string"], 1] };
+const NB_PULSES_KEYS = { pulse: [T.obj, 1], previous_pulse: [T.obj, 1], certificate: [T.str, 1] };
+class PulseError extends Error {}
+// a real calendar time, as Python's datetime(): month 1-12, the month's days, hour 0-23, minute and second 0-59; else null
+function nbCalendar([Y, M, D, h, m, s]) {
+  if (Y < 1 || M < 1 || M > 12 || D < 1 || h > 23 || m > 59 || s > 59) return null;
+  const d = new Date(0); d.setUTCFullYear(Y, M - 1, D); d.setUTCHours(h, m, s, 0);   // setUTCFullYear: no 1900 offset for years 1-99
+  return d.getUTCFullYear() === Y && d.getUTCMonth() === M - 1 && d.getUTCDate() === D ? d.getTime() : null;
+}
+const PULSE_KEYS = ["uri", "version", "cipherSuite", "period", "certificateId", "chainIndex", "pulseIndex", "timeStamp", "localRandomValue", "external",
+  "listValues", "precommitmentValue", "statusCode", "signatureValue", "outputValue"];
+const LIST_TYPES = ["previous", "hour", "day", "month", "year"];
+const P_HEX64 = /^[0-9A-F]{128}$/, P_HEX64L = /^[0-9a-f]{128}$/, P_TS = /^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})\.000Z$/;
+function checkPulseGrammar(p) {
+  if (!isObj(p)) throw new PulseError("pulse_not_object");
+  const extra = Object.keys(p).filter((k) => !PULSE_KEYS.includes(k)).sort(byCodePoint); if (extra.length) throw new PulseError("pulse_unknown_member:" + extra[0]);
+  const missing = PULSE_KEYS.filter((k) => !Object.hasOwn(p, k)).sort(byCodePoint); if (missing.length) throw new PulseError("pulse_missing_member:" + missing[0]);
+  for (const k of ["uri", "version", "timeStamp", "certificateId", "localRandomValue", "precommitmentValue", "signatureValue", "outputValue"]) if (!nbStr(p[k])) throw new PulseError("pulse_member_not_string:" + k);
+  for (const k of ["cipherSuite", "period", "chainIndex", "pulseIndex", "statusCode"]) if (!nbInt(p[k]) || p[k] < 0) throw new PulseError("pulse_member_not_integer:" + k);
+  if (p.version !== "2.0") throw new PulseError("pulse_version_unsupported");
+  if (p.cipherSuite !== 0) throw new PulseError("pulse_cipher_suite_unsupported");
+  if (!P_HEX64L.test(p.certificateId)) throw new PulseError("pulse_hex_malformed:certificateId");
+  for (const k of ["localRandomValue", "precommitmentValue", "outputValue"]) if (!P_HEX64.test(p[k])) throw new PulseError("pulse_hex_malformed:" + k);
+  if (!/^(?:[0-9A-F]{2})+$/.test(p.signatureValue)) throw new PulseError("pulse_hex_malformed:signatureValue");
+  if (!P_TS.test(p.timeStamp) || nbCalendar(P_TS.exec(p.timeStamp).slice(1).map(Number)) === null) throw new PulseError("pulse_timestamp_malformed");
+  if (p.uri !== `https://beacon.nist.gov/beacon/2.0/chain/${p.chainIndex}/pulse/${p.pulseIndex}`) throw new PulseError("pulse_uri_not_its_index");
+  const ex = p.external;
+  if (!isObj(ex) || Object.keys(ex).length !== 3 || !["sourceId", "statusCode", "value"].every((k) => Object.hasOwn(ex, k))) throw new PulseError("pulse_external_members");
+  if (!(nbStr(ex.sourceId) && P_HEX64.test(ex.sourceId) && nbStr(ex.value) && P_HEX64.test(ex.value) && nbInt(ex.statusCode) && ex.statusCode >= 0 && ex.statusCode < 2 ** 32)) throw new PulseError("pulse_external_malformed");
+  const lv = p.listValues; if (!Array.isArray(lv) || lv.length !== 5) throw new PulseError("pulse_list_values_not_five");
+  const seen = [];
+  for (const v of lv) {
+    if (!isObj(v) || Object.keys(v).length !== 3 || !["uri", "type", "value"].every((k) => Object.hasOwn(v, k))) throw new PulseError("pulse_list_value_members");
+    if (!(nbStr(v.type) && nbStr(v.value) && nbStr(v.uri) && P_HEX64.test(v.value))) throw new PulseError("pulse_list_value_malformed");
+    seen.push(v.type); }
+  if (seen.slice().sort(byCodePoint).join("\u0000") !== LIST_TYPES.slice().sort(byCodePoint).join("\u0000")) throw new PulseError("pulse_list_value_types");
+  for (const k of ["cipherSuite", "period", "statusCode"]) if (p[k] >= 2 ** 32) throw new PulseError("pulse_member_out_of_range:" + k);
+  for (const k of ["chainIndex", "pulseIndex"]) if (p[k] >= 2 ** 64) throw new PulseError("pulse_member_out_of_range:" + k);
+}
+function nbDer(b, i) {   // (tag, start, end) of the DER element at i; strict definite lengths, as the reference's _der
+  if (i + 2 > b.length) throw new PulseError("certificate_der_truncated");
+  const tag = b[i]; let ln = b[i + 1]; i += 2;
+  if (ln & 0x80) { const n = ln & 0x7f;
+    if (n === 0 || n > 4 || i + n > b.length || b[i] === 0) throw new PulseError("certificate_der_length");
+    ln = 0; for (let k = 0; k < n; k++) ln = ln * 256 + b[i + k];
+    if (ln < 0x80) throw new PulseError("certificate_der_length");
+    i += n; }
+  if (i + ln > b.length) throw new PulseError("certificate_der_truncated");
+  return [tag, i, i + ln];
+}
+function nbChildren(b, s, e) { const out = []; while (s < e) { const c = nbDer(b, s); out.push(c); s = c[2]; } if (s !== e) throw new PulseError("certificate_der_length"); return out; }
+function nbTime(bytes, t) {
+  let s = Buffer.from(bytes).toString("latin1");
+  if (t === 0x17) { if (!/^[0-9]{12}Z$/.test(s)) throw new PulseError("certificate_time"); s = (parseInt(s.slice(0, 2), 10) >= 50 ? "19" : "20") + s; }
+  else if (t === 0x18) { if (!/^[0-9]{14}Z$/.test(s)) throw new PulseError("certificate_time"); }
+  else throw new PulseError("certificate_time");
+  const [Y, M, D, h, m, sec] = [s.slice(0, 4), s.slice(4, 6), s.slice(6, 8), s.slice(8, 10), s.slice(10, 12), s.slice(12, 14)].map((x) => parseInt(x, 10));
+  const ms = nbCalendar([Y, M, D, h, m, sec]); if (ms === null) throw new PulseError("certificate_time");   // strptime refuses an impossible date
+  return ms;
+}
+function nbReadCertificate(pem) {
+  if (!nbStr(pem)) throw new PulseError("certificate_not_a_string");
+  const m = /^-----BEGIN CERTIFICATE-----\r?\n([A-Za-z0-9+/=\r\n]+)-----END CERTIFICATE-----\r?\n?$/.exec(pem);
+  if (!m) throw new PulseError("certificate_not_one_pem_block");
+  const b64 = m[1].replace(/[\r\n]/g, "");
+  if (b64.length % 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(b64)) throw new PulseError("certificate_base64");   // base64.b64decode(validate=True)
+  const der = Buffer.from(b64, "base64");
+  const [t, s, e] = nbDer(der, 0); if (t !== 0x30 || e !== der.length) throw new PulseError("certificate_der_outer");
+  const cert = nbChildren(der, s, e); if (cert.length !== 3 || cert[0][0] !== 0x30) throw new PulseError("certificate_der_outer");
+  const tbs = nbChildren(der, cert[0][1], cert[0][2]); const k = tbs.length && tbs[0][0] === 0xa0 ? 1 : 0;
+  if (tbs.length < k + 6) throw new PulseError("certificate_tbs");
+  const validity = nbChildren(der, tbs[k + 3][1], tbs[k + 3][2]); if (validity.length !== 2) throw new PulseError("certificate_validity");
+  const nb = nbTime(der.subarray(validity[0][1], validity[0][2]), validity[0][0]), na = nbTime(der.subarray(validity[1][1], validity[1][2]), validity[1][0]);
+  const spki = nbChildren(der, tbs[k + 5][1], tbs[k + 5][2]); if (spki.length !== 2 || spki[1][0] !== 0x03) throw new PulseError("certificate_spki");
+  const alg = nbChildren(der, spki[0][1], spki[0][2]);
+  if (!der.subarray(alg[0][1], alg[0][2]).equals(Buffer.from("2a864886f70d010101", "hex"))) throw new PulseError("certificate_key_not_rsa");
+  const bits = der.subarray(spki[1][1], spki[1][2]); if (!bits.length || bits[0] !== 0) throw new PulseError("certificate_spki");
+  const [t2, s2, e2] = nbDer(bits, 1); if (t2 !== 0x30 || e2 !== bits.length) throw new PulseError("certificate_spki");
+  const ne = nbChildren(bits, s2, e2); if (ne.length !== 2 || ne[0][0] !== 0x02 || ne[1][0] !== 0x02) throw new PulseError("certificate_spki");
+  const big = (x) => BigInt("0x" + (Buffer.from(x).toString("hex") || "0"));
+  return { der, n: big(bits.subarray(ne[0][1], ne[0][2])), e: big(bits.subarray(ne[1][1], ne[1][2])), nb, na };
+}
+const nbLp = (b) => { const l = Buffer.alloc(4); l.writeUInt32BE(b.length); return Buffer.concat([l, b]); };
+const nbU = (v, n) => { const out = Buffer.alloc(n); let x = BigInt(v); for (let i = n - 1; i >= 0; i--) { out[i] = Number(x & 0xffn); x >>= 8n; } return out; };
+function nbSignedMessage(p) {
+  const lv = Object.fromEntries(p.listValues.map((v) => [v.type, Buffer.from(v.value, "hex")])); const ex = p.external;
+  const parts = [nbLp(Buffer.from(p.uri, "utf8")), nbLp(Buffer.from(p.version, "utf8")), nbU(p.cipherSuite, 4), nbU(p.period, 4), nbLp(Buffer.from(p.certificateId, "hex")),
+    nbU(p.chainIndex, 8), nbU(p.pulseIndex, 8), nbLp(Buffer.from(p.timeStamp, "utf8")), nbLp(Buffer.from(p.localRandomValue, "hex")),
+    nbLp(Buffer.from(ex.sourceId, "hex")), nbU(ex.statusCode, 4), nbLp(Buffer.from(ex.value, "hex"))];
+  for (const t of LIST_TYPES) parts.push(nbLp(lv[t]));
+  parts.push(nbLp(Buffer.from(p.precommitmentValue, "hex")), nbU(p.statusCode, 4));
+  return Buffer.concat(parts);
+}
+function nbModPow(b, e, m) { let r = 1n; b %= m; while (e > 0n) { if (e & 1n) r = (r * b) % m; e >>= 1n; b = (b * b) % m; } return r; }
+const NB_SHA512_DIGESTINFO = Buffer.from("3051300d060960864801650304020305000440", "hex");
+function nbRsaOk(n, e, msg, sig) {
+  const k = Math.ceil(n.toString(2).length / 8); if (sig.length !== k) return false;
+  const s = BigInt("0x" + (sig.toString("hex") || "0")); if (s >= n) return false;
+  const em = nbU(nbModPow(s, e, n), k); const t = Buffer.concat([NB_SHA512_DIGESTINFO, createHash("sha512").update(msg).digest()]);
+  if (k < t.length + 11) return false;
+  return em.equals(Buffer.concat([Buffer.from([0, 1]), Buffer.alloc(k - t.length - 3, 0xff), Buffer.from([0]), t]));
+}
+function nbPulseTime(p) { return nbCalendar(P_TS.exec(p.timeStamp).slice(1).map(Number)); }
+function nbVerifyPulse(p, pem, pinned) {
+  checkPulseGrammar(p); const c = nbReadCertificate(pem); const t = nbPulseTime(p);
+  const res = { ok: false, reason: null, output: p.outputValue, time: t, period_s: Math.floor(p.period / 1000), chain: p.chainIndex, pulse: p.pulseIndex, certificate_id: p.certificateId };
+  if (createHash("sha512").update(c.der).digest("hex") !== p.certificateId) res.reason = "certificate_not_the_certificate_id";
+  else if (!Object.hasOwn(pinned, p.certificateId) || pinned[p.certificateId] !== p.chainIndex) res.reason = "certificate_not_pinned_for_chain";
+  else if (!(c.nb <= t && t <= c.na)) res.reason = "pulse_time_outside_certificate_validity";
+  else { const msg = nbSignedMessage(p), sig = Buffer.from(p.signatureValue, "hex");
+    if (!nbRsaOk(c.n, c.e, msg, sig)) res.reason = "pulse_signature_invalid";
+    else if (createHash("sha512").update(Buffer.concat([msg, sig])).digest("hex").toUpperCase() !== p.outputValue) res.reason = "pulse_output_value_not_recomputed";
+    else res.ok = true; }
+  return res;
+}
+function nbVerifyPair(p, prev, pem, pinned) {
+  checkPulseGrammar(p); checkPulseGrammar(prev);
+  const fail = (why) => Object.assign(nbVerifyPulse(p, pem, pinned), { ok: false, reason: why });
+  if (p.statusCode !== 0 || prev.statusCode !== 0) return fail("status_not_supported");
+  if (p.chainIndex !== prev.chainIndex || p.pulseIndex !== prev.pulseIndex + 1) return fail("pulse_mismatch");
+  if (p.period !== prev.period || p.certificateId !== prev.certificateId) return fail("chain_inconsistent");
+  const a = nbVerifyPulse(prev, pem, pinned), res = nbVerifyPulse(p, pem, pinned);
+  if (!a.ok) Object.assign(res, { ok: false, reason: "previous_" + a.reason });
+  else if (!res.ok) { /* its own reason */ }
+  else if (p.listValues.find((v) => v.type === "previous").value !== prev.outputValue) Object.assign(res, { ok: false, reason: "previous_mismatch" });
+  else if (nbPulseTime(p) - nbPulseTime(prev) !== p.period) Object.assign(res, { ok: false, reason: "period_mismatch" });
+  else if (createHash("sha512").update(Buffer.from(p.localRandomValue, "hex")).digest("hex").toUpperCase() !== prev.precommitmentValue) Object.assign(res, { ok: false, reason: "commitment_mismatch" });
+  return res;
+}
+function parseNotBefore(nb) {   // SPEC §12.2, in the reference's order; UnknownMember / Refused name the member
+  checkClosed(nb, "not_before", NB_KEYS); checkClosed(nb.payment, "not_before.payment", NB_PAYMENT_KEYS);
+  checkClosed(nb.payment.beacon, "not_before.payment.beacon", NB_BEACON_KEYS); checkClosed(nb.mandate, "not_before.mandate", NB_MANDATE_KEYS);
+  checkClosed(nb.pulses, "not_before.pulses", NB_PULSES_KEYS);
+  const pay = nb.payment; const m = NB_AMOUNT.exec(pay.amount);
+  if (!m) throw new Refused("not_before.payment.amount: not a decimal string (SPEC §12.2)");
+  if (/^0+$/.test(m[1]) && /^0*$/.test(m[2] ?? "")) throw new Refused("not_before.payment.amount: not greater than zero (SPEC §12.2)");
+  if (!/^[A-Z]{3}$/.test(pay.currency)) throw new Refused("not_before.payment.currency: not three capital letters A-Z (SPEC §12.2)");
+  if (!NB_RECORD_SALT.test(pay.record_salt)) throw new Refused("not_before.payment.record_salt: not 32 to 128 lowercase hexadecimal characters, an even number (SPEC §12.2)");
+  const pid = pay.payment_id; if (!NB_PAYMENT_ID.test(pid) || pid !== pid.replace(/^ +| +$/g, "")) throw new Refused("not_before.payment.payment_id: not 1 to 35 characters of the allowed set (SPEC §12.2)");
+  for (const k of NB_COMMITMENT_MEMBERS) if (Object.hasOwn(pay, k) && !NB_HEX64L.test(pay[k])) throw new Refused("not_before.payment." + k + ": not 64 lowercase hexadecimal characters (SPEC §12.2)");
+  for (const k of ["pulse", "previous_pulse"]) {
+    try { checkPulseGrammar(nb.pulses[k]); }
+    catch (e) { if (!(e instanceof PulseError)) throw e;
+      if (e.message.startsWith("pulse_unknown_member")) throw new UnknownMember("not_before.pulses." + k + ": unknown key (" + e.message + ") (SPEC §12.2)");
+      throw new Refused("not_before.pulses." + k + ": " + e.message + " (SPEC §12.2)"); } }
+  try { nbReadCertificate(nb.pulses.certificate); } catch (e) { if (!(e instanceof PulseError)) throw e; throw new Refused("not_before.pulses.certificate: " + e.message + " (SPEC §12.2)"); }
+}
+const NB_PATH_TOKEN = /([^.\[\]]+)|\[(0|[1-9][0-9]*)\]/y;
+const NB_MISSING = Symbol("missing");
+function nbResolvePath(node, path) {   // the value at a §4 path, as the reference's _resolve_path
+  let pos = 0, first = true;
+  const at = (p) => { NB_PATH_TOKEN.lastIndex = p; return NB_PATH_TOKEN.exec(path); };
+  while (pos < path.length) {
+    let m;
+    if (path[pos] === ".") { if (first) return NB_MISSING; pos += 1; m = at(pos); if (!m || m[1] === undefined) return NB_MISSING; }
+    else { m = at(pos); if (!m || (m[1] !== undefined && !first)) return NB_MISSING; }
+    if (m[1] !== undefined) { if (!isObj(node) || !Object.hasOwn(node, m[1])) return NB_MISSING; node = node[m[1]]; }
+    else { const i = Number(m[2]); if (!Array.isArray(node) || i >= node.length) return NB_MISSING; node = node[i]; }
+    pos = m.index + m[0].length; first = false;
+  }
+  return first ? NB_MISSING : node;
+}
+function nbAmountEqualsMinor(amount, currency, minor) {
+  if (!Object.hasOwn(NB_MINOR_UNITS, currency)) return null;
+  const e = NB_MINOR_UNITS[currency]; const [whole, frac = ""] = amount.split(".");
+  if (frac.replace(/0+$/, "").length > e) return false;
+  if (!(typeof minor === "number" && Number.isInteger(minor))) return false;
+  return BigInt(whole) * 10n ** BigInt(e) + BigInt((frac + "0".repeat(e)).slice(0, e) || "0") === BigInt(minor);
+}
+const nbFmt = (ms) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
+function checkNotBefore(nb, ev, artResults, provenTime, pinned = NB_PINNED) {   // SPEC §12.3: NB1-NB3, the window
+  const pul = nb.pulses, pay = nb.payment, r = nbVerifyPair(pul.pulse, pul.previous_pulse, pul.certificate, pinned), T = r.time;
+  const out = { profile: NB_PROFILE, source: "nist-beacon-2.0", chain: r.chain, pulse: r.pulse, time: nbFmt(T), certificate_id: r.certificate_id, checks: {},
+    covers: Object.keys(pay).filter((k) => k !== "beacon").sort(byCodePoint).concat(["mandate:" + nb.mandate.artifact]),
+    window: { not_before: null, not_before_operator_promise: null, not_after: null }, mandate_payee: null };
+  const c = out.checks, b = pay.beacon;
+  if (!r.ok) c.NB1 = "failed:" + r.reason;
+  else if (b.chain_index !== r.chain || b.pulse_index !== r.pulse || b.output_value.toLowerCase() !== r.output.toLowerCase()) c.NB1 = "failed:beacon_value_mismatch";
+  else c.NB1 = "verified";
+  const idx = ev.artifacts.findIndex((a) => a.name === nb.mandate.artifact);
+  if (idx < 0) c.NB2 = "failed:mandate_not_in_pack";
+  else { const ar = artResults[idx];
+    if (!(ar.signature_ok === true && ar.claims_match === true)) c.NB2 = "not_evaluated:mandate_not_verified";
+    else { const claims = ev.artifacts[idx].resolved_claims; const v = nbResolvePath(claims, nb.mandate.amount_claim);
+      if (v === NB_MISSING) c.NB2 = "failed:amount_claim_not_found";
+      else if (!(isObj(v) && Object.keys(v).length === 2 && Object.hasOwn(v, "amount") && Object.hasOwn(v, "currency")) || v.currency !== pay.currency) c.NB2 = "failed:amount_not_the_mandate_amount";
+      else { const eq = nbAmountEqualsMinor(pay.amount, pay.currency, v.amount); c.NB2 = eq === null ? "not_evaluated:currency_minor_unit_unknown" : eq ? "verified" : "failed:amount_not_the_mandate_amount"; }
+      const dp = isObj(claims) ? claims.delegate_payload : undefined;
+      for (const holder of [claims, Array.isArray(dp) && dp.length ? dp[0] : null]) if (isObj(holder) && isObj(holder.payee)) { out.mandate_payee = holder.payee; break; } } }
+  if (c.NB1 !== "verified") c.NB3 = "not_evaluated:beacon_not_verified";
+  else { const cm = /^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})Z$/.exec(ev.created_utc);
+    const created = cm ? nbCalendar(cm.slice(1).map(Number)) : null;   // §1 checks the pattern only: 2026-02-30 is no time to compare
+    if (created === null) c.NB3 = "failed:created_utc_not_a_time";
+    else if (created < T) c.NB3 = "failed:created_before_beacon";
+    else if (provenTime === null) c.NB3 = "not_evaluated:no_verified_time_anchor";
+    else { const [whole, frac = ""] = provenTime.replace(/Z$/, "").split(".");
+      const gt = nbCalendar([0, 4, 6, 8, 10, 12].map((i) => +whole.slice(i, i + (i ? 2 : 4))));
+      if (gt + (frac ? Number("0." + frac) * 1000 : 0) < T) c.NB3 = "failed:window_inverted";
+      else { c.NB3 = "verified"; out.window.not_after = provenTime; } } }
+  if (c.NB1 === "verified" && c.NB2 === "verified") { out.window.not_before = nbFmt(T); out.window.not_before_operator_promise = nbFmt(T - r.period_s * 1000); }
+  const vals = Object.values(c);
+  out.state = vals.some((x) => x.startsWith("failed")) ? "failed" : vals.every((x) => x === "verified") ? "verified" : "not_evaluated";
+  return out;
+}
+// SPEC §12.2: the commitment encoding and a disclosure {member, salt, value}, as the reference's payment_commitment /
+// check_disclosure (same outcome names as cryptovalid-opencore SPEC §18). Lengths are counted in code points, as Python's len().
+const NB_LONE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;   // a lone surrogate is not text (no UTF-8)
+const NB_DISCLOSURE_KEYS = { member: [[(v) => NB_COMMITMENT_MEMBERS.includes(v), "one of the five commitment members"], 1],
+  salt: [[(v) => nbStr(v) && /^[0-9a-f]{32}$/.test(v), "32 lowercase hexadecimal characters"], 1],
+  value: [[(v) => nbStr(v) && [...v].length > 0 && [...v].length <= 1024 && !NB_LONE.test(v), "a non-empty string of at most 1024 characters"], 1] };
+const nbAscii = (v) => /^[\x00-\x7f]*$/.test(v);
+export function ibanProblem(s) {
+  if (!nbStr(s) || !/^[A-Z0-9]*$/.test(s)) return "iban_charset";
+  if (s.length < 15 || s.length > 34) return "iban_length";
+  if (!/^[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}$/.test(s)) return "iban_charset";
+  const cd = parseInt(s.slice(2, 4), 10); if (cd < 2 || cd > 98) return "iban_check_digits";
+  const digits = [...(s.slice(4) + s.slice(0, 4))].map((c) => parseInt(c, 36).toString()).join("");
+  return BigInt(digits) % 97n === 1n ? null : "iban_checksum";
+}
+export function paymentCommitment(member, salt, value) {
+  if (!NB_COMMITMENT_MEMBERS.includes(member)) throw new Error(JSON.stringify(member) + " is not a commitment member");
+  if (!nbStr(value) || [...value].length < 1 || [...value].length > 1024 || NB_LONE.test(value)) throw new Error("a value is a non-empty string of at most 1024 characters");
+  if (!Buffer.isBuffer(salt) || salt.length !== 16) throw new Error("the salt is exactly 16 bytes");
+  let v;
+  if (NB_IBAN_MEMBERS.includes(member)) { if (!nbAscii(value)) throw new Error("iban_charset"); v = value.replace(/ /g, "").toUpperCase(); const why = ibanProblem(v); if (why) throw new Error(why); }
+  else v = value.normalize("NFC");
+  return createHash("sha256").update(Buffer.concat([Buffer.from("cryptovalid-payment/1/", "ascii"), Buffer.from(member, "ascii"), Buffer.from([0]), salt, Buffer.from(v, "utf8")])).digest("hex");
+}
+export function checkDisclosure(path, disclosure) {   // read-only; Refused for a disclosure or a pack outside the grammar
+  checkClosed(disclosure, "disclosure", NB_DISCLOSURE_KEYS);
+  const raw = readEvidenceBytes(path); if (raw === null) throw new Refused("evidence file exceeds bound");
+  const text = UTF8.decode(raw); if (text.startsWith("\ufeff")) throw new Refused("BOM");
+  const ev = parseStrict(text); if (!isObj(ev) || !isObj(ev.not_before)) throw new Refused("the pack carries no not_before block (SPEC §12)");
+  parseNotBefore(ev.not_before);
+  const m = disclosure.member, out = { member: m, note: "the pack must also verify (verify) for the commitment to be the sealed one" };
+  if (NB_IBAN_MEMBERS.includes(m)) { const v = disclosure.value; const why = !nbAscii(v) ? "iban_charset" : ibanProblem(v.replace(/ /g, "").toUpperCase());
+    if (why) return { ...out, outcome: "disclosure_iban_invalid", reason: why }; }
+  if (!Object.hasOwn(ev.not_before.payment, m)) return { ...out, outcome: "member_absent" };
+  const got = paymentCommitment(m, Buffer.from(disclosure.salt, "hex"), disclosure.value);
+  return { ...out, outcome: got === ev.not_before.payment[m] ? "matches" : "disclosure_mismatch" };
+}
+export { checkNotBefore, parseNotBefore };
 export function verifyEvidence(path, opts = {}) {
   // 1.7.2 (SPEC §3.1): acceptIntegralFloats, a boolean, default false; when true the receipt says so
   if (opts.acceptIntegralFloats !== undefined && typeof opts.acceptIntegralFloats !== "boolean") throw new TypeError("acceptIntegralFloats must be a boolean");
@@ -491,6 +754,7 @@ function verifyEvidenceInner(path, opts) {
     ev.artifacts.forEach((a, i) => { checkUnknown(a, "artifacts[" + i + "]", ARTIFACT_KEYS);
       for (const [sub, keys] of [["key", KEY_KEYS], ["kb_jwt", KB_COPY_KEYS], ["verified_at_build", VAB_KEYS]]) checkUnknown(a[sub], "artifacts[" + i + "]." + sub, keys); });
     const sigs = ev.producer_signatures?.signatures; if (Array.isArray(sigs)) sigs.forEach((e, i) => checkUnknown(e, "producer_signatures.signatures[" + i + "]", ENTRY_KEYS));
+    if ("not_before" in ev) parseNotBefore(ev.not_before);   // 1.8.0-draft — SPEC §12.2: closed at every level, before any check runs
   } catch (e) { return refuse(String(e.message ?? e), e instanceof UnknownMember ? "unknown_member" : e instanceof FormatUnsupported ? "format_unsupported" : "malformed"); }
   const e2 = Object.create(null); for (const k of Object.keys(ev)) if (!DIGEST_EXCLUDED.includes(k)) e2[k] = ev[k];
   const recomputed = sha256(Buffer.from(canon(e2), "utf-8")).toString("hex"); const digestOk = recomputed === ev.evidence_digest_sha256;
@@ -557,13 +821,16 @@ function verifyEvidenceInner(path, opts) {
   const states = deriveStates({ digestOk, artResults, bindingSetMatch, tsBlock: ts, rfcBlock, anchorResults, tsaRequested: Boolean(opts.tsaCert),
     producer, pinned: (opts.trusted ?? null) !== null, trustAnchorGiven: false });
   if (opts.trustSetComplete && states.producer_signature.reasons.includes("key_unresolved")) unmet.push("trust_set_complete");
+  // 1.8.0-draft — SPEC §12.3: NB1-NB3. The upper bound is a TSA-VERIFIED genTime; this verifier cannot check a TSA signature
+  // (no openssl), so it never has one: NB3 is at best not_evaluated:no_verified_time_anchor here (declared, as tsa_verified)
+  const nbRep = "not_before" in ev ? checkNotBefore(ev.not_before, ev, artResults, null) : null;
   return { digest_ok: digestOk, artifacts: artResults, producer_signatures: producer, pq_protected: producer.pq_protected ?? false, bindings_ok: bindingsOk, rfc3161: rfc, anchors: anchorResults, anchors_verified: anchorsVerified, provenance_classes: classes,
     // r10: ANY — one reconciled artifact must not clear the flag for the others; r7: a label alone never clears it,
     // a missing class is a refusal; r8: this verifier cannot validate x5c chains, so chain_verified is always null (declared)
     self_asserted_only: artResults.length === 0 || artResults.some((r) => r.self_asserted !== false), chain_verified: null, policy_ok: policyOk,
-    valid: Boolean(artResults.length && digestOk && allOk && bindingsOk && rfc.verified !== false && policyOk), honest_scope: ev.honest_scope ?? null,
+    valid: Boolean(artResults.length && digestOk && allOk && bindingsOk && rfc.verified !== false && policyOk && (nbRep === null || nbRep.state !== "failed")), honest_scope: ev.honest_scope ?? null,
     admission: "admitted", refusal_class: null, states_vocabulary: STATES_VOCABULARY, states, policy: { met: unmet.length === 0, unmet: POLICY_UNMET.filter((u) => unmet.includes(u)) },
-    mldsa_backend: HAVE_MLDSA };
+    mldsa_backend: HAVE_MLDSA, ...(nbRep === null ? {} : { not_before: nbRep }) };
 }
 function main(argv) {
   // 1.5.2 review: a usage line that stderr does not take (/dev/full) is 74, as in the Python CLI (console.error dropped the error and exited 2)

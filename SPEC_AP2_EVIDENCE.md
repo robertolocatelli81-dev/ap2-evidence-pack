@@ -1237,7 +1237,8 @@ writes the merchant's name in clear (`payee.name`), and a destroyed salt does no
   20022 schema today). Uniqueness is the producer's: a verifier sees one pack.
 - `beacon.source` a closed list (`nist-beacon-2.0`); the pulses are closed as `ap2_nist_beacon.check_grammar` states (their
   fifteen members, `external` three, `listValues` the five types once each, fixed-length hex, the `uri` naming its own
-  chain and index, `cipherSuite` 0, `version` "2.0"); the certificate one PEM block with an RSA key.
+  chain and index, `cipherSuite` 0, `version` "2.0", a `timeStamp` that is a real calendar time); the certificate one PEM
+  block with an RSA key.
 A producer does not write a block this section refuses, nor one whose NB1 or NB2 is not `verified` at build.
 `build_evidence` takes the clear values and makes the commitments (`make_payment`); it never writes a clear IBAN or name.
 
@@ -1260,7 +1261,9 @@ A producer does not write a block this section refuses, nor one whose NB1 or NB2
   `not_evaluated:currency_minor_unit_unknown`). The receipt names the mandate's `payee` (top level or
   `delegate_payload[0]`, informative). The IBANs are not compared with the mandate: the pack holds only their commitments
   (a disclosed IBAN can be searched in the mandate's claims by the relying party).
-- NB3 (window) T = the named pulse's `timeStamp`. `created_utc` before T: `failed:created_before_beacon`. The upper bound
+- NB3 (window) T = the named pulse's `timeStamp`. A `created_utc` that matches the §1 pattern but is no calendar time
+  (`2026-02-30T00:00:00Z`): `failed:created_utc_not_a_time` (§1 checks the pattern only; up to the first draft of this
+  section the reference stopped there with a traceback). `created_utc` before T: `failed:created_before_beacon`. The upper bound
   is the earliest TSA-verified genTime of §3.2/§3.3 (a token whose TSA signature verified with the relying party's
   `--tsa-cert`): genTime before T `failed:window_inverted` (one of the two time sources is wrong or was subverted;
   cryptovalid-opencore §19.5 uses the same name); genTime = T is one instant; no such token:
@@ -1286,7 +1289,7 @@ AP2's issuer did not sign them); that any money moved; anything about a value wh
 sealing (a commitment, the amount, the id) breaks the digest; the same change re-sealed by the
 producer after the TSA's token is no longer the content that token binds (§3.2) — the window is what shows a later change.
 
-### 12.5 Tests (test_ap2_not_before.py)
+### 12.5 Tests (test_ap2_not_before.py, test_js_not_before.py)
 Real pulses and certificates (`spec/vectors/beacon/`, fetched 2026-11-16, with SHA256SUMS); the IBANs are the published
 examples of the SWIFT IBAN registry (`GB82WEST12345698765432`, `DE89370400440532013000`; a changed IBAN is the other
 example); mandates, names, details and amounts are test data. Positive control first: the 1.7.3 verifier refuses a pack
@@ -1306,12 +1309,21 @@ an unknown key at every level; a missing required key at every level, the three 
 each wrong JSON type; malformed amounts, currencies, payment ids, record salts and commitments; a duplicate key in the file;
 a copy of the verifier without the beacon module (refused, `format_unsupported`). The rules of the predecessor that no real
 NIST pair can break with valid signatures are tested on the pulses of a TEST beacon made by the test (a throwaway RSA key
-and certificate, pinned only there).
+and certificate, pinned only there). The JavaScript verifier: `test_js_not_before.py` runs the not_before cases of
+`verifiers/differential_oracle.py` (the variants above, generated, plus the window rule with genTimes before, at and
+after T and the disclosures, called directly in both); positive control: with the JavaScript verifier of `cf008bd` it
+fails, 278 disagreements of 281.
 
 ### 12.6 Open
-The JavaScript verifier (`verifiers/js`) does not read the block yet: it refuses such a pack as an unknown top-level key
-(fail closed; a divergence of the two verifiers until it does). cryptovalid-opencore vendors `ap2_evidence.py` alone: that
-copy refuses a pack with the block (`format_unsupported`) until it vendors `ap2_nist_beacon.py` too. The SWIFT registry's
+Both verifiers read the block (1.8.0-draft, 2026-11-16): `verifiers/js/ap2-verify.mjs` checks the same closed grammar,
+the same pulse pair, the same NB1-NB3 codes and receipt, and exports the same commitment encoding and disclosure check
+(`paymentCommitment`, `checkDisclosure`). One difference stays, the one the format already declares for every TSA check:
+the JS verifier cannot verify a TSA signature (no openssl), so it never has a TSA-verified genTime and its NB3 is at best
+`not_evaluated:no_verified_time_anchor` where the reference, given `--tsa-cert`, closes the window; the window rule itself
+is the same, compared by calling both functions with the same genTimes (`verifiers/js/nb_parity.mjs`). Measured by
+`verifiers/differential_oracle.py`: 232 not_before packs + 1 positive control + 48 function cases, 0 disagreements of 281
+(`test_js_not_before.py`). cryptovalid-opencore vendors `ap2_evidence.py` alone: that copy refuses a pack with the block
+(`format_unsupported`) until it vendors `ap2_nist_beacon.py` too. The SWIFT registry's
 per-country BBAN rules; ISO 4217 minor units beyond the closed table; the payment-id character set re-read on the official
 schema; a second beacon (CURBy, drand); the relying party's own pinned certificates; the KB-JWT `nonce` (RFC 9901 §4.3,
 chosen by the verifier) as the place where a beacon value would be inside bytes the HOLDER signs — a profile of AP2's flow,

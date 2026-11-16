@@ -1719,7 +1719,16 @@ _NB_PAYMENT_KEYS = {"payment_id": (_is_str, "a string", True), "amount": (_is_st
                     "payee_name_commitment": (_is_str, "a string", False)}
 _DISCLOSURE_KEYS = {"member": (lambda v: v in COMMITMENT_MEMBERS, "one of the five commitment members", True),
                     "salt": (lambda v: _is_str(v) and _HEX32L.fullmatch(v) is not None, "32 lowercase hexadecimal characters", True),
-                    "value": (lambda v: _is_str(v) and 0 < len(v) <= 1024, "a non-empty string of at most 1024 characters", True)}
+                    "value": (lambda v: _is_str(v) and 0 < len(v) <= 1024 and _is_text(v), "a non-empty string of at most 1024 characters", True)}
+
+
+def _is_text(v: str) -> bool:
+    """A string that UTF-8 can encode (no lone surrogate, which json.loads lets through as "\\ud800")."""
+    try:
+        v.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
 _NB_BEACON_KEYS = {"source": (lambda v: v == "nist-beacon-2.0", '"nist-beacon-2.0"', True),
                    "chain_index": (lambda v: type(v) is int and v >= 0, "an integer >= 0", True),
                    "pulse_index": (lambda v: type(v) is int and v >= 1, "an integer >= 1", True),
@@ -1755,7 +1764,7 @@ def normalise_commitment_value(member: str, value: str) -> str:
     import unicodedata
     if member not in COMMITMENT_MEMBERS:
         raise ValueError(f"{member!r} is not a commitment member")
-    if not isinstance(value, str) or not 0 < len(value) <= 1024:
+    if not isinstance(value, str) or not 0 < len(value) <= 1024 or not _is_text(value):
         raise ValueError("a value is a non-empty string of at most 1024 characters")
     if member in IBAN_MEMBERS:
         if not value.isascii():                       # refused before upper case: "ß".upper() is "SS"
@@ -1898,7 +1907,7 @@ def _amount_equals_minor(amount: str, currency: str, minor) -> Optional[bool]:
 
 
 def check_not_before(nb: Dict, ev: Dict, art_results: List[Dict], proven_time: Optional[str], pinned=None) -> Dict:
-    """SPEC §12.3: NB1-NB3, the window, the IBAN occurrences. `proven_time`: the earliest TSA-verified genTime or None."""
+    """SPEC §12.3: NB1-NB3, the window, the mandate's payee. `proven_time`: the earliest TSA-verified genTime or None."""
     pinned = _nb.PINNED if pinned is None else pinned
     pul = nb["pulses"]
     r = _nb.verify_pair(pul["pulse"], pul["previous_pulse"], pul["certificate"], pinned)
@@ -1945,8 +1954,13 @@ def check_not_before(nb: Dict, ev: Dict, art_results: List[Dict], proven_time: O
     if c["NB1"] != "verified":
         c["NB3"] = "not_evaluated:beacon_not_verified"
     else:
-        created = datetime.strptime(ev["created_utc"], fmt).replace(tzinfo=timezone.utc)
-        if created < T:
+        try:   # §1 checks the pattern only: 2026-02-30T00:00:00Z passes it and is no time to compare
+            created = datetime.strptime(ev["created_utc"], fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            created = None
+        if created is None:
+            c["NB3"] = "failed:created_utc_not_a_time"
+        elif created < T:
             c["NB3"] = "failed:created_before_beacon"
         elif proven_time is None:
             c["NB3"] = "not_evaluated:no_verified_time_anchor"

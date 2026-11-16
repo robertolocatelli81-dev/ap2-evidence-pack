@@ -63,7 +63,8 @@ def _forged_tsr(digest, extra_tst=b""):
 # NB: the gen_time below is the probe TSA token's own genTime — regenerating the anchor vectors changes it and this
 # declaration must be updated with them (the run then reports the mismatch instead of silently passing).
 # the cases that must PASS: they prove the bench can tell green from red (never hostile files)
-POSITIVE_CONTROLS = frozenset({"non-ascii-subject-rehashed", "fresh-pack-control-valid", "must-created_utc-ok", "file-exactly-at-the-bound"})
+POSITIVE_CONTROLS = frozenset({"non-ascii-subject-rehashed", "fresh-pack-control-valid", "must-created_utc-ok", "file-exactly-at-the-bound",
+                               "nb-valid"})   # 1.8.0-draft: the not_before pack built by the reference
 MAX_EVIDENCE_BYTES = 64 << 20
 # 25/09/2026 — what a verifier must refuse BEFORE reading it, with a DECLARED reason that both must give: agreement alone is
 # not enough (a FIFO blocked both verifiers and a symlink to /dev/zero exhausted memory in both: they "agreed").
@@ -222,7 +223,9 @@ def run(cmd, path, flags):
                r.get("accept_integral_floats"),   # 1.7.2 — SPEC §3.1: the option, and the literals each artifact had read that way
                tuple(tuple(a["integral_literals_read"]) if "integral_literals_read" in a else None for a in (r.get("artifacts") or [])),
                # 1.7.3 — SPEC §9.2: each artifact's ignored names (key_material included), or that it is an error
-               tuple("error" if "error" in a else json.dumps(a.get("ignored"), sort_keys=True) for a in (r.get("artifacts") or [])))
+               tuple("error" if "error" in a else json.dumps(a.get("ignored"), sort_keys=True) for a in (r.get("artifacts") or [])),
+               # 1.8.0-draft — SPEC §12.3: the whole not_before receipt (checks, window, covers, payee, state), or None
+               json.dumps(r.get("not_before"), sort_keys=True))
         return (r.get("valid"), r.get("digest_ok"), r.get("bindings_ok"), prod.get("present"), prod.get("ok"), prod.get("trusted"),
                 r.get("pq_protected"), ts.get("claimed"), ts.get("verified"), ts.get("granted"), ts.get("imprint_ok"), ts.get("gen_time"),
                 r.get("policy_ok"), r.get("self_asserted_only"), r.get("chain_verified"), tuple(r.get("provenance_classes") or ()),
@@ -492,6 +495,7 @@ def build_cases(d):
     dd = os.path.join(d, "dir.json"); os.makedirs(dd); cases["file-directory"] = (dd, [])
     for nm, size in (("file-one-byte-over-the-bound", MAX_EVIDENCE_BYTES + 1), ("file-exactly-at-the-bound", MAX_EVIDENCE_BYTES)):
         raw = base_text.encode("utf-8"); cases[nm] = (w(nm, raw + b" " * (size - len(raw))), [])
+    cases.update(_nb_cases(d, w))   # 1.8.0-draft — SPEC §12
     return cases
 
 
@@ -592,6 +596,233 @@ def _fresh_pack(base, sk, n, header_txt, payload_txt, resolved, disclosures=(), 
     return rehash(ev)
 
 
+# ── 1.8.0-draft — SPEC §12, the `not_before` block: a pack built by the reference with real NIST pulses (spec/vectors/beacon),
+# the SWIFT registry example IBANs as commitments and test names, then generated variants (unknown keys at every level,
+# wrong types, missing keys, malformed values, moved commitments, another pulse or certificate, an impossible time, a
+# creation before the beacon). No TSA token: NB3's upper bound (a TSA-VERIFIED genTime) is openssl-only, so the window rule
+# with a genTime is compared below by calling both verifiers' functions directly (nb_parity).
+NB_VDIR = os.path.join(ROOT, "spec", "vectors", "beacon")
+NB_IBANS = ("GB82WEST12345698765432", "DE89370400440532013000")
+NB_SALTS = {m: bytes([i]) * 16 for i, m in enumerate(("payer_iban_commitment", "payee_iban_commitment", "payer_name_commitment",
+                                                     "payer_details_commitment", "payee_name_commitment"), 1)}
+
+
+def _nb_pulse(name):
+    return _load(os.path.join(NB_VDIR, name))["pulse"]
+
+
+def _nb_block(ap2, names=True):
+    p, prev = _nb_pulse("chain2_2030310.json"), _nb_pulse("chain2_2030309.json")
+    extra = {"payer_name": "Oracle Test Payer", "payer_details": "1 Oracle Street, Testville", "payee_name": "Oracle Caf\u00e9 Merchant"} if names else {}
+    pay = ap2.make_payment(payment_id="E2E-ORACLE-1", amount="12.50", currency="EUR", payer_iban=NB_IBANS[0], payee_iban=NB_IBANS[1],
+                           beacon={"source": "nist-beacon-2.0", "chain_index": 2, "pulse_index": 2030310, "output_value": p["outputValue"]},
+                           salts=NB_SALTS, record_salt=b"\x42" * 16, **extra)
+    with open(os.path.join(NB_VDIR, "cert_chain2.pem"), encoding="ascii") as fh:
+        cert = fh.read()
+    return {"profile": "ap2-evidence-pack.not-before/1", "payment": pay, "mandate": {"artifact": "payment", "amount_claim": "payment_amount"},
+            "pulses": {"pulse": p, "previous_pulse": prev, "certificate": cert}}
+
+
+NB_CLAIMS = {"vct": "mandate.payment.1", "transaction_id": "b3JhY2xlLXRyYW5zYWN0aW9u", "payee": {"id": "merchant-oracle-1", "name": "Oracle Test Merchant"},
+             "payment_amount": {"amount": 1250, "currency": "EUR"}, "payment_instrument": {"id": "instrument-oracle-1", "type": "card"}}
+
+
+def _nb_pack(d, names=True, claims=None, tag="", amount_claim="payment_amount", build=True):
+    """The base pack, built by the reference of THIS tree (the builder; the verifier under test may be another checkout).
+    `build=False`: the mandate signed and sealed by hand (a block the builder would refuse: NB2 not verified)."""
+    import ap2_evidence as ap2
+    sk, n = _fresh_key()
+    claims = NB_CLAIMS if claims is None else claims
+    out = os.path.join(d, "nb_base%s%s.json" % ("" if names else "_nonames", tag))
+    blk = _nb_block(ap2, names); blk["mandate"]["amount_claim"] = amount_claim
+    token = _sign_compact(sk, n, json.dumps(claims, separators=(",", ":")))
+    if build:
+        ap2.build_evidence([{"name": "payment", "sd_jwt": token}], out, not_before=blk)
+        return out, _load(out)
+    ap2.build_evidence([{"name": "payment", "sd_jwt": token}], out)
+    ev = _load(out); ev["not_before"] = blk; ev = rehash(ev)
+    with open(out, "w", encoding="utf-8") as fh:
+        json.dump(ev, fh)
+    return out, ev
+
+
+def _nb_cases(d, w):
+    cases = {}
+    base_path, base = _nb_pack(d)
+    cases["nb-valid"] = (base_path, [])
+    def mut(name, f):
+        e = copy.deepcopy(base); f(e); cases["nb-" + name] = (w("nb_" + name, json.dumps(rehash(e))), [])
+    nbk = lambda e: e["not_before"]  # noqa: E731
+    mut("created-before-beacon", lambda e: e.__setitem__("created_utc", "2026-11-16T13:10:59Z"))
+    mut("created-at-beacon", lambda e: e.__setitem__("created_utc", "2026-11-16T13:11:00Z"))
+    mut("created-impossible-date", lambda e: e.__setitem__("created_utc", "2026-02-30T00:00:00Z"))
+    mut("amount-not-the-mandate", lambda e: nbk(e)["payment"].__setitem__("amount", "12.51"))
+    mut("amount-trailing-zeros", lambda e: nbk(e)["payment"].__setitem__("amount", "12.5000"))
+    mut("amount-sub-cent", lambda e: nbk(e)["payment"].__setitem__("amount", "12.505"))
+    mut("currency-not-the-mandate", lambda e: nbk(e)["payment"].__setitem__("currency", "USD"))
+    mut("currency-no-minor-table", lambda e: nbk(e)["payment"].__setitem__("currency", "SEK"))
+    mut("mandate-not-in-pack", lambda e: nbk(e)["mandate"].__setitem__("artifact", "other"))
+    mut("amount-claim-not-found", lambda e: nbk(e)["mandate"].__setitem__("amount_claim", "payment_amount.amount.x"))
+    mut("amount-claim-not-amount", lambda e: nbk(e)["mandate"].__setitem__("amount_claim", "payee"))
+    mut("amount-claim-path-index", lambda e: nbk(e)["mandate"].__setitem__("amount_claim", "payment_instrument[0]"))
+    mut("amount-claim-path-dots", lambda e: nbk(e)["mandate"].__setitem__("amount_claim", "payment_amount..amount"))
+    def swap(e):
+        p = nbk(e)["payment"]; p["payer_iban_commitment"], p["payee_iban_commitment"] = p["payee_iban_commitment"], p["payer_iban_commitment"]
+    mut("moved-commitments-swapped", swap)
+    mut("moved-commitment-iban-to-name", lambda e: nbk(e)["payment"].__setitem__("payee_name_commitment", nbk(e)["payment"]["payer_iban_commitment"]))
+    mut("names-absent", lambda e: [nbk(e)["payment"].pop(k) for k in ("payer_name_commitment", "payer_details_commitment", "payee_name_commitment")])
+    mut("beacon-value-of-predecessor", lambda e: nbk(e)["payment"]["beacon"].__setitem__("output_value", nbk(e)["pulses"]["previous_pulse"]["outputValue"]))
+    mut("beacon-value-lower-case", lambda e: nbk(e)["payment"]["beacon"].__setitem__("output_value", nbk(e)["payment"]["beacon"]["output_value"].lower()))
+    mut("beacon-index-other", lambda e: nbk(e)["payment"]["beacon"].__setitem__("pulse_index", 2030309))
+    mut("beacon-chain-other", lambda e: nbk(e)["payment"]["beacon"].__setitem__("chain_index", 1))
+    mut("pulse-of-chain-1", lambda e: nbk(e)["pulses"].__setitem__("pulse", _nb_pulse("chain1_1000.json")))
+    with open(os.path.join(NB_VDIR, "cert_chain1.pem"), encoding="ascii") as fh:
+        cert1 = fh.read()
+    mut("certificate-of-chain-1", lambda e: nbk(e)["pulses"].__setitem__("certificate", cert1))
+    mut("certificate-twice", lambda e: nbk(e)["pulses"].__setitem__("certificate", nbk(e)["pulses"]["certificate"] * 2))
+    def pswap(e):
+        q = nbk(e)["pulses"]; q["pulse"], q["previous_pulse"] = q["previous_pulse"], q["pulse"]
+    mut("pulses-swapped", pswap)
+    mut("predecessor-is-the-pulse", lambda e: nbk(e)["pulses"].__setitem__("previous_pulse", copy.deepcopy(nbk(e)["pulses"]["pulse"])))
+    mut("predecessor-status-1", lambda e: nbk(e)["pulses"]["previous_pulse"].__setitem__("statusCode", 1))
+    mut("pulse-impossible-time", lambda e: nbk(e)["pulses"]["pulse"].__setitem__("timeStamp", "2026-02-30T13:11:00.000Z"))
+    mut("pulse-time-moved", lambda e: nbk(e)["pulses"]["pulse"].__setitem__("timeStamp", "2026-11-16T13:12:00.000Z"))
+    for which in ("pulse", "previous_pulse"):
+        for k in ("localRandomValue", "precommitmentValue", "outputValue", "signatureValue"):
+            def flip(e, which=which, k=k):
+                s = nbk(e)["pulses"][which][k]; nbk(e)["pulses"][which][k] = ("0" if s[7] != "0" else "1").join((s[:7], s[8:]))
+            mut(f"bitflip-{which}-{k}", flip)
+    # unknown keys at every level
+    for path in ((), ("payment",), ("payment", "beacon"), ("mandate",), ("pulses",), ("pulses", "pulse"), ("pulses", "previous_pulse"),
+                 ("pulses", "pulse", "external"), ("pulses", "previous_pulse", "listValues", 2)):
+        def unk(e, path=path):
+            t = nbk(e)
+            for k in path:
+                t = t[k]
+            t["x_unknown"] = "1"
+        mut("unknown-key-" + "-".join(map(str, path or ("top",))), unk)
+    mut("unknown-key-top-level-z", lambda e: nbk(e).__setitem__("zz", 1))
+    # missing keys and wrong types, every member of the four objects of this format
+    for path in ((), ("payment",), ("payment", "beacon"), ("mandate",), ("pulses",)):
+        obj = nbk(base)
+        for k in path:
+            obj = obj[k]
+        for k in list(obj):
+            def miss(e, path=path, k=k):
+                t = nbk(e)
+                for p in path:
+                    t = t[p]
+                del t[k]
+            mut("missing-" + "-".join(path + (k,)), miss)
+            for tn, wv in (("null", None), ("true", True), ("int", 1), ("str", "x"), ("list", []), ("obj", {})):
+                if type(wv) is type(obj[k]):
+                    continue
+                def wrong(e, path=path, k=k, wv=wv):
+                    t = nbk(e)
+                    for p in path:
+                        t = t[p]
+                    t[k] = copy.deepcopy(wv)
+                mut("type-" + "-".join(path + (k, tn)), wrong)
+    for nm, k, v in (("amount-zero", "amount", "0.00"), ("amount-leading-zero", "amount", "012.50"), ("amount-five-decimals", "amount", "12.50000"),
+                     ("amount-exponent", "amount", "1e3"), ("amount-space", "amount", " 12.50"), ("currency-lower", "currency", "eur"),
+                     ("currency-four", "currency", "EURO"), ("pid-empty", "payment_id", ""), ("pid-36", "payment_id", "x" * 36),
+                     ("pid-leading-space", "payment_id", " E2E"), ("pid-trailing-space", "payment_id", "E2E "), ("pid-underscore", "payment_id", "E2E_1"),
+                     ("pid-non-ascii", "payment_id", "E2Eé"), ("pid-newline", "payment_id", "E2E\n1"), ("salt-short", "record_salt", "ab" * 15),
+                     ("salt-long", "record_salt", "ab" * 65), ("salt-upper", "record_salt", "AB" * 16), ("salt-odd", "record_salt", "a" * 33),
+                     ("commitment-upper", "payer_iban_commitment", "AB" * 32), ("commitment-short", "payee_iban_commitment", "ab" * 31),
+                     ("commitment-not-hex", "payer_name_commitment", "g" * 64), ("commitment-clear-iban", "payer_iban_commitment", NB_IBANS[0])):
+        mut("value-" + nm, lambda e, k=k, v=v: nbk(e)["payment"].__setitem__(k, v))
+    for nm, k, v in (("chain-negative", "chain_index", -1), ("pulse-zero", "pulse_index", 0), ("pulse-negative", "pulse_index", -5),
+                     ("output-127", "output_value", "A" * 127), ("output-129", "output_value", "A" * 129), ("output-not-hex", "output_value", "G" * 128)):
+        mut("beacon-" + nm, lambda e, k=k, v=v: nbk(e)["payment"]["beacon"].__setitem__(k, v))
+    mut("mandate-artifact-empty", lambda e: nbk(e)["mandate"].__setitem__("artifact", ""))
+    mut("mandate-claim-empty", lambda e: nbk(e)["mandate"].__setitem__("amount_claim", ""))
+    def chain1(e):
+        for k in ("pulse", "previous_pulse"):
+            q = nbk(e)["pulses"][k]; q["chainIndex"] = 1; q["uri"] = q["uri"].replace("/chain/2/", "/chain/1/")
+        nbk(e)["payment"]["beacon"]["chain_index"] = 1
+    mut("pulses-claim-chain-1-with-the-chain-2-certificate", chain1)
+    mut("pulse-uri-http", lambda e: nbk(e)["pulses"]["pulse"].__setitem__("uri", nbk(e)["pulses"]["pulse"]["uri"].replace("https:", "http:")))
+    mut("pulse-day-31-of-november", lambda e: nbk(e)["pulses"]["pulse"].__setitem__("timeStamp", "2026-11-31T13:11:00.000Z"))
+    mut("mandate-claims-altered", lambda e: e["artifacts"][0]["resolved_claims"]["payment_amount"].__setitem__("amount", 1251))
+    # mandates of other shapes (signed here; the builder refuses the ones whose NB2 does not verify, so they are sealed by hand)
+    for tag, claims, path in (("-amount-extra-key", dict(NB_CLAIMS, payment_amount={"amount": 1250, "currency": "EUR", "x": 1}), "payment_amount"),
+                              ("-amount-boolean", dict(NB_CLAIMS, payment_amount={"amount": True, "currency": "EUR"}), "payment_amount"),
+                              ("-path-index-then-key", dict(NB_CLAIMS, wrap=[{"p": {"amount": 1250, "currency": "EUR"}}]), "wrap[0]p"),
+                              ("-path-in-list", dict(NB_CLAIMS, wrap=[{"p": {"amount": 1250, "currency": "EUR"}}]), "wrap[0].p"),
+                              ("-payee-in-delegate", dict({k: v for k, v in NB_CLAIMS.items() if k != "payee"}, delegate_payload=[{"payee": {"id": "m-d", "name": "Delegate Payee"}}]), "payment_amount")):
+        pth, _ = _nb_pack(d, claims=claims, tag=tag, amount_claim=path, build=False)
+        cases["nb-mandate" + tag] = (pth, [])
+    _, ev1 = _nb_pack(d, claims=dict(NB_CLAIMS, payment_amount={"amount": True, "currency": "EUR"}), tag="-cent", build=False)
+    ev1["not_before"]["payment"]["amount"] = "0.01"; cases["nb-mandate-amount-true-vs-0.01"] = (w("nb_cent", json.dumps(rehash(ev1))), [])
+    mut("profile-other", lambda e: nbk(e).__setitem__("profile", "ap2-evidence-pack.not-before/2"))
+    mut("source-other", lambda e: nbk(e)["payment"]["beacon"].__setitem__("source", "curby"))
+    mut("clear-iban-member", lambda e: nbk(e)["payment"].__setitem__("payer_iban", NB_IBANS[0]))
+    mut("not-an-object", lambda e: e.__setitem__("not_before", [1]))
+    txt = json.dumps(rehash(copy.deepcopy(base)))
+    cases["nb-duplicate-key"] = (w("nb_dup", txt.replace('"payment_id": ', '"payment_id": "DUP", "payment_id": ', 1)), [])
+    # the block outside the digest: beside the seal, as an anchor entry
+    e = copy.deepcopy(base); blk = e.pop("not_before"); e = rehash(e); e["rfc3161_timestamp"] = dict(e.get("rfc3161_timestamp") or {"anchored": False}, not_before=blk)
+    cases["nb-beside-the-seal"] = (w("nb_beside", json.dumps(e)), [])
+    e = copy.deepcopy(base); blk = e.pop("not_before"); e = rehash(e); e["anchors"] = [dict(blk, mechanism="rfc3161", tsr_b64="AA==")]
+    cases["nb-in-anchors"] = (w("nb_anchor", json.dumps(e)), [])
+    # changed after sealing, digest NOT recomputed
+    e = copy.deepcopy(base); e["not_before"]["payment"]["amount"] = "12.51"; cases["nb-changed-not-resealed"] = (w("nb_nores", json.dumps(e)), [])
+    return cases
+
+
+def nb_function_parity(d):
+    """The window rule with an upper bound, and the disclosures, called directly in both verifiers (same pack, same inputs)."""
+    import ap2_evidence as ap2
+    path, ev = _nb_pack(d)
+    path2, _ = _nb_pack(d, names=False)
+    window = [None, "20261116131059Z", "20261116131059.999Z", "20261116131100Z", "20261116131100.5Z", "20261116150000Z"]
+    good = [("payer_iban_commitment", NB_IBANS[0]), ("payee_iban_commitment", NB_IBANS[1]), ("payer_name_commitment", "Oracle Test Payer"),
+            ("payer_details_commitment", "1 Oracle Street, Testville"), ("payee_name_commitment", "Oracle Caf\u00e9 Merchant")]
+    disc = []
+    for m, v in good:
+        disc.append({"member": m, "salt": NB_SALTS[m].hex(), "value": v})                                   # matches
+        disc.append({"member": m, "salt": NB_SALTS["payee_name_commitment" if m != "payee_name_commitment" else "payer_name_commitment"].hex(), "value": v})
+        disc.append({"member": m, "salt": NB_SALTS[m].hex(), "value": v + "X"})
+    s1 = NB_SALTS["payer_iban_commitment"].hex()
+    for v in ("gb82 west 1234 5698 7654 32", "GB82WEST12345698765433", "GB82WEßT12345698765432", "GB82WEſT12345698765432",
+              "GB00WEST12345698765432", "GB82", "\ud800GB82WEST12345698765432", NB_IBANS[1]):
+        disc.append({"member": "payer_iban_commitment", "salt": s1, "value": v})
+    s5 = NB_SALTS["payee_name_commitment"].hex()
+    for v in ("Oracle Caf\u00e9 Merchant ", "Oracle Cafe\u0301 Merchant", "\ud800", "x" * 1025, "", "x" * 1024, "\U0001f600" * 1024, "\U0001f600" * 1025):
+        disc.append({"member": "payee_name_commitment", "salt": s5, "value": v})
+    disc.append({"member": "payee_iban_commitment", "salt": s1, "value": NB_IBANS[0]})                       # one member's value on another
+    for bad in ({"member": "payer_iban", "salt": s1, "value": "x"}, {"member": "payer_iban_commitment", "salt": s1[:-2], "value": "x"},
+                {"member": "payer_iban_commitment", "salt": s1.upper(), "value": "x"}, {"member": "payer_iban_commitment", "salt": s1},
+                {"member": "payer_iban_commitment", "salt": s1, "value": 5}, {"member": "payer_iban_commitment", "salt": s1, "value": "x", "z": 1}, ["x"]):
+        disc.append(bad)
+    jobs = [(path, window, disc), (path2, [None], [{"member": "payer_name_commitment", "salt": s5, "value": "x"},
+                                                  {"member": "payer_iban_commitment", "salt": s1, "value": NB_IBANS[0]}])]
+    rows = []
+    for pth, win, dl in jobs:
+        evp = _load(pth)
+        arts = [{"signature_ok": True, "claims_match": True} for _ in evp["artifacts"]]
+        def pyd(x):
+            try:
+                return ap2.check_disclosure(pth, x)
+            except (ap2.Ap2EvidenceError, ValueError):
+                return "refused"
+        py = {"window": [ap2.check_not_before(evp["not_before"], evp, arts, g) for g in win], "disclosures": [pyd(x) for x in dl]}
+        job = os.path.join(d, "nb_job.json")
+        with open(job, "w", encoding="utf-8") as fh:
+            json.dump({"pack": pth, "window": win, "disclosures": dl}, fh)
+        out = subprocess.run(["node", os.path.join(os.path.dirname(JS[1]), "nb_parity.mjs"), job], capture_output=True, text=True, timeout=120)
+        try:
+            js = json.loads(out.stdout)
+        except ValueError:
+            js = {"window": ["CRASH"] * len(win), "disclosures": ["CRASH"] * len(dl)}
+        for i, g in enumerate(win):
+            rows.append((f"nb-window-genTime-{g}-{os.path.basename(pth)}", py["window"][i], js["window"][i]))
+        for i, x in enumerate(dl):
+            rows.append((f"nb-disclosure-{i}-{os.path.basename(pth)}", py["disclosures"][i], js["disclosures"][i]))
+    return rows
+
+
 CLI = {"cli-no-path": [], "cli-unknown-flag": ["V", "--no-such"], "cli-two-positionals": ["V", "V"], "cli-empty-path": [""], "cli-help": ["--help"], "cli-h": ["-h"],
        "cli-double-dash": ["--", "V"], "cli-bool-with-value": ["V", "--require-pq=1"], "cli-key-empty": ["V", "--trusted-producer-key", ""], "cli-key-missing-value": ["V", "--trusted-producer-key"],
        "cli-key-flag-as-value": ["V", "--trusted-producer-key", "--require-pq"], "cli-key-no-alg": ["V", "--trusted-producer-key", "abc"], "cli-tsa-cert-empty": ["V", "--tsa-cert", ""], "cli-repeated-key-empty-first": ["V", "--trusted-producer-key", "", "--trusted-producer-key", "ed25519=AA=="],
@@ -606,6 +837,9 @@ def main():
     tmp = tempfile.mkdtemp(); diffs = 0; n = 0
     try:
         cases = build_cases(tmp)
+        only_nb = os.environ.get("AP2_ORACLE_ONLY_NB") == "1"   # the not_before cases alone (fast: the hand mutants of SPEC §12)
+        if only_nb:
+            cases = {k: v for k, v in cases.items() if k.startswith("nb-")}
         declared = 0
         for name, (path, flags) in cases.items():
             if name in REFUSALS:   # declared reason, checked in each verifier (not only their agreement)
@@ -622,8 +856,12 @@ def main():
                 declared += 1; print(f"  [DECL] {name:34} py={py} js={js}  <- declared: " + ("TSA verification" if "tsa-cert" in name else "chain validation") + " is openssl-only"); continue
             ok = py == js; diffs += 0 if ok else 1
             print(f"  [{'OK ' if ok else 'DIFF'}] {name:34} py={py} js={js}")
+        n_nbf = 0
+        for name, py, js in nb_function_parity(tmp):   # 1.8.0-draft — SPEC §12: the window rule and the disclosures, called directly
+            ok = py == js; diffs += 0 if ok else 1; n += 1; n_nbf += 1
+            print(f"  [{'OK ' if ok else 'DIFF'}] {name:34} py={json.dumps(py, sort_keys=True)[:160]} js={json.dumps(js, sort_keys=True)[:160]}")
         valid = os.path.join(ROOT, "spec", "vectors", "ap2", "valid_signed.json")
-        for name, argv in CLI.items():
+        for name, argv in ({} if only_nb else CLI).items():
             bare = argv == ["BARE"]; args = [] if bare else [valid if a == "V" else a for a in argv]; row = {}
             for k, cmd in (("py", PY[:-1]), ("js", JS)):
                 full = list(cmd) + (["verify"] if k == "py" and not bare else []) + args
@@ -637,11 +875,11 @@ def main():
             print(f"  [{'OK ' if ok else 'DIFF'}] {name:34} expect {want}: {row}")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    if declared != len(DECLARED) + len(OPENSSL_VECTORS):   # r2: a declared divergence that stops appearing (e.g. openssl absent) is reported, not silently counted OK
+    if declared != len(DECLARED) + len(OPENSSL_VECTORS) and not only_nb:   # r2: a declared divergence that stops appearing (e.g. openssl absent) is reported, not silently counted OK
         print(f"  [WARN] declared divergences observed: {declared}/{len(DECLARED) + len(OPENSSL_VECTORS)} — the declaration no longer matches this machine"); diffs += 1
-    n_vec = sum(1 for k in cases if k.startswith("vector-")); n_cli = len(CLI)
+    n_vec = sum(1 for k in cases if k.startswith("vector-")); n_cli = 0 if only_nb else len(CLI)
     n_pos = sum(1 for k in cases if k in POSITIVE_CONTROLS)
-    print(f"decomposition: {n_vec} vector runs + {len(cases) - n_vec - n_pos} hostile files + {n_pos} positive controls + {n_cli} CLI cases = {n}")
+    print(f"decomposition: {n_vec} vector runs + {len(cases) - n_vec - n_pos} hostile files + {n_pos} positive controls + {n_nbf} not_before function cases + {n_cli} CLI cases = {n}")
     print(f"disagreements: {diffs}/{n} (declared: {declared})"); return 1 if diffs else 0
 
 

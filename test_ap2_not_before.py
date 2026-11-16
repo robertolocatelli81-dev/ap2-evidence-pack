@@ -263,7 +263,8 @@ class TestPositive(Base):
         for bad in ({"member": "payer_iban", "salt": "00" * 16, "value": "x"}, {"member": "payer_iban_commitment", "salt": "00" * 15, "value": "x"},
                     {"member": "payer_iban_commitment", "salt": "AA" * 16, "value": "x"}, {"member": "payer_iban_commitment", "salt": "00" * 16, "value": ""},
                     {"member": "payer_iban_commitment", "salt": "00" * 16, "value": 5}, {"member": "payer_iban_commitment", "salt": "00" * 16},
-                    {"member": "payer_iban_commitment", "salt": "00" * 16, "value": "x", "extra": 1}, ["payer_iban_commitment"]):
+                    {"member": "payer_iban_commitment", "salt": "00" * 16, "value": "x", "extra": 1}, ["payer_iban_commitment"],
+                    {"member": "payer_name_commitment", "salt": "00" * 16, "value": "\ud800"}):   # a lone surrogate is not text
             with self.assertRaises(ap2.Ap2EvidenceError):
                 ap2.check_disclosure(p, bad)
 
@@ -376,6 +377,22 @@ class TestAfterSealing(Base):
         reseal(os.path.join(self.d, "e.json"), ev)
         r = ap2.verify_evidence(os.path.join(self.d, "e.json"))
         self.assertEqual(r["not_before"]["checks"]["NB3"], "failed:created_before_beacon"); self.assertFalse(r["valid"])
+
+    def test_impossible_times(self):
+        """A time that matches the pattern and is no calendar time: refused in a pulse, failed as created_utc (both used to
+        be a ValueError traceback in the reference, found by the JS port of 2026-11-16)."""
+        nb = block(); nb["pulses"]["pulse"]["timeStamp"] = "2026-02-30T13:11:00.000Z"
+        ev = self.load(self.build()); ev["not_before"] = nb
+        p = os.path.join(self.d, "t1.json"); reseal(p, ev)
+        r = ap2.verify_evidence(p)
+        self.assertEqual((r["admission"], r["refusal_class"]), ("refused", "malformed"))
+        ev = self.load(self.build()); ev["created_utc"] = "2026-02-30T00:00:00Z"
+        p = os.path.join(self.d, "t2.json"); reseal(p, ev)
+        r = ap2.verify_evidence(p)
+        self.assertEqual(r["not_before"]["checks"]["NB3"], "failed:created_utc_not_a_time"); self.assertFalse(r["valid"])
+        for t in ("2026-11-16T24:00:00.000Z", "2026-13-01T00:00:00.000Z", "0000-01-01T00:00:00.000Z", "2026-11-16T13:11:60.000Z"):
+            with self.assertRaises(NB.PulseError):
+                NB.check_grammar(dict(pulse("chain2_2030310.json"), timeStamp=t))
 
     def test_every_bit_of_every_hex_field(self):
         rnd = random.Random(20261116)
