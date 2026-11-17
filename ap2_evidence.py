@@ -370,8 +370,8 @@ def parse_sd_jwt(compact: str) -> Dict:
     else:
         jwt, middle, kb = compact, [], None
     seg = jwt.split(".")
-    if len(seg) != 3:
-        raise Ap2EvidenceError("issuer JWT must have 3 dot-separated segments")
+    if len(seg) != 3:   # 1.8.0 (SPEC §13): the dots found are named
+        raise Ap2EvidenceError(f"issuer JWT must have 3 dot-separated segments (found {len(seg) - 1} dot(s))")
     try:
         header = _loads_segment(_b64url_decode(seg[0]), "JWT header")
         payload = _loads_segment(_b64url_decode(seg[1]), "JWT payload")
@@ -381,6 +381,75 @@ def parse_sd_jwt(compact: str) -> Dict:
             "signature": _b64url_decode(seg[2]),
             "signing_input": f"{seg[0]}.{seg[1]}".encode("ascii"),
             "disclosures": [d for d in middle if d], "kb_jwt": kb}
+
+
+# ---- SPEC §13: the JOSE header profile (1.8.0) ----------------------------------------------------------------------
+
+JOSE_PROFILES = {   # profile: (typ, source, symmetric algorithms refused)
+    "openid4vci-proof": ("openid4vci-proof+jwt", "OpenID4VCI 1.0 Final (2025-09-16) Appendix F.1", True),
+    "key-attestation": ("key-attestation+jwt", "OpenID4VCI 1.0 Final (2025-09-16) Appendix D.1", True),
+    "sd-jwt-vc": ("dc+sd-jwt", "draft-ietf-oauth-sd-jwt-vc-27 §2.2.1", False),
+    "kb-jwt": ("kb+jwt", "RFC 9901 §4.3", False),
+}
+_SYMMETRIC = ("HS256", "HS384", "HS512")
+
+
+def decode_jose_header(segment: str) -> Dict:
+    """SPEC §13: the first segment of a JWS compact serialization, strict base64url, UTF-8, a JSON object with no member
+    twice; Ap2EvidenceError otherwise."""
+    header = _loads_segment(_b64url_decode(segment), "JOSE header")
+    if not isinstance(header, dict):
+        raise Ap2EvidenceError("JOSE header is not a JSON object")
+    return header
+
+
+def _media_type(typ: str) -> str:
+    """RFC 7515 §4.1.9: compared without regard to case; 'application/' implied when the value has no '/'"""
+    t = typ.lower()
+    return t if "/" in t else "application/" + t
+
+
+def check_jose_header(header, expected_typ: str, allowed_algs) -> Dict:
+    """SPEC §13: {"ok", "why", "typ", "alg"}; never raises on `header`, ValueError on the caller's arguments"""
+    if not isinstance(expected_typ, str) or not expected_typ:
+        raise ValueError("expected_typ: a non-empty string")
+    if not isinstance(allowed_algs, (list, tuple)) or not allowed_algs \
+            or not all(isinstance(a, str) and a for a in allowed_algs) or "none" in allowed_algs:
+        raise ValueError('allowed_algs: a non-empty list of algorithm names, without "none" (RFC 8725 §3.2)')
+    out = {"ok": False, "why": None, "typ": None, "alg": None}
+    if not isinstance(header, dict):
+        out["why"] = "header_not_object"
+        return out
+    out["typ"], out["alg"] = header.get("typ"), header.get("alg")
+    if "crit" in header:
+        out["why"] = "crit_not_understood"
+    elif "alg" not in header:
+        out["why"] = "alg_missing"
+    elif not isinstance(header["alg"], str):
+        out["why"] = "alg_not_string"
+    elif header["alg"] not in allowed_algs:
+        out["why"] = "alg_not_allowed"
+    elif "typ" not in header:
+        out["why"] = "typ_missing"
+    elif not isinstance(header["typ"], str):
+        out["why"] = "typ_not_string"
+    elif _media_type(header["typ"]) != _media_type(expected_typ):
+        out["why"] = "typ_mismatch"
+    else:
+        out["ok"] = True
+    return out
+
+
+def check_jose_profile(header, profile: str, allowed_algs) -> Dict:
+    """SPEC §13: check_jose_header with a built-in profile's typ; `profile_unknown` for a name not in JOSE_PROFILES"""
+    if profile not in JOSE_PROFILES:
+        return {"ok": False, "why": "profile_unknown", "typ": None, "alg": None}
+    typ, source, no_symmetric = JOSE_PROFILES[profile]
+    if no_symmetric and isinstance(allowed_algs, (list, tuple)) and any(a in _SYMMETRIC for a in allowed_algs):
+        raise ValueError(f"{profile}: {source} forbids a symmetric algorithm (MAC)")
+    out = check_jose_header(header, typ, allowed_algs)
+    out["profile"] = profile
+    return out
 
 
 def _disclosure_digest(disclosure_b64: str) -> str:

@@ -20,6 +20,17 @@ positive control and 48 direct function cases (0 disagreements of 281, `test_js_
 verification (the divergence the format declares for every TSA check). A pulse timeStamp or a `created_utc` that is no
 calendar time is refused / `failed:created_utc_not_a_time` (the first draft stopped on them with a traceback).
 
+Also in 1.8.0 (SPEC §13): the JOSE header profile. `decode_jose_header` (public: strict base64url, UTF-8, a JSON object
+with no member twice), `check_jose_header(header, expected_typ, allowed_algs)` with closed reasons in a fixed order and
+`typ` compared as RFC 7515 §4.1.9 says (case-insensitive, `application/` implied), and `check_jose_profile` with four
+built-in profiles and their sources (OpenID4VCI 1.0 Final App. F.1 `openid4vci-proof+jwt` and D.1 `key-attestation+jwt`,
+SD-JWT VC -27 §2.2.1 `dc+sd-jwt`, RFC 9901 §4.3 `kb+jwt`; versions read on 2026-11-17). `parse_sd_jwt` names the dots it
+found. `test_ap2_jose_header.py`: 9 tests; the three EUDI TS3 headers (lines 427, 439, 496, `typ` `JWT`) give
+`typ_mismatch` against their profiles; the ModI example's truncated token prefix is refused as a header and its `RS256`
+is not the `ES256` shown; 5 000 generated headers agree with an oracle written apart. 15 hand mutants: 14 detected,
+1 equivalent (a profile's `typ` written in another case: the comparison ignores case). Not changed, noted:
+`verify_kb_jwt` compares `typ` with `kb+jwt` byte for byte.
+
 Also in 1.8.0 (SPEC §3.2): an RFC 3161 token whose SignerInfo names its signer by subjectKeyIdentifier (RFC 5652 §5.3) was
 `tsa_verified: false` even when valid, because `openssl ts -verify` cannot read that form (measured on 2026-11-17 with
 OpenSSL 3.0.22); it is now checked step by step with the same checks and the same anchor (`--tsa-cert` as CAfile, the
