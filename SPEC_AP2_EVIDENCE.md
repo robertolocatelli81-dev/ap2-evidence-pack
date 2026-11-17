@@ -307,8 +307,10 @@ valid token of that form was `tsa_verified: false` (measured on 2026-11-17 with 
 made one by one: the CMS signature and messageDigest (`openssl cms -verify -noverify`, the signer looked up in the token
 and in the `--tsa-cert` file); the TSTInfo imprint; a signed ESS attribute signingCertificate (RFC 2634) or
 signingCertificateV2 (RFC 5035), each one present with exactly one value and exactly one ESSCertID naming the signer
-certificate (hash, and issuer and serial number when present); the TSTInfo `tsa` field, when present, byte-equal to the
-signer's subject or to one of its subjectAltName; and `openssl verify -purpose timestampsign -attime <genTime> -CAfile
+certificate (hash, and issuer and serial number when present); the TSTInfo `tsa` field, when present, naming the
+signer's subject or one of its subjectAltName; the names (that issuer, that subject, a directoryName) compared as
+OpenSSL's `X509_NAME_cmp` compares them (string values in UTF-8, white space trimmed and folded, ASCII letters
+lowercased; the same RDNs in order), the serial number as an integer; and `openssl verify -purpose timestampsign -attime <genTime> -CAfile
 <--tsa-cert> -no-CApath -no-CAstore -untrusted <the token's certificates>` over the signer certificate, which is the
 chain `openssl ts -verify -CAfile` builds for the other form (no system store, no partial chain); the JS verifier cannot (no openssl)
 and reports `null` (1.6.0: and states `time_anchor` `not_evaluated` with `instrument_failure`, §6.9). Under `--require-anchor --tsa-cert`, `tsa_verified` must be `true`
