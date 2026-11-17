@@ -488,7 +488,9 @@ flags: `require_producer`, `require_pq`, `require_anchor`, and `min_anchors` (1.
    violation in any of its three segments is that artifact's failure whether or not the holder
    key is known: the strict segment rule does not depend on being able to check the signature;
    1.4.0, likewise independent of the holder key: the KB-JWT header MUST carry `typ: "kb+jwt"`
-   and `alg: "ES256"`, and its payload MUST carry `iat` (integer), `aud` (string), `nonce`
+   (since 1.8.0 compared as RFC 7515 §4.1.9 says and §13 states: ASCII case ignored, `application/` implied, so
+   `KB+JWT` and `application/kb+jwt` are `kb+jwt`; up to 1.7.x byte for byte, and a header with `typ: "KB+JWT"`,
+   which RFC 7515 makes the same type, was that artifact's error) and `alg: "ES256"`, and its payload MUST carry `iat` (integer), `aud` (string), `nonce`
    (string) and `sd_hash` (string) — RFC 9901 §4.3 REQUIRED and §7.3 step 5.d; a KB-JWT missing
    any of them is that artifact's error, whatever `cnf` says). A verifier records the
    KB-JWT `aud`/`nonce`/`iat` as present-but-not-validated, as the sealed scope states: their expected
@@ -790,7 +792,7 @@ or JWK member is ignored and reported — `header_param_ignored`, `key_jwk_membe
 | key sources of the issuer JWT protected header: `jku`, `jwk`, `x5u`, `x5c` (1.7.3) | RFC 7515 §4.1.2, §4.1.3, §4.1.5, §4.1.6 define each as naming the key that signed the JWS; draft-ietf-oauth-sd-jwt-vc-23 §2.5: the key comes from a mechanism "permitted for the given Issuer according to policy" — neither says what a recipient does with one it does not use | the one the snapshotted key came from (`jwk` for `jwk_header`, `x5c` for `x5c_header`) is reconciled as §2 says; every other one present is not used for the key and is reported in `ignored.key_material`; a `jwk` or `x5c` among them must name the snapshotted key (§2 (d)), otherwise that artifact's error — this format's choice, not the standards' |
 | issuer JWT payload | RFC 7519 §4: "all claims that are not understood by implementations MUST be ignored" | every claim is RECORDED: the resolved payload is the pack's content and `resolved_claims` lists it in full, so nothing is reported twice; the SD-JWT shapes of RFC 9901 (`_sd`, `_sd_alg`, `...`) are imposed as in §3.1 |
 | `cnf` | RFC 7800 §3.1: "all confirmation members that are not understood by implementations MUST be ignored" | understood: `jwk`, `jwe`, `jku`, `kid` (the members RFC 7800 defines, §3.2–§3.5; other confirmation methods of the IANA registry, e.g. `x5t#S256` of RFC 8705 or `jkt` of RFC 9449, are not understood here). Others ignored and reported in `ignored.cnf` |
-| KB-JWT header | RFC 7515 as above; RFC 9901 §4.3: `typ` REQUIRED, MUST be `kb+jwt`; `alg` REQUIRED | `typ` not exactly `"kb+jwt"` is that artifact's error (RFC 9901 §4.3; RFC 9901 §7.3 step 5.d asks a Verifier to check it when Key Binding is required — this format checks every KB-JWT it carries, whether or not the holder key is known); `alg` not `"ES256"` is that artifact's error by this format's profile (§6 step 2: `alg: "ES256"`; RFC 9901 §4.3 only forbids `none`); `crit` as above; other unregistered names ignored and reported in `ignored.kb_jwt_header` |
+| KB-JWT header | RFC 7515 as above; RFC 9901 §4.3: `typ` REQUIRED, MUST be `kb+jwt`; `alg` REQUIRED | `typ` missing, not a string, or not `kb+jwt` as RFC 7515 §4.1.9 compares media types (§13; since 1.8.0, byte for byte before) is that artifact's error (RFC 9901 §4.3; RFC 9901 §7.3 step 5.d asks a Verifier to check it when Key Binding is required — this format checks every KB-JWT it carries, whether or not the holder key is known); `alg` not `"ES256"` is that artifact's error by this format's profile (§6 step 2: `alg: "ES256"`; RFC 9901 §4.3 only forbids `none`); `crit` as above; other unregistered names ignored and reported in `ignored.kb_jwt_header` |
 | KB-JWT payload | RFC 7519 §4 (ignore); RFC 9901 §4.3: `iat`, `aud`, `nonce`, `sd_hash` REQUIRED | the four REQUIRED claims must be present with their RFC 9901 types (`iat` integer, the others strings) — absence or wrong type is that artifact's error; their VALUES are recorded, not validated (sealed scope). Registered names: `iss`, `sub`, `aud`, `exp`, `nbf`, `iat`, `jti` (RFC 7519 §4.1), `nonce`, `sd_hash` (RFC 9901). Others ignored and reported in `ignored.kb_jwt_claims` |
 
 `artifacts[i].ignored` is an object present on every artifact that verified; each slot above is
@@ -1397,7 +1399,11 @@ draft-ietf-oauth-rfc8725bis is at -10, a draft, not in force) recommends explici
   of strings without "none" (RFC 8725 §3.2) and `expected_typ` a non-empty string; otherwise ValueError.
 - **The `typ` comparison** (RFC 7515 §4.1.9, Proposed Standard, May 2015): `typ` is a media type, compared without
   regard to ASCII case, and "a recipient ... MUST treat it as if 'application/' were prepended to any 'typ' value not
-  containing a '/'" — the same normalisation is applied to `expected_typ`, then the two strings must be equal.
+  containing a '/'" — the same normalisation is applied to `expected_typ`, then the two strings must be equal. Only
+  the letters A–Z are folded (media type names are ASCII letters, digits and a few signs, RFC 6838 §4.2, Best Current Practice, January
+  2013, updated by RFC 9694; status read on rfc-editor.org on 2026-11-17): `\u212aB+JWT` (KELVIN SIGN) is not `kb+jwt`,
+  though Python's `str.lower` and JavaScript's `toLowerCase` make it so (measured on 2026-11-17; the first wording of
+  `check_jose_header` used `str.lower` and accepted it). The KB-JWT of §7.3 uses this comparison.
   `Key-Attestation+JWT` and `application/key-attestation+jwt` are `key-attestation+jwt`; `JWT` is not. A media type
   parameter (`; …`) is compared as written: none of the profiles below has one.
 - **Profiles** (`check_jose_profile(header, profile, allowed_algs)`; an unknown profile is `profile_unknown`), each with
