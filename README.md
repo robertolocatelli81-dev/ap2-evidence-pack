@@ -168,9 +168,10 @@ integrity/authenticity survives the quantum transition (NIST IR 8547). Verificat
 fail-closed; authenticity requires the relying party to **pin** the producer public keys
 out of band (an embedded key proves consistency, never authenticity). Policy flags on
 `verify_evidence`: `require_producer`, `require_pq`, `require_anchor`, and since 1.5.0 `min_anchors`. The ML-DSA-65
-path is checked against a NIST ACVP sigVer subset (`pqcrypto/vectors/`) — the same nine
-cases the elara-mesh verifier runs, so both stacks answer to one set of NIST-published ACVP vectors — a local check
-against public test data, not a NIST validation.
+path is checked against NIST ACVP sigVer vectors (`pqcrypto/vectors/`): every case of the ML-DSA-65 external/pure
+group of usnistgov/ACVP-Server (15), written by `pqcrypto/vectors/make_acvp_mldsa65.py` from NIST's JSON at a pinned
+commit — a local check against public test data, not a NIST validation. Running an ACVP subset in both stacks was
+navigatorbuilds' idea (elara-mesh); the file here is generated from NIST's data, not copied from theirs.
 
 ## More than one time anchor: `anchors` (1.5.0, SPEC §3.3)
 
@@ -548,7 +549,7 @@ AP2_SDK_PATH=... python3 verifiers/sdk_crosscheck.py --hostile   # a third stack
 Other people's work this repository uses or learned from, each under its own licence (see also [NOTICE](NOTICE)):
 
 - **Data**: NIST Randomness Beacon 2.0 pulses and certificates (U.S. government work, 17 U.S.C. §105) in
-  `spec/vectors/beacon/`; nine NIST ACVP ML-DSA-65 sigVer cases in `pqcrypto/vectors/`; the minor units of five
+  `spec/vectors/beacon/`; 15 NIST ACVP ML-DSA-65 sigVer cases in `pqcrypto/vectors/` (generated from NIST's JSON); the minor units of five
   currencies from Unicode CLDR release 49 (Unicode License v3, [LICENSE-Unicode-3.0.txt](LICENSE-Unicode-3.0.txt)).
 - **Independent verifiers used as oracles**: the AP2 Python SDK of google-agentic-commerce/AP2 (Apache-2.0), run by
   `verifiers/sdk_crosscheck.py` from a checkout the user provides; OpenSSL (Apache-2.0) for `--tsa-cert` and
@@ -557,7 +558,7 @@ Other people's work this repository uses or learned from, each under its own lic
   code copied); the AP2 mandates of google-agentic-commerce/AP2; SD-JWT (RFC 9901), SD-JWT VC, OpenID4VCI, RFC 3161,
   RFC 7515 and the other standards named with their versions in SPEC_AP2_EVIDENCE.md.
 - **People**, from the public discussion of google-agentic-commerce/AP2 issue #338: the conformance vectors with
-  declared verdicts and the shared ACVP subset answer a proposal of navigatorbuilds (the Elara project, elara-mesh),
+  declared verdicts and the idea of checking ML-DSA-65 against an ACVP subset answer a proposal of navigatorbuilds (the Elara project, elara-mesh),
   whose independent reader written from SPEC_AP2_EVIDENCE.md alone (comment of 2026-09-06) named the places where the
   text, not the reader, decided the answer (the RFC 3161 trust root among them); the `anchors` list of SPEC §3.3 (1.5.0) answers giskard09's point that a pack could carry one commitment and a
   nested one was silently ignored (comment of 2026-10-11).

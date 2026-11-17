@@ -1,0 +1,18 @@
+acvp_mldsa65_sigver_pure.jsonl holds test data of NIST's Automated Cryptographic Validation Protocol server
+(usnistgov/ACVP-Server, commit a7f283cdc87d2d6dd93c1bac59e5622c5f9f8324, gen-val/json-files/ML-DSA-sigVer-FIPS204/
+internalProjection.json, sha256 47cdd6314c7f746d02421ffcba89d4dbc7bb875ac49e07a029fdfc26fba55437). Source: the National
+Institute of Standards and Technology (NIST).
+
+Changed on 2026-11-17 by make_acvp_mldsa65.py: only the tests of the group ML-DSA-65 / external / pure (tgId 3, 15
+tests) are kept; of each test only tgId, tcId, testPassed, reason, pk, message, context and signature, the hex in lower
+case, one JSON object per line.
+
+The notice of ACVP-Server (its README, section License, read on 2026-11-17), kept intact:
+
+NIST-developed software is provided by NIST as a public service. You may use, copy, and distribute copies of the software in any medium, provided that you keep intact this entire notice. You may improve, modify, and create derivative works of the software or any portion of the software, and you may copy and distribute such modifications or works. Modified works should carry a notice stating that you changed the software and should note the date and nature of any such change. Please explicitly acknowledge the National Institute of Standards and Technology as the source of the software. 
+
+NIST-developed software is expressly provided "AS IS." NIST MAKES NO WARRANTY OF ANY KIND, EXPRESS, IMPLIED, IN FACT, OR ARISING BY OPERATION OF LAW, INCLUDING, WITHOUT LIMITATION, THE IMPLIED WARRANTY OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT, AND DATA ACCURACY. NIST NEITHER REPRESENTS NOR WARRANTS THAT THE OPERATION OF THE SOFTWARE WILL BE UNINTERRUPTED OR ERROR-FREE, OR THAT ANY DEFECTS WILL BE CORRECTED. NIST DOES NOT WARRANT OR MAKE ANY REPRESENTATIONS REGARDING THE USE OF THE SOFTWARE OR THE RESULTS THEREOF, INCLUDING BUT NOT LIMITED TO THE CORRECTNESS, ACCURACY, RELIABILITY, OR USEFULNESS OF THE SOFTWARE.
+
+You are solely responsible for determining the appropriateness of using and distributing the software and you assume all risks associated with its use, including but not limited to the risks and costs of program errors, compliance with applicable laws, damage to or loss of data, programs or equipment, and the unavailability or interruption of operation. This software is not intended to be used in any situation where a failure could cause risk of injury or damage to property. The software developed by NIST employees is not subject to copyright protection within the United States.
+
+## Contributions

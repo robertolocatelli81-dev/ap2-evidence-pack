@@ -40,6 +40,19 @@ cryptovalid-opencore (the CMS signature, checked first, already refused every ch
 `test_ap2_tsa_key_id.py`: 3 tests added (`ClosedShapes`), all 3 fail on the head before. 11 hand mutants: 5 detected, 6
 equivalent (the shape checks behind `openssl cms -verify`, which refuses any change to the signed attributes first).
 
+Also in 1.8.0: the ACVP vectors of `pqcrypto/` are generated from NIST's data. Until now
+`pqcrypto/vectors/acvp_mldsa65_sigver.txt` was a byte-for-byte copy of the nine-case file of navigatorbuilds/elara-mesh,
+a project under AGPL-3.0, inside this Apache-2.0 repository; it is removed (a new commit, the history is not
+rewritten). `pqcrypto/vectors/make_acvp_mldsa65.py` reads usnistgov/ACVP-Server at commit a7f283cd…
+(internalProjection.json of ML-DSA-sigVer-FIPS204, sha256 47cdd631… checked) and writes every case of the ML-DSA-65
+external/pure group, 15 (3 valid, 12 modified), one JSON object per line with the hex in lower case:
+`acvp_mldsa65_sigver_pure.jsonl` (sha256 d6282263…; the old file 7ef50ee7…, another format). The NIST values of the
+nine old cases are the same in the new file. `NIST-ACVP-NOTICE.txt` acknowledges NIST, keeps its notice and says what
+was changed. The idea of an ACVP subset run by both stacks is credited to navigatorbuilds, as before; their file is no
+longer here. `pqcrypto/test_acvp_mldsa65.py` reads the new file closed (exactly its keys, lower-case hex) and adds a
+positive control: a valid case with one signature byte changed does not verify, and lines outside the format
+(upper-case hex, a number for a boolean, a missing or extra key such as `sk`, the old pipe format) are refused.
+
 Also in 1.8.0: the minor units of `MINOR_UNITS` (and of the JS verifier) are cited from Unicode CLDR release 49
 (`digits`, Unicode License v3, LICENSE-Unicode-3.0.txt) instead of ISO 4217 list one as its maintenance agency
 publishes it; the five values are the same. `tools/currency_table_from_cldr.py` prints the CLDR table from the CLDR
