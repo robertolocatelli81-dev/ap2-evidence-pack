@@ -1188,6 +1188,190 @@ def parse_timestamp_resp(tsr: bytes, _partial: Optional[Dict] = None) -> Dict:
             "tst_info": bytes(tsr[wrap[1]:wrap[2]])}   # 1.5.0 (SPEC §3.3): the TSTInfo the TSA signed = the identity of the anchor
 
 
+
+# ---- RFC 3161: a signer named by subjectKeyIdentifier (as cryptovalid-opencore SPEC §11 step 7) ----------------------
+# `openssl ts -verify` reads the token as PKCS #7, whose SignerInfo knows only issuerAndSerialNumber, and refuses a token
+# whose signer is named by subjectKeyIdentifier (RFC 5652 §5.3) with an ASN.1 error. For that form the same checks are
+# made one by one. Standard library and the openssl binary only.
+
+_SKI_ESS_V1, _SKI_ESS_V2, _SKI_SAN = "1.2.840.113549.1.9.16.2.12", "1.2.840.113549.1.9.16.2.47", "2.5.29.17"
+_SKI_HASHES = {"1.3.14.3.2.26": "sha1", "2.16.840.1.101.3.4.2.4": "sha224", "2.16.840.1.101.3.4.2.1": "sha256",
+               "2.16.840.1.101.3.4.2.2": "sha384", "2.16.840.1.101.3.4.2.3": "sha512", "2.16.840.1.101.3.4.2.8": "sha3_256",
+               "2.16.840.1.101.3.4.2.9": "sha3_384", "2.16.840.1.101.3.4.2.10": "sha3_512"}
+
+
+def _ski_items(buf, where):
+    """every DER element of `buf` as (tag, value); definite lengths in the shortest form, filling `buf` exactly"""
+    out, i, n = [], 0, len(buf)
+    while i < n:
+        tag = buf[i]
+        if tag & 0x1F == 0x1F or i + 1 >= n:
+            raise ValueError(where + ": not DER")
+        first, j = buf[i + 1], i + 2
+        if first < 0x80:
+            ln = first
+        else:
+            k = first & 0x7F
+            if first == 0x80 or k > 4 or j + k > n or buf[j] == 0:
+                raise ValueError(where + ": not DER")
+            ln = int.from_bytes(buf[j:j + k], "big")
+            if ln < 0x80:
+                raise ValueError(where + ": not DER")
+            j += k
+        if j + ln > n:
+            raise ValueError(where + ": not DER")
+        out.append((tag, bytes(buf[j:j + ln])))
+        i = j + ln
+    return out
+
+
+def _ski_one(buf, where, tag):
+    items = _ski_items(buf, where)
+    if len(items) != 1 or items[0][0] != tag:
+        raise ValueError(where + ": not one element of tag 0x%02x" % tag)
+    return items[0][1]
+
+
+def _ski_oid(v):
+    arcs, cur = [], 0
+    for b in v:
+        cur = (cur << 7) | (b & 0x7F)
+        if not b & 0x80:
+            arcs.append(cur)
+            cur = 0
+    if not arcs:
+        raise ValueError("OBJECT IDENTIFIER: empty")
+    first = min(arcs[0] // 40, 2)
+    return ".".join(str(a) for a in [first, arcs[0] - 40 * first] + arcs[1:])
+
+
+def _ski_tlv(tag, v):
+    n = len(v)
+    ln = bytes([n]) if n < 0x80 else bytes([0x80 | ((n.bit_length() + 7) // 8)]) + n.to_bytes((n.bit_length() + 7) // 8, "big")
+    return bytes([tag]) + ln + v
+
+
+def _ski_token(der):
+    """the TimeStampToken (ContentInfo) of a TimeStampResp, or `der` itself when it is already a ContentInfo"""
+    top = _ski_items(_ski_one(der, "reply", 0x30), "reply")
+    if top and top[0][0] == 0x30 and len(top) == 2 and top[1][0] == 0x30 and top[1][1][:1] == b"\x06":
+        return _ski_tlv(0x30, top[1][1])           # {PKIStatusInfo, ContentInfo}
+    return bytes(der)
+
+
+def _ski_parts(token):
+    """(SignerInfo elements, TSTInfo elements, the token's certificates as DER)"""
+    ci = _ski_items(_ski_one(token, "ContentInfo", 0x30), "ContentInfo")
+    sd = _ski_items(_ski_one(ci[1][1], "SignedData", 0x30), "SignedData")
+    si = _ski_items(_ski_items(sd[-1][1], "signerInfos")[0][1], "SignerInfo")
+    eci = _ski_items(sd[2][1], "encapContentInfo")
+    tst = _ski_items(_ski_one(_ski_one(eci[1][1], "eContent", 0x04), "TSTInfo", 0x30), "TSTInfo")
+    certs = [_ski_tlv(t, v) for tag, val in sd[3:] if tag == 0xA0 for t, v in _ski_items(val, "certificates") if t == 0x30]
+    return si, tst, certs
+
+
+def signer_named_by_key_id(der):
+    """True when the token's SignerInfo names its signer by [0] subjectKeyIdentifier (False when unreadable)"""
+    try:
+        return _ski_parts(_ski_token(der))[0][1][0] == 0x80
+    except (ValueError, IndexError):
+        return False
+
+
+def _ski_pem(der):
+    import base64
+    return b"-----BEGIN CERTIFICATE-----\n" + base64.encodebytes(der) + b"-----END CERTIFICATE-----\n"
+
+
+def key_id_token_problem(der, digest_hex, ca_file, at, tmp, exe="openssl"):
+    """the checks of `openssl ts -verify -digest D -CAfile CA -attime T`, made one by one for a token whose signer is
+    named by subjectKeyIdentifier: None when they hold, else why not. `tmp` is an empty private directory."""
+    import hashlib
+    import os
+    import subprocess
+    try:
+        token = _ski_token(der)
+        si, tst, certs = _ski_parts(token)
+        mi = _ski_items(tst[2][1], "messageImprint")
+        if mi[1][1].hex() != digest_hex.lower():
+            return "the TSTInfo imprint is not the digest"
+    except (ValueError, IndexError) as e:
+        return "token not read: %s" % e
+    tp, sp = os.path.join(tmp, "ski_token.der"), os.path.join(tmp, "ski_signer.pem")
+    with open(tp, "wb") as fh:
+        fh.write(token)
+    r = subprocess.run([exe, "cms", "-verify", "-noverify", "-binary", "-inform", "DER", "-in", tp, "-certfile", ca_file,
+                        "-signer", sp, "-out", os.devnull], capture_output=True, timeout=30)
+    if r.returncode != 0 or not os.path.exists(sp):
+        return "openssl cms -verify: " + ((r.stderr or b"").decode(errors="replace").strip().splitlines() or ["refused"])[-1][:160]
+    with open(sp, "rb") as fh:
+        pem = fh.read()
+    import base64
+    b64 = pem.split(b"-----BEGIN CERTIFICATE-----")[1].split(b"-----END CERTIFICATE-----")[0]
+    signer = base64.b64decode(b"".join(b64.split()))
+    try:
+        tbs = _ski_items(_ski_items(_ski_one(signer, "certificate", 0x30), "certificate")[0][1], "tbsCertificate")
+        k = 1 if tbs[0][0] == 0xA0 else 0
+        serial, issuer, subject = tbs[k][1], _ski_tlv(0x30, tbs[k + 2][1]), _ski_tlv(0x30, tbs[k + 4][1])
+        san = []
+        for tag, v in tbs[k + 6:]:
+            if tag == 0xA3:
+                for _t, ev in _ski_items(_ski_one(v, "extensions", 0x30), "extensions"):
+                    e = _ski_items(ev, "Extension")
+                    if _ski_oid(e[0][1]) == _SKI_SAN:
+                        san = [_ski_tlv(gt, gv) for gt, gv in _ski_items(_ski_one(e[-1][1], "subjectAltName", 0x30), "GeneralNames")]
+        attrs = {}
+        for _t, av in _ski_items(si[3][1], "signedAttrs"):
+            a = _ski_items(av, "Attribute")
+            attrs.setdefault(_ski_oid(a[0][1]), []).append(a[1][1])
+        found = [o for o in (_SKI_ESS_V1, _SKI_ESS_V2) if o in attrs]
+        if not found:
+            return "no signingCertificate or signingCertificateV2 attribute (ESS)"
+        for o in found:
+            vals = attrs[o]
+            if len(vals) != 1 or len(_ski_items(vals[0], "attrValues")) != 1:
+                return "ESS attribute %s: not exactly one value" % o
+            sc = _ski_items(_ski_one(vals[0], "SigningCertificate", 0x30), "SigningCertificate")
+            ids = _ski_items(sc[0][1], "certs")
+            if len(ids) != 1:
+                return "ESS attribute %s: %d ESSCertIDs (exactly one is evaluated here)" % (o, len(ids))
+            cid = _ski_items(ids[0][1], "ESSCertID")
+            alg = "sha1"
+            if o == _SKI_ESS_V2:
+                alg = "sha256"
+                if cid and cid[0][0] == 0x30:
+                    ai = _ski_items(cid[0][1], "hashAlgorithm")
+                    alg = _SKI_HASHES.get(_ski_oid(ai[0][1]))
+                    if alg is None or not (len(ai) == 1 or (len(ai) == 2 and ai[1] == (0x05, b""))):
+                        return "ESSCertIDv2: hash algorithm not known"
+                    cid = cid[1:]
+            if not cid or cid[0][0] != 0x04 or len(cid) > 2 or (len(cid) == 2 and cid[1][0] != 0x30):
+                return "ESSCertID: not {certHash, issuerSerial?}"
+            if cid[0][1] != hashlib.new(alg, signer).digest():
+                return "ESS certHash is not the hash of the signer certificate"
+            if len(cid) == 2:
+                iss = _ski_items(cid[1][1], "IssuerSerial")
+                names = _ski_items(_ski_one(_ski_tlv(0x30, iss[0][1]), "GeneralNames", 0x30), "GeneralNames") \
+                    if iss and iss[0][0] == 0x30 else None
+                if not (len(iss) == 2 and iss[1][0] == 0x02 and names is not None and len(names) == 1
+                        and names[0] == (0xA4, issuer) and iss[1][1] == serial):
+                    return "ESS issuerSerial does not name the signer certificate's issuer and serial number"
+        tsa = [v for tag, v in tst[5:] if tag == 0xA0]
+        if tsa and tsa[0] not in [_ski_tlv(0xA4, subject)] + san:
+            return "the TSTInfo tsa field names neither the signer's subject nor one of its subjectAltName"
+    except (ValueError, IndexError) as e:
+        return "signer certificate or attributes not read: %s" % e
+    up = os.path.join(tmp, "ski_untrusted.pem")
+    with open(up, "wb") as fh:
+        fh.write(b"".join(_ski_pem(c) for c in certs))
+    cmd = [exe, "verify", "-purpose", "timestampsign", "-attime", str(int(at)), "-CAfile", ca_file, "-no-CApath",
+           "-no-CAstore"] + (["-untrusted", up] if certs else []) + [sp]
+    r = subprocess.run(cmd, capture_output=True, timeout=30)
+    if r.returncode != 0:
+        return "openssl verify: " + ((r.stderr or r.stdout or b"").decode(errors="replace").strip().splitlines() or ["refused"])[-1][:160]
+    return None
+
+
 def _verify_rfc3161(tsr_b64: str, expected_digest_hex: str, timeout: int = 15, tsa_cert: Optional[str] = None) -> Dict:
     """RFC 3161 token check (SPEC §3.2). `verified` = the token parses, its status is granted and the TSTInfo
     messageImprint equals the recomputed pack digest — BINDING, not TSA authenticity: the TSA signature and certificate
@@ -1222,6 +1406,15 @@ def _verify_rfc3161(tsr_b64: str, expected_digest_hex: str, timeout: int = 15, t
     try:
         path = os.path.join(d, "t.tsr")
         _tmp_write(path, tsr)
+        if signer_named_by_key_id(tsr):   # 1.8.0 (SPEC §3.2): openssl ts cannot read this SignerInfo; same checks one by one
+            import calendar, time as _t
+            at = calendar.timegm(_t.strptime(info["gen_time"].split(".")[0].rstrip("Z"), "%Y%m%d%H%M%S")) \
+                if info.get("gen_time") else int(_t.time())
+            why = key_id_token_problem(tsr, expected_digest_hex, tsa_cert, at, d, exe)
+            out["tsa_verified"] = why is None
+            if why:
+                out["tsa_note"] = why[-160:]
+            return out
         cmd = [exe, "ts", "-verify", "-digest", expected_digest_hex, "-sha256", "-in", path, "-CAfile", tsa_cert]
         if info.get("gen_time"):   # r4: validate the chain at the token's own genTime (`-attime`), so a TSA certificate that expired
             # AFTER issuing does not turn `tsa_verified` False years later; revocation is not checked (declared)
