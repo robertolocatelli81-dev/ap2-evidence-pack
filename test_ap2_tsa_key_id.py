@@ -344,10 +344,10 @@ class NamesAsOpenssl(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.td)
 
-    def signed(self, name_der, key_id, cert="tsa.crt", general_name=None):
+    def signed(self, name_der, key_id, cert="tsa.crt", general_name=None, tok=None):
         j = self.a.j
         with open(j("in.der"), "wb") as f:
-            f.write(self.tok)
+            f.write(tok or self.tok)
         _run("openssl", "cms", "-verify", "-noverify", "-inform", "DER", "-in", j("in.der"), "-out", j("tst.der"))
         with open(j("tst.der"), "rb") as f:
             tst = f.read()
@@ -381,9 +381,12 @@ class NamesAsOpenssl(unittest.TestCase):
                     "subjectKeyIdentifier = hash\nsubjectAltName = DNS:tsa.example\n")
         _run("openssl", "x509", "-req", "-in", j("tsa.csr"), "-CA", j("ca.crt"), "-CAkey", j("ca.key"), "-CAcreateserial",
              "-out", j("tsa_san.crt"), "-days", "2", "-extfile", j("san.cnf"), "-extensions", "v3_san")
+        # a TSTInfo made after tsa_san.crt: the class's token can be a second older than this certificate's notBefore,
+        # and a genTime before it is outside the validity in both forms (seen in 2 of 34 runs before this line)
+        tok = self.a.token()
         for dns, ok in ((b"tsa.example", True), (b"other.example", False), (b"TSA.example", False)):
             gn = _tlv(0x82, dns)
-            iss, ski = (tsa_ok(self.signed(None, k, "tsa_san.crt", gn), self.a.j("ca.crt"))[0] for k in (False, True))
+            iss, ski = (tsa_ok(self.signed(None, k, "tsa_san.crt", gn, tok), self.a.j("ca.crt"))[0] for k in (False, True))
             self.assertEqual((iss, ski), (ok, ok), dns)
 
 

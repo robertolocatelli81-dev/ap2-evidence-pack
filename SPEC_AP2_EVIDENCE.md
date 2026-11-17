@@ -1404,7 +1404,9 @@ case; code points of Unicode 13.0.0), the same five commitment member names, the
 names, the same `record_salt`. Different: `payment_id` (cryptovalid: a version 4 UUID in lowercase canonical form; here:
 Max35Text of the SEPA set); the beacon (cryptovalid: `beacons`, a list of 1 to 8 values with `chain_index` 2 and
 `output_value` in upper case; here: one `beacon` object, any `chain_index` ≥ 0 that `ap2_nist_beacon.PINNED` then must
-pin, either case); the commitments (cryptovalid: 13 members, the IBANs optional with at least one party identifier, and
+pin, either case; the pulses' hex values: cryptovalid accepts either case and compares bytes, here they must be
+as the service serves them, `certificateId` in lower case and the other values in upper case); the commitments
+(cryptovalid: 13 members, the IBANs optional with at least one party identifier, and
 `execution_date`, `payee_entity_id`, `psp_id` in clear; here: 5 members, both IBANs required); `currency` (cryptovalid:
 three capital letters, and exactly the ISO 4217 minor units only with a currency table the caller pins; here: any three capital letters and up to 4 decimals,
 NB2 comparing against the mandate with its closed table); `payment_id` uniqueness (cryptovalid: within a ledger; a pack

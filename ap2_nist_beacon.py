@@ -1,9 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Roberto Locatelli
-"""NIST Randomness Beacon 2.0 pulse check, standard library only (SPEC_AP2_EVIDENCE §12; the same code as
-agent-payment-chain nist_beacon.py, SPEC 34).
+"""NIST Randomness Beacon 2.0 pulse check, standard library only (SPEC_AP2_EVIDENCE §12). agent-payment-chain
+nist_beacon.py (its SPEC 34) makes the same checks but reads the hex values in either case, as cryptovalid-opencore
+SPEC v0.10 §19 rule 2; here they must be as the service serves them (certificateId lower case, the others upper case).
 
-PROTOTYPE, to be replaced by the beacon pulse verifier of cryptovalid-opencore (branch beacon-nonprima) once it exists.
+PROTOTYPE, to be replaced by the beacon pulse verifier of cryptovalid-opencore (SPEC v0.10 §19) once this package can
+depend on a published release of it.
 
 What it checks, for one pulse of the format served by https://beacon.nist.gov/beacon/2.0/ (cipherSuite 0 only):
 - the pulse object is CLOSED: exactly the fifteen members the service writes, `external` exactly three, `listValues`

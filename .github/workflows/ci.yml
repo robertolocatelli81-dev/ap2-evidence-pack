@@ -75,6 +75,10 @@ jobs:
           print("import ok", ap2_evidence.EVIDENCE_FORMAT, sigsuite.__file__)
           PY
           /tmp/pkgvenv/bin/python -I -m ap2_evidence verify spec/vectors/ap2/valid_signed.json > /dev/null
+          # 1.8.0: the installed ACVP test finds its vectors in the wheel (the 1.7.3 wheel shipped the test without them,
+          # FileNotFoundError); test_ap2_wheel_contents.py skips in the job above, which has no `build` module
+          (cd /tmp && /tmp/pkgvenv/bin/python -I -m unittest ap2_pqcrypto.test_acvp_mldsa65)
+          /tmp/pkgvenv/bin/python -I -c "import ap2_nist_beacon as b; assert b.__file__.startswith('/tmp/pkgvenv/'), b.__file__"
           echo "the published package imports and verifies on its own"
       - name: "Wheel — no path shared with PyPI's pqcrypto (1.3.0): the suite ships as ap2_pqcrypto/"
         run: |
