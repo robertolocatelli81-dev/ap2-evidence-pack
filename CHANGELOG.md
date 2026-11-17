@@ -44,6 +44,8 @@ JavaScript): 12 detected, 1 equivalent (`str()` of a JSON value that is not a st
 error; it is now `UNCHANGED` (the outcome of the unmutated pack), with a `typ-application-prefix` one
 (`application/kb+jwt`), and a `typ-kelvin-sign` one is the artifact's error in both verifiers. On the branch before this
 change the bench reports the two `UNCHANGED` ones as unmet.
+The oracle of `test_ap2_jose_header.py` lowercased with `str.lower` too, so it agreed with the defect; it now folds
+A-Z only, and its generated headers (which draw U+212A) fail on the branch before this change and pass now.
 
 Also in 1.8.0 (SPEC §3.2): an RFC 3161 token whose SignerInfo names its signer by subjectKeyIdentifier (RFC 5652 §5.3) was
 `tsa_verified: false` even when valid, because `openssl ts -verify` cannot read that form (measured on 2026-11-17 with

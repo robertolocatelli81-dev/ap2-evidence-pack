@@ -114,7 +114,8 @@ def oracle(header, expected, algs):
         return "typ_missing"
     if type(t) is not str:
         return "typ_not_string"
-    norm = [x.lower() if "/" in x else "application/" + x.lower() for x in (t, expected)]
+    low = lambda x: "".join(chr(ord(c) + 32) if "A" <= c <= "Z" else c for c in x)   # SPEC §13: A-Z only  # noqa: E731
+    norm = [low(x) if "/" in x else "application/" + low(x) for x in (t, expected)]
     return None if norm[0] == norm[1] else "typ_mismatch"
 
 
