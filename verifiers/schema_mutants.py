@@ -441,9 +441,12 @@ class Corpus:
             kp = {"iat": 1760054400, "aud": "merchant", "nonce": "n1", "sd_hash": _b64u(hashlib.sha256(presentation.encode("ascii")).digest()), k: "x"}
             self.add(f"fresh/kb-payload/unknown-claim/{json.dumps(k, ensure_ascii=False)}", self.write(F.pack(H, PK, kb=F.kb(presentation, payload=kp))), [], REPORT, "base/fresh-kb", idx=0, slot="kb_jwt_claims", key=k, obj="kb-payload", kind="unknown-key")
         sdh = _b64u(hashlib.sha256(presentation.encode("ascii")).digest()); KP = {"iat": 1760054400, "aud": "merchant", "nonce": "n1", "sd_hash": sdh}
-        for nm, kh in (("typ-missing", {"alg": "ES256"}), ("typ-wrong", {"alg": "ES256", "typ": "JWT"}), ("typ-case", {"alg": "ES256", "typ": "KB+JWT"}), ("crit-well-formed", {"alg": "ES256", "typ": "kb+jwt", "ap2_ext": "x", "crit": ["ap2_ext"]}),
+        for nm, kh in (("typ-missing", {"alg": "ES256"}), ("typ-wrong", {"alg": "ES256", "typ": "JWT"}), ("typ-kelvin-sign", {"alg": "ES256", "typ": "\u212aB+JWT"}), ("crit-well-formed", {"alg": "ES256", "typ": "kb+jwt", "ap2_ext": "x", "crit": ["ap2_ext"]}),
                        ("crit-empty", {"alg": "ES256", "typ": "kb+jwt", "crit": []}), ("alg-none", {"alg": "none", "typ": "kb+jwt"})):
             self.add(f"fresh/kb-header/{nm}", self.write(F.pack(H, PK, kb=F.kb(presentation, header=kh))), [], ARTERR, "base/fresh-kb", idx=0, needle="kb-jwt", obj="kb-header", kind=nm)
+        # 1.8.0 (SPEC §7.3, §13): the KB-JWT typ is a media type, compared as RFC 7515 §4.1.9 says (A-Z folded, application/ implied)
+        for nm, typ in (("typ-case", "KB+JWT"), ("typ-application-prefix", "application/kb+jwt")):
+            self.add(f"fresh/kb-header/{nm}", self.write(F.pack(H, PK, kb=F.kb(presentation, header={"alg": "ES256", "typ": typ}))), [], UNCHANGED, "base/fresh-kb", idx=0, obj="kb-header", kind=nm)
         for k in ("iat", "aud", "nonce", "sd_hash"):
             kp = dict(KP); del kp[k]
             self.add(f"fresh/kb-payload/missing/{k}", self.write(F.pack(H, PK, kb=F.kb(presentation, payload=kp))), [], ARTERR, "base/fresh-kb", idx=0, needle=k, obj="kb-payload", key=k, kind="delete")

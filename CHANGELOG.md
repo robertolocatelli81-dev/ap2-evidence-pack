@@ -40,6 +40,10 @@ non-strings refused, a missing `typ` refused; 2 000 generated values against an 
 values, the reference against the JavaScript function (no difference); a pack whose KB-JWT says `KB+JWT` verified by
 both. On the branch before this change 4 of the 6 fail. 13 hand mutants of the changed lines (Python and
 JavaScript): 12 detected, 1 equivalent (`str()` of a JSON value that is not a string is never `kb+jwt`).
+`verifiers/schema_mutants.py` expected the `typ-case` mutation of the KB-JWT header (`KB+JWT`) to be that artifact's
+error; it is now `UNCHANGED` (the outcome of the unmutated pack), with a `typ-application-prefix` one
+(`application/kb+jwt`), and a `typ-kelvin-sign` one is the artifact's error in both verifiers. On the branch before this
+change the bench reports the two `UNCHANGED` ones as unmet.
 
 Also in 1.8.0 (SPEC §3.2): an RFC 3161 token whose SignerInfo names its signer by subjectKeyIdentifier (RFC 5652 §5.3) was
 `tsa_verified: false` even when valid, because `openssl ts -verify` cannot read that form (measured on 2026-11-17 with
