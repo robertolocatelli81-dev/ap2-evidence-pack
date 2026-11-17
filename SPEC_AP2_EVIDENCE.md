@@ -1376,3 +1376,39 @@ pin, either case); the commitments (cryptovalid: 13 members, the IBANs optional 
 the ISO 4217 list, 165 codes, exactly the currency's minor units; here: any three capital letters and up to 4 decimals,
 NB2 comparing against the mandate with its closed table); `payment_id` uniqueness (cryptovalid: within a ledger; a pack
 holds one payment).
+
+## 13. JOSE header profile (1.8.0; library functions, NORMATIVE for what they answer)
+
+A relying party that receives a JWT from another ecosystem (a key proof, a key attestation, an SD-JWT VC, a Key Binding
+JWT) needs the header checked against the type and the algorithms its profile names, before any key is looked up. RFC
+8725 §3.11 (Best Current Practice, February 2020; status read on rfc-editor.org on 2026-11-17; its revision
+draft-ietf-oauth-rfc8725bis is at -10, a draft, not in force) recommends explicit typing.
+
+- `decode_jose_header(segment)`: the first segment of a JWS compact serialization, base64url as §9.1 reads it (RFC 7515
+  §2: no padding, no whitespace, canonical trailing bits), decoded as UTF-8, a JSON object with no member twice (the
+  closed reader of §3.1). Anything else is `Ap2EvidenceError` naming why.
+- `check_jose_header(header, expected_typ, allowed_algs)` returns `{"ok", "why", "typ", "alg"}` and never raises on the
+  header; `why` is the first of, in this order: `header_not_object`; `crit_not_understood` (RFC 7515 §4.1.11: a `crit`
+  member is present, and this function understands no extension); `alg_missing`, `alg_not_string`, `alg_not_allowed`
+  (`alg` not in `allowed_algs`); `typ_missing`, `typ_not_string`, `typ_mismatch`. `allowed_algs` is a non-empty list
+  of strings without "none" (RFC 8725 §3.2) and `expected_typ` a non-empty string; otherwise ValueError.
+- **The `typ` comparison** (RFC 7515 §4.1.9, Proposed Standard, May 2015): `typ` is a media type, compared without
+  regard to ASCII case, and "a recipient ... MUST treat it as if 'application/' were prepended to any 'typ' value not
+  containing a '/'" — the same normalisation is applied to `expected_typ`, then the two strings must be equal.
+  `Key-Attestation+JWT` and `application/key-attestation+jwt` are `key-attestation+jwt`; `JWT` is not. A media type
+  parameter (`; …`) is compared as written: none of the profiles below has one.
+- **Profiles** (`check_jose_profile(header, profile, allowed_algs)`; an unknown profile is `profile_unknown`), each with
+  its source and version, read on 2026-11-17:
+
+  | profile | typ | source |
+  |---|---|---|
+  | `openid4vci-proof` | `openid4vci-proof+jwt` | OpenID for Verifiable Credential Issuance 1.0, Final, 16 September 2025, Appendix F.1 (`typ` REQUIRED; `alg` "MUST NOT be none or an identifier for a symmetric algorithm (MAC)") |
+  | `key-attestation` | `key-attestation+jwt` | same, Appendix D.1 (same rule on `alg`) |
+  | `sd-jwt-vc` | `dc+sd-jwt` | draft-ietf-oauth-sd-jwt-vc-27 (current revision on the IETF datatracker, 16 November 2026), §2.2.1 |
+  | `kb-jwt` | `kb+jwt` | RFC 9901 (Proposed Standard, November 2025) §4.3 |
+
+  For the two OpenID4VCI profiles an `allowed_algs` with a symmetric algorithm (HS256, HS384, HS512) is a ValueError.
+- `parse_sd_jwt` names how many dots it found when the issuer JWT does not have three segments (1.8.0: the message
+  said only that three were needed).
+
+The JavaScript verifier has no counterpart of these functions (they are not part of verifying a pack).
