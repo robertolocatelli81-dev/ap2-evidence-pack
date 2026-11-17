@@ -299,7 +299,18 @@ granted (0 or 1) and the TSTInfo `messageImprint` equals the recomputed
 pack). `verified` states BINDING, not TSA authenticity: a self-forged TimeStampResp
 with the right imprint satisfies it. TSA authenticity is `rfc3161.tsa_verified`: the
 reference verifies the token's signature and chain with `openssl ts -verify -CAfile`
-when the relying party passes `--tsa-cert <PEM>`; the JS verifier cannot (no openssl)
+when the relying party passes `--tsa-cert <PEM>`. A SignerInfo may name its signer by issuerAndSerialNumber or by
+subjectKeyIdentifier (RFC 5652 §5.3, Internet Standard, updated by RFC 8933 and 9629; status read on rfc-editor.org on
+2026-11-17); `openssl ts` reads the token as PKCS #7 and refuses the second form with an ASN.1 error, so until 1.8.0 a
+valid token of that form was `tsa_verified: false` (measured on 2026-11-17 with OpenSSL 3.0.22 on a token re-signed by
+`openssl cms -sign -keyid -cades`). For that form (1.8.0, as cryptovalid-opencore SPEC §11 step 7) the same checks are
+made one by one: the CMS signature and messageDigest (`openssl cms -verify -noverify`, the signer looked up in the token
+and in the `--tsa-cert` file); the TSTInfo imprint; a signed ESS attribute signingCertificate (RFC 2634) or
+signingCertificateV2 (RFC 5035), each one present with exactly one value and exactly one ESSCertID naming the signer
+certificate (hash, and issuer and serial number when present); the TSTInfo `tsa` field, when present, byte-equal to the
+signer's subject or to one of its subjectAltName; and `openssl verify -purpose timestampsign -attime <genTime> -CAfile
+<--tsa-cert> -no-CApath -no-CAstore -untrusted <the token's certificates>` over the signer certificate, which is the
+chain `openssl ts -verify -CAfile` builds for the other form (no system store, no partial chain); the JS verifier cannot (no openssl)
 and reports `null` (1.6.0: and states `time_anchor` `not_evaluated` with `instrument_failure`, §6.9). Under `--require-anchor --tsa-cert`, `tsa_verified` must be `true`
 for `policy_ok` — so the JS verifier never passes that policy (declared divergence).
 `tsr_b64` is strict base64 (RFC 4648) like the producer block. Both verifiers report the
