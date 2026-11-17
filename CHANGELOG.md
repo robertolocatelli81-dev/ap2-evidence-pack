@@ -31,7 +31,7 @@ is not the `ES256` shown; 5 000 generated headers agree with an oracle written a
 1 equivalent (a profile's `typ` written in another case: the comparison ignores case).
 
 Also in 1.8.0, sources (text only, no verdict changes): draft-ietf-oauth-sd-jwt-vc is cited at -27 (16 November 2026,
-current on the datatracker on 2026-11-17) everywhere; it was -23 in ten places. The §2.5 sentences quoted for the key
+current on the datatracker on 2026-11-17) everywhere; it was -23 in eight places (counted with git grep). The §2.5 sentences quoted for the key
 policy are the same in -27, which adds "The recipient's policy determines which mechanism applies to an Issuer; the
 SD-JWT VC does not" and "A recipient MUST NOT treat inputs of other mechanisms as identifying the Issuer unless its
 policy binds them to that identity"; the sentences that said sd-jwt-vc is silent on a header naming another key now say
