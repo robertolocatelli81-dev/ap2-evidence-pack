@@ -315,7 +315,15 @@ signer's subject or one of its subjectAltName; the names (that issuer, that subj
 OpenSSL's `X509_NAME_cmp` compares them (string values in UTF-8, white space trimmed and folded, ASCII letters
 lowercased; the same RDNs in order), the serial number as an integer; and `openssl verify -purpose timestampsign -attime <genTime> -CAfile
 <--tsa-cert> -no-CApath -no-CAstore -untrusted <the token's certificates>` over the signer certificate, which is the
-chain `openssl ts -verify -CAfile` builds for the other form (no system store, no partial chain); the JS verifier cannot (no openssl)
+chain `openssl ts -verify -CAfile` builds for the other form (no system store, no partial chain). Closed shapes (1.8.0,
+measured on 2026-11-17 with the generative bench of omega-cra-evol's port of this step): exactly one SignerInfo (RFC
+3161 §2.4.2: "The time-stamp token MUST NOT contain any signatures other than the signature of the TSA"; until this
+correction a token with two SignerInfos, both verifying, was `tsa_verified: true` here, where `openssl ts -verify`
+refuses two signers in the other form); every signed attribute `{attrType OID, attrValues SET}` and nothing else, a
+SigningCertificate(V2) `{certs, policies?}` with `policies` a SEQUENCE OF PolicyInformation, the ESSCertID a SEQUENCE
+(the CMS signature, checked first, already refused every such change: 536 generated variants, 0 accepted); an openssl
+whose `verify` does not know `-no-CAstore` (before OpenSSL 3.0) is a check not run here: `tsa_verified: null` with the
+note (§6.10), not `false`. The JS verifier cannot (no openssl)
 and reports `null` (1.6.0: and states `time_anchor` `not_evaluated` with `instrument_failure`, §6.9). Under `--require-anchor --tsa-cert`, `tsa_verified` must be `true`
 for `policy_ok` — so the JS verifier never passes that policy (declared divergence).
 `tsr_b64` is strict base64 (RFC 4648) like the producer block. Both verifiers report the
