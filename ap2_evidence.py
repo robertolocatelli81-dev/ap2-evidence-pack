@@ -919,7 +919,8 @@ def _same_key(a, b) -> bool:
 def _reconcile_unused_header_keys(header: Dict, jwk: Dict, pc) -> None:
     """1.7.3 (SPEC §2 (d)): a header `jwk` or `x5c` that is not the source of the snapshotted key must still name that key
     (RFC 7515 §4.1.3/§4.1.6 define both as the signing key). A different key, or a value that is not a key, is refused —
-    this format's choice: neither RFC 7515 nor draft-ietf-oauth-sd-jwt-vc-23 says what a recipient does with it."""
+    this format's choice: neither RFC 7515 nor draft-ietf-oauth-sd-jwt-vc-27 makes it an error (-27 §2.5: inputs of other
+    mechanisms MUST NOT be treated as identifying the Issuer unless policy binds them)."""
     used = _SOURCE_OF_CLASS.get(pc)
     if "jwk" in header and used != "jwk" and not _same_key(header["jwk"], jwk):
         raise Ap2EvidenceError("the header jwk names another key than the one the artifact verifies under (SPEC §2 (d), RFC 7515 §4.1.3)")
@@ -953,7 +954,7 @@ def _snapshot_key(parsed: Dict, supplied_jwk: Optional[Dict] = None,
                   jwks_url: Optional[str] = None, timeout: int = 20) -> Dict:
     """Choose the verification key and record WHERE it came from (provenance class).
     1.7.3 (SPEC §2): the key the CALLER names — a supplied key or a JWKS URL — is the policy and is used whatever the header
-    carries (draft-ietf-oauth-sd-jwt-vc-23 §2.5: the key comes from a mechanism "permitted for the given Issuer according to
+    carries (draft-ietf-oauth-sd-jwt-vc-27 §2.5: the key comes from a mechanism "permitted for the given Issuer according to
     policy"); both for one artifact is refused by the callers (build_evidence, the CLI). Without one: x5c header > jwk header. Fail-closed if none.
     Up to 1.7.2 the order was supplied > x5c > jwk > JWKS: a --jwks-url was never fetched for a token carrying jwk or x5c,
     and the self-declared key won in silence (measured 2026-11-03). The header key sources not used are compared by

@@ -70,15 +70,17 @@ default; under the option it builds and verifies the five integral ones in both 
 
 **The key the caller names is the policy (1.7.3, SPEC §2 (a)–(d)).** `--key name=jwk.json` or `--jwks-url
 name=https://…` is that artifact's verification key, whatever its protected header carries; the header's `x5c`, then
-`jwk`, is used only when the caller names none (draft-ietf-oauth-sd-jwt-vc-23 §2.5: the key comes from a mechanism
-"permitted for the given Issuer according to policy"). Measured 2026-11-03 on 1.7.2: a `--jwks-url` for a token carrying
+`jwk`, is used only when the caller names none (draft-ietf-oauth-sd-jwt-vc-27 §2.5: the key comes from a mechanism
+"permitted for the given Issuer according to policy", and "The recipient's policy determines which mechanism applies to
+an Issuer; the SD-JWT VC does not"). Measured 2026-11-03 on 1.7.2: a `--jwks-url` for a token carrying
 `jwk` or `x5c` was never fetched and the header key was snapshotted, exit 0. Both flags for one artifact are a usage error
 (exit 2). From a JWKS the key is the one usable ES256 key (EC P-256, no other `use`/`alg`, `key_ops` with `verify`) with
 the token's `kid`, or the only usable key when the token has no `kid`; none or more than one is a refusal (up to 1.7.2
 the first entry was taken). A header `jku`, `x5u`, `jwk` or `x5c` that is not where the key came from is named — in the
 build result (`key_material_not_used`), the key's `note`, and the receipt (`ignored.key_material`) — and a `jwk` or `x5c`
 there must name the same key: otherwise the build refuses and both verifiers report that artifact's error (this format's
-choice, neither RFC 7515 nor sd-jwt-vc says what to do with it).
+choice: sd-jwt-vc-27 §2.5 forbids treating such inputs as identifying the Issuer unless policy binds them, and neither
+it nor RFC 7515 makes them an error).
 
 **Reading the verdict (1.6.0, SPEC §6.9).** Beside the twelve fields of §6 every receipt states `admission`
 (`admitted`, or `refused` with a `refusal_class`: `format_unsupported`, `unknown_member`, `malformed`), and for an admitted

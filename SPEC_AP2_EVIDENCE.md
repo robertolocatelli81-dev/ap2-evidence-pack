@@ -128,11 +128,13 @@ name that is not an artifact. Up to 1.7.1 such a name was ignored in silence —
 nope=k.json` built the pack with the header keys (`jwk_header`) and exit 0; `--key payment=K1 --key payment=K2` used K2
 alone, exit 0 — so a mistyped name left the caller's trust decision out of the pack with no sign of it.
 
-1.7.3 — the key the caller names is the policy (NORMATIVE for a producer; the reference `build`). draft-ietf-oauth-sd-jwt-vc-23
-(31 October 2026) §2.5: "A recipient MUST determine and validate the public verification key for the Issuer-signed JWT
+1.7.3 — the key the caller names is the policy (NORMATIVE for a producer; the reference `build`). draft-ietf-oauth-sd-jwt-vc-27
+(16 November 2026, the current revision on the IETF datatracker, read on 2026-11-17; the sentences quoted here are the
+same as in -23 of 31 October 2026, cited until 1.8.0) §2.5: "A recipient MUST determine and validate the public verification key for the Issuer-signed JWT
 using a supported key discovery and validation mechanism that is permitted for the given Issuer according to policy",
 and "If a recipient cannot validate that the public verification key corresponds to the Issuer of the Issuer-signed JWT
-using a permitted key discovery and validation mechanism, the SD-JWT VC MUST be rejected". Here the caller's flag IS that
+using a permitted key discovery and validation mechanism, the SD-JWT VC MUST be rejected". -27 adds: "The recipient's
+policy determines which mechanism applies to an Issuer; the SD-JWT VC does not." Here the caller's flag IS that
 policy. Up to 1.7.2 the order was supplied key > header `x5c` > header `jwk` > JWKS: measured 2026-11-03 on 1.7.2, a
 `--jwks-url` given for a token that carries `jwk` or `x5c` was never fetched, the header key was snapshotted
 (`jwk_header` / `x5c_header`) and the build ended with exit 0 — the key the signer declared won over the source the caller
@@ -140,7 +142,7 @@ chose, with no sign of it. From 1.7.3:
 
 (a) A key named by the caller for an artifact — `--key name=…` / `keys` (`supplied`) or `--jwks-url name=…` / `jwks_urls`
 (`jwks_fetched`) — is that artifact's verification key, whatever the protected header carries. Header key material is
-used only when the caller names none: `x5c` (the leaf's key; sd-jwt-vc-23 §2.5 "Inline X.509 Certificates"), otherwise
+used only when the caller names none: `x5c` (the leaf's key; sd-jwt-vc-27 §2.5 "Inline X.509 Certificates"), otherwise
 `jwk` (self-asserted); neither: refusal, as before. A header parameter is "carried" when its name is present, whatever its
 value: up to 1.7.2 an `x5c` or `jwk` whose value was empty or `null` was passed over in silence; from 1.7.3 it is used as
 any other and, being unusable, refused.
@@ -179,8 +181,9 @@ the public key of the leaf, `x5c[0]`, strict base64 DER, EC P-256; the rest of t
 comparison): a different key, or a value that is not such a key, is a refusal at build (after the signature check, so a
 wrong supplied key still reads `signature INVALID`) and that artifact's error at verification (§6 step 2), whatever the
 provenance class — also the `jwk` beside the `x5c` an `x5c_header` key came from. This is this format's choice: neither
-RFC 7515 nor sd-jwt-vc-23 says what a recipient does with a header that names another key than the one the signature
-verifies under; a header that contradicts the signature is refused, not ignored. Not compared (declared): `x5t` and
+RFC 7515 nor sd-jwt-vc-27 says what a recipient does with a header that names another key than the one the signature
+verifies under (sd-jwt-vc-27 §2.5: "A recipient MUST NOT treat inputs of other mechanisms as identifying the Issuer
+unless its policy binds them to that identity"; it does not make them an error); a header that contradicts the signature is refused, not ignored. Not compared (declared): `x5t` and
 `x5t#S256`, the header `kid` against the `kid` of a supplied key, and, at verification, the header `kid` against the `kid`
 of a `jwks_fetched` key (a capture-time fact).
 
@@ -789,7 +792,7 @@ or JWK member is ignored and reported — `header_param_ignored`, `key_jwk_membe
 |---|---|---|
 | issuer JWT protected header | RFC 7515 §4: "all Header Parameters not defined by this specification MUST be ignored when not understood", unless listed in `crit`; §4.1.11: a `crit` naming an extension the recipient does not understand makes the JWS INVALID; `crit` MUST NOT be `[]`, MUST NOT list registered names, duplicates, or names absent from the header | names this format understands: `alg`, `jku`, `jwk`, `kid`, `x5u`, `x5c`, `x5t`, `x5t#S256`, `typ`, `cty`, `crit` (those defined by RFC 7515 §4.1 and RFC 7519 §5; other names of the IANA JOSE registry are not understood here, so they are ignored and reported like any other). This format understands NO extension: a `crit` that is present and well-formed is therefore always that artifact's error, and a malformed `crit` (not a list of strings, empty, duplicate, registered or absent names) is one too. Every other unregistered name is ignored and reported in `artifacts[i].ignored.header` |
 | `jwk` in the header, `key.jwk`, `cnf.jwk` | RFC 7517 §4: "Additional members can be present in the JWK; if not understood by implementations encountering them, they MUST be ignored" | registered members: `kty`, `use`, `key_ops`, `alg`, `kid`, `x5u`, `x5c`, `x5t`, `x5t#S256` (RFC 7517 §4) and `crv`, `x`, `y`, `d` (RFC 7518 §6.2). Others ignored and reported in `ignored.header_jwk` / `ignored.key_jwk` / `ignored.cnf_jwk` |
-| key sources of the issuer JWT protected header: `jku`, `jwk`, `x5u`, `x5c` (1.7.3) | RFC 7515 §4.1.2, §4.1.3, §4.1.5, §4.1.6 define each as naming the key that signed the JWS; draft-ietf-oauth-sd-jwt-vc-23 §2.5: the key comes from a mechanism "permitted for the given Issuer according to policy" — neither says what a recipient does with one it does not use | the one the snapshotted key came from (`jwk` for `jwk_header`, `x5c` for `x5c_header`) is reconciled as §2 says; every other one present is not used for the key and is reported in `ignored.key_material`; a `jwk` or `x5c` among them must name the snapshotted key (§2 (d)), otherwise that artifact's error — this format's choice, not the standards' |
+| key sources of the issuer JWT protected header: `jku`, `jwk`, `x5u`, `x5c` (1.7.3) | RFC 7515 §4.1.2, §4.1.3, §4.1.5, §4.1.6 define each as naming the key that signed the JWS; draft-ietf-oauth-sd-jwt-vc-27 §2.5: the key comes from a mechanism "permitted for the given Issuer according to policy", and inputs of other mechanisms MUST NOT be treated as identifying the Issuer unless policy binds them — neither makes one it does not use an error | the one the snapshotted key came from (`jwk` for `jwk_header`, `x5c` for `x5c_header`) is reconciled as §2 says; every other one present is not used for the key and is reported in `ignored.key_material`; a `jwk` or `x5c` among them must name the snapshotted key (§2 (d)), otherwise that artifact's error — this format's choice, not the standards' |
 | issuer JWT payload | RFC 7519 §4: "all claims that are not understood by implementations MUST be ignored" | every claim is RECORDED: the resolved payload is the pack's content and `resolved_claims` lists it in full, so nothing is reported twice; the SD-JWT shapes of RFC 9901 (`_sd`, `_sd_alg`, `...`) are imposed as in §3.1 |
 | `cnf` | RFC 7800 §3.1: "all confirmation members that are not understood by implementations MUST be ignored" | understood: `jwk`, `jwe`, `jku`, `kid` (the members RFC 7800 defines, §3.2–§3.5; other confirmation methods of the IANA registry, e.g. `x5t#S256` of RFC 8705 or `jkt` of RFC 9449, are not understood here). Others ignored and reported in `ignored.cnf` |
 | KB-JWT header | RFC 7515 as above; RFC 9901 §4.3: `typ` REQUIRED, MUST be `kb+jwt`; `alg` REQUIRED | `typ` missing, not a string, or not `kb+jwt` as RFC 7515 §4.1.9 compares media types (§13; since 1.8.0, byte for byte before) is that artifact's error (RFC 9901 §4.3; RFC 9901 §7.3 step 5.d asks a Verifier to check it when Key Binding is required — this format checks every KB-JWT it carries, whether or not the holder key is known); `alg` not `"ES256"` is that artifact's error by this format's profile (§6 step 2: `alg: "ES256"`; RFC 9901 §4.3 only forbids `none`); `crit` as above; other unregistered names ignored and reported in `ignored.kb_jwt_header` |
@@ -1202,6 +1205,16 @@ up to it, Art. 5(2)), a 1.7.3 pack binds: the amount and currency (the mandate's
 AP2's (`transaction_id`); NOT the payer's or payee's IBAN (no field); the payee's name in clear (`payee.name`, the
 merchant, signed by the issuer); no payer name. The block below adds, in OUR layer, the missing items and the beacon.
 
+When the mandate is paid in crypto-assets (for example a stablecoin through AP2's x402 path), the transfer is a transfer
+of crypto-assets under the same Regulation, Art. 14 (read on CELLAR, English OJ text, on 2026-11-17): the originator's
+crypto-asset service provider "shall ensure that transfers of crypto-assets are accompanied by" the originator's name,
+distributed ledger address and crypto-asset account number where one is used, address with country, official personal
+document number and customer identification number (or date and place of birth) and, where available, LEI (Art.
+14(1)); the beneficiary's name, distributed ledger address and account number, and LEI where available (Art. 14(2));
+"in advance of, or simultaneously or concurrently with, the transfer" and not necessarily attached to it (Art. 14(4)).
+This pack binds none of these items for a crypto-asset transfer: the `not_before` block below speaks of IBANs and of a
+transfer of funds. A stated limit of 1.8.0, not a check made here.
+
 ### 12.2 The block (closed at every level, §9.1; inside the digest: §3 does not exclude it)
 ```
 "not_before": {
@@ -1226,10 +1239,14 @@ lists where they differ from cryptovalid's payment entry.
 
 **No personal data in clear in the pack.** The IBANs, the names and the payer's details are recorded only as salted
 commitments (Regulation (EU) 2016/679 Art. 5(1)(c), 17 — in force; EUR-Lex lists one consolidated version, 4.5.2016; the
-"Digital Omnibus" amendment proposed by the Commission on 19.11.2025 was not found adopted on 2026-11-16 (searched in
-secondary sources up to August 2026: not confirmed); and the retention of Regulation (EU) 2024/1624 Art. 77 — in force
-per EUR-Lex (OJ L 19.6.2024, one consolidated version of that date), applicable from 10 July 2027 by Art. 90 as read in
-secondary sources (springlex.eu), Art. 77 itself read in secondary sources, not on EUR-Lex). The
+general "Digital Omnibus" that would amend it, COM(2025) 837, procedure 2025/0360(COD), is a proposal: "Awaiting
+committee decision" on the European Parliament's Legislative Observatory, read on 2026-11-17; the separate Regulation
+(EU) 2026/1744, "Digital Omnibus on AI" (OJ L 24.7.2026, in force on the third day after publication), amends Regulations
+(EU) 2024/1689, 2018/1139 and 2023/1230, not 2016/679; both read on the primary sources that day; and the retention of
+Regulation (EU) 2024/1624 (AMLR; OJ L 19.6.2024; English OJ text read on CELLAR on 2026-11-17): Art. 90, "It shall
+apply from 10 July 2027", 10 July 2029 for the obliged entities of Art. 3 point (3)(n) and (o); Art. 77(3), the records
+"retained for a period of 5 years" from the end of the business relationship or the occasional transaction, after which
+"obliged entities shall delete personal data"). The
 clear values and their salts stay with the payment service provider, outside the pack. To disclose (Regulation (EU)
 2023/1113 Art. 5(2)) the provider gives `{member, salt, value}` and anyone checks it (`check_disclosure`); to delete, the
 provider destroys values and salts: the pack, its digest, its signatures and its time anchors stay intact and the

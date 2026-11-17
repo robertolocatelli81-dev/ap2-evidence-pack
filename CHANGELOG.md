@@ -30,6 +30,16 @@ found. `test_ap2_jose_header.py`: 9 tests; the three EUDI TS3 headers (lines 427
 is not the `ES256` shown; 5 000 generated headers agree with an oracle written apart. 15 hand mutants: 14 detected,
 1 equivalent (a profile's `typ` written in another case: the comparison ignores case).
 
+Also in 1.8.0, sources (text only, no verdict changes): draft-ietf-oauth-sd-jwt-vc is cited at -27 (16 November 2026,
+current on the datatracker on 2026-11-17) everywhere; it was -23 in ten places. The §2.5 sentences quoted for the key
+policy are the same in -27, which adds "The recipient's policy determines which mechanism applies to an Issuer; the
+SD-JWT VC does not" and "A recipient MUST NOT treat inputs of other mechanisms as identifying the Issuer unless its
+policy binds them to that identity"; the sentences that said sd-jwt-vc is silent on a header naming another key now say
+it does not make one an error. SPEC §12: Regulation (EU) 2024/1624 (AMLR) Art. 90 and Art. 77(3), the Digital Omnibus
+proposal (COM(2025) 837, "Awaiting committee decision") and Regulation (EU) 2026/1744 (Digital Omnibus on AI, which
+does not amend the GDPR) read on the primary sources on 2026-11-17 (they were read in secondary sources); Regulation (EU)
+2023/1113 Art. 14, crypto-asset transfers, quoted with the items this pack does not bind (a stated limit).
+
 Also in 1.8.0 (SPEC §7.3, §9, §13): the KB-JWT header's `typ` is compared as RFC 7515 §4.1.9 says, in the reference and
 in the JavaScript verifier: `KB+JWT` and `application/kb+jwt` are `kb+jwt`. Up to 1.7.3 the comparison was byte for byte,
 so a holder-binding JWT with `typ: "KB+JWT"`, the same media type, was that artifact's error. Only A-Z are folded: the

@@ -66,7 +66,7 @@ def _sdk():
 CLOSED_MARK = "(SPEC §9.1)"
 OURS_ONLY = ("provenance_class", "only EC/P-256",   # the pack's key block, no SD-JWT equivalent.
              "(SPEC §2 (d)")   # 1.7.3: a header jwk/x5c naming another key than the snapshotted one — this format's choice
-#   (RFC 7515 and draft-ietf-oauth-sd-jwt-vc-23 say nothing on it); the third stack is handed the snapshotted key only. "key.jwk must be
+#   (RFC 7515 and draft-ietf-oauth-sd-jwt-vc-27 do not make it an error); the third stack is handed the snapshotted key only. "key.jwk must be
 #   an object" does not belong here: such an artifact never reaches this branch, it is counted in `nokey` above.
 # Exception types that are a crash inside the library rather than a refusal it meant to make.
 UNCAUGHT = ("JSONDecodeError", "AttributeError", "TypeError", "KeyError", "IndexError", "RecursionError")
