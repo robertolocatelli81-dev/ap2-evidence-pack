@@ -34,14 +34,17 @@ is not the `ES256` shown; 5 000 generated headers agree with an oracle written a
 Also in 1.8.0 (SPEC §3.2): an RFC 3161 token whose SignerInfo names its signer by subjectKeyIdentifier (RFC 5652 §5.3) was
 `tsa_verified: false` even when valid, because `openssl ts -verify` cannot read that form (measured on 2026-11-17 with
 OpenSSL 3.0.22); it is now checked step by step with the same checks and the same anchor (`--tsa-cert` as CAfile, the
-token's certificates as untrusted, no system store). `test_ap2_tsa_key_id.py`: 9 tests on CAs, TSAs and tokens made with
+token's certificates as untrusted, no system store; names compared as OpenSSL's X509_NAME_cmp compares them).
+`test_ap2_tsa_key_id.py`: 12 tests on CAs, TSAs and tokens made with
 openssl, each case signed in both forms from the same TSTInfo: the two verdicts are equal and as expected, the valid
 key-identified token is false on 1.7.3 and on the earlier 1.8.0 draft and true now; another TSA's key, another CA, a
 leaf alone, no timeStamping, a `tsa` field of another TSA, the key identifier of another certificate, a system
 certificate directory, an imprint not the digest, a time after the certificates' validity and six ESS shapes signed with
-the test TSA's key are refused. 16 hand mutants of the new lines: 14 detected, 2 equivalent (OpenSSL's `cms -verify`
-refuses a duplicated or multi-valued ESS attribute before the attribute check, and writes the signer only after a
-successful verification).
+the test TSA's key are refused; a `tsa` field in another case, with other spaces, as a PrintableString or as a
+subjectAltName dNSName gives the same verdict in both forms (on the first version of this fix, byte for byte, the
+key-identifier form refused the uppercase one). 29 hand mutants of the new lines: 27 detected, 2 equivalent (OpenSSL's
+`cms -verify` refuses a duplicated or multi-valued ESS attribute before the attribute check, and writes the signer only
+after a successful verification).
 
 ## 1.7.3 — 2026-11-06 — the key the caller names is the policy; header key sources not used are named and compared
 

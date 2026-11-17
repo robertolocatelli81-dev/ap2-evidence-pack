@@ -325,5 +325,105 @@ class IntermediateInTheToken(unittest.TestCase):
             shutil.rmtree(td)
 
 
+@NEEDS
+class NamesAsOpenssl(unittest.TestCase):
+    """the tsa field compared as `openssl ts -verify` compares names (X509_NAME_cmp): the TSTInfo of a token with a tsa
+    field in another case, other spaces or another string type, signed in both forms; the verdicts are equal"""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            import cryptography  # noqa: F401
+        except ImportError:
+            raise unittest.SkipTest("needs cryptography to write the names")
+        cls.td = tempfile.mkdtemp()
+        cls.a = Lab(cls.td, "a")
+        cls.tok = cls.a.token()
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.td)
+
+    def signed(self, name_der, key_id, cert="tsa.crt", general_name=None):
+        j = self.a.j
+        with open(j("in.der"), "wb") as f:
+            f.write(self.tok)
+        _run("openssl", "cms", "-verify", "-noverify", "-inform", "DER", "-in", j("in.der"), "-out", j("tst.der"))
+        with open(j("tst.der"), "rb") as f:
+            tst = f.read()
+        n = tst[1] & 0x7F if tst[1] & 0x80 else 0
+        body = tst[2 + n:]
+        tst2 = _tlv(0x30, body + _tlv(0xA0, general_name or _tlv(0xA4, name_der)))
+        with open(j("tst2.der"), "wb") as f:
+            f.write(tst2)
+        _run("openssl", "cms", "-sign", "-binary", "-nodetach", "-econtent_type", OID_TSTINFO, *(["-keyid"] if key_id else []),
+             "-cades", "-md", "sha256", "-nosmimecap", "-signer", j(cert), "-inkey", j("tsa.key"), "-certfile",
+             j("ca.crt"), "-in", j("tst2.der"), "-outform", "DER", "-out", j("n.der"))
+        with open(j("n.der"), "rb") as f:
+            return reply(f.read())
+
+    def test_tsa_names(self):
+        from cryptography import x509
+        from cryptography.x509.name import _ASN1Type
+        from cryptography.x509.oid import NameOID
+        cn = "a-tsa"
+        for value, typ, ok in ((cn, None, True), (cn.upper(), None, True), ("  " + cn + " ", None, True),
+                               (cn, _ASN1Type.PrintableString, True), (cn + "x", None, False)):
+            attr = x509.NameAttribute(NameOID.COMMON_NAME, value, typ) if typ else x509.NameAttribute(NameOID.COMMON_NAME, value)
+            name = x509.Name([attr]).public_bytes()
+            iss, ski = (tsa_ok(self.signed(name, k), self.a.j("ca.crt"))[0] for k in (False, True))
+            self.assertEqual((iss, ski), (ok, ok), (value, typ))
+
+    def test_tsa_in_subject_alt_name(self):
+        j = self.a.j
+        with open(j("san.cnf"), "w") as f:
+            f.write("[ v3_san ]\nextendedKeyUsage = critical,timeStamping\nbasicConstraints = CA:FALSE\n"
+                    "subjectKeyIdentifier = hash\nsubjectAltName = DNS:tsa.example\n")
+        _run("openssl", "x509", "-req", "-in", j("tsa.csr"), "-CA", j("ca.crt"), "-CAkey", j("ca.key"), "-CAcreateserial",
+             "-out", j("tsa_san.crt"), "-days", "2", "-extfile", j("san.cnf"), "-extensions", "v3_san")
+        for dns, ok in ((b"tsa.example", True), (b"other.example", False), (b"TSA.example", False)):
+            gn = _tlv(0x82, dns)
+            iss, ski = (tsa_ok(self.signed(None, k, "tsa_san.crt", gn), self.a.j("ca.crt"))[0] for k in (False, True))
+            self.assertEqual((iss, ski), (ok, ok), dns)
+
+
+class NameEquality(unittest.TestCase):
+    """the canonical comparison itself, as cryptovalid-opencore's test of the same function"""
+
+    def setUp(self):
+        try:
+            from cryptography import x509  # noqa: F401
+        except ImportError:
+            self.skipTest("needs cryptography to write the names")
+
+    def test_rules(self):
+        from cryptography import x509
+        from cryptography.x509.name import _ASN1Type
+        from cryptography.x509.oid import NameOID
+        N, A_ = x509.Name, x509.NameAttribute
+        eq = A._ski_names_equal
+        cn = lambda v, t=None: N([A_(NameOID.COMMON_NAME, v, t) if t else A_(NameOID.COMMON_NAME, v)]).public_bytes()  # noqa: E731
+        self.assertTrue(eq(cn("a b"), cn("A\tB")))
+        self.assertTrue(eq(cn("a b"), cn("  a   b ")))
+        self.assertTrue(eq(cn("ab"), cn("ab", _ASN1Type.PrintableString)))
+        self.assertFalse(eq(cn("É"), cn("é")))                  # ASCII letters only
+        self.assertFalse(eq(cn("ab"), cn("a b")))
+        self.assertFalse(eq(b"\x30\x00", b"\x31\x00"))                     # not a Name: never equal
+        cn_o = N([A_(NameOID.COMMON_NAME, "x"), A_(NameOID.ORGANIZATION_NAME, "y")]).public_bytes()
+        o_cn = N([A_(NameOID.ORGANIZATION_NAME, "y"), A_(NameOID.COMMON_NAME, "x")]).public_bytes()
+        self.assertFalse(eq(cn_o, o_cn))                                    # RDNs in order
+        multi = N([x509.RelativeDistinguishedName([A_(NameOID.COMMON_NAME, "x"), A_(NameOID.ORGANIZATION_NAME, "y")])])
+        rdn = A._ski_items(A._ski_one(multi.public_bytes(), "n", 0x30), "n")[0][1]
+        a = [A._ski_tlv(t, v) for t, v in A._ski_items(rdn, "rdn")]
+        swapped = A._ski_tlv(0x30, A._ski_tlv(0x31, a[1] + a[0]))
+        self.assertNotEqual(swapped, multi.public_bytes())
+        self.assertTrue(eq(swapped, multi.public_bytes()))                  # one RDN: any order
+        self.assertFalse(eq(cn("x"), N([A_(NameOID.ORGANIZATION_NAME, "x")]).public_bytes()))   # the OID counts
+        ge = A._ski_general_names_equal
+        self.assertFalse(ge((0x82, cn_o), (0xA4, cn_o)))                     # the type counts
+        self.assertTrue(ge((0xA4, cn("a")), (0xA4, cn("A"))))
+        self.assertFalse(ge((0x82, b"tsa.example"), (0x82, b"TSA.example")))   # bytes, not a Name
+
+
 if __name__ == "__main__":
     unittest.main()

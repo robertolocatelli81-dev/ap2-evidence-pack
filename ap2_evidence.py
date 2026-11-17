@@ -1347,6 +1347,63 @@ def signer_named_by_key_id(der):
         return False
 
 
+# OpenSSL's canonical form of a Name (x509_name_canon, asn1_string_canon), the comparison X509_NAME_cmp makes and
+# `openssl ts -verify` uses for the tsa field and the ESS issuerSerial
+_SKI_STRINGS = {0x0C: "utf-8", 0x13: "latin-1", 0x14: "latin-1", 0x16: "latin-1", 0x1A: "latin-1",
+                0x1E: "utf-16-be", 0x1C: "utf-32-be"}
+_SKI_SPACE = b" \t\n\v\f\r"
+
+
+def _ski_canon_value(tag, value):
+    enc = _SKI_STRINGS.get(tag)
+    if enc is None:
+        return ("raw", tag, value)
+    b = value.decode(enc).encode("utf-8").strip(_SKI_SPACE)
+    out, i = bytearray(), 0
+    while i < len(b):
+        c = b[i]
+        if c >= 0x80:
+            out.append(c)
+            i += 1
+        elif c in _SKI_SPACE:
+            out.append(0x20)
+            while i < len(b) and b[i] in _SKI_SPACE:
+                i += 1
+        else:
+            out.append(c + 32 if 0x41 <= c <= 0x5A else c)
+            i += 1
+    return ("str", bytes(out))
+
+
+def _ski_name_canon(name_tlv):
+    rdns = []
+    for t, rdn in _ski_items(_ski_one(name_tlv, "Name", 0x30), "Name"):
+        if t != 0x31:
+            raise ValueError("Name: an RDN is not a SET")
+        attrs = []
+        for t2, atv in _ski_items(rdn, "RDN"):
+            a = _ski_items(atv, "AttributeTypeAndValue")
+            if t2 != 0x30 or len(a) != 2 or a[0][0] != 0x06:
+                raise ValueError("Name: AttributeTypeAndValue")
+            attrs.append((a[0][1], _ski_canon_value(a[1][0], a[1][1])))
+        rdns.append(tuple(sorted(attrs, key=repr)))
+    return tuple(rdns)
+
+
+def _ski_names_equal(a_tlv, b_tlv):
+    try:
+        return _ski_name_canon(a_tlv) == _ski_name_canon(b_tlv)
+    except ValueError:
+        return False
+
+
+def _ski_general_names_equal(a, b):
+    """GENERAL_NAME_cmp: the same type; a directoryName compared as a Name, any other type by its bytes"""
+    if a[0] != b[0]:
+        return False
+    return _ski_names_equal(a[1], b[1]) if a[0] == 0xA4 else a[1] == b[1]
+
+
 def _ski_pem(der):
     import base64
     return b"-----BEGIN CERTIFICATE-----\n" + base64.encodebytes(der) + b"-----END CERTIFICATE-----\n"
@@ -1423,11 +1480,15 @@ def key_id_token_problem(der, digest_hex, ca_file, at, tmp, exe="openssl"):
                 names = _ski_items(_ski_one(_ski_tlv(0x30, iss[0][1]), "GeneralNames", 0x30), "GeneralNames") \
                     if iss and iss[0][0] == 0x30 else None
                 if not (len(iss) == 2 and iss[1][0] == 0x02 and names is not None and len(names) == 1
-                        and names[0] == (0xA4, issuer) and iss[1][1] == serial):
+                        and names[0][0] == 0xA4 and _ski_names_equal(names[0][1], issuer)
+                        and int.from_bytes(iss[1][1], "big", signed=True) == int.from_bytes(serial, "big", signed=True)):
                     return "ESS issuerSerial does not name the signer certificate's issuer and serial number"
         tsa = [v for tag, v in tst[5:] if tag == 0xA0]
-        if tsa and tsa[0] not in [_ski_tlv(0xA4, subject)] + san:
-            return "the TSTInfo tsa field names neither the signer's subject nor one of its subjectAltName"
+        if tsa:   # ts_check_signer_name: the subject (a directoryName), then each name of the subjectAltName
+            gn = _ski_items(tsa[0], "tsa")
+            if len(gn) != 1 or not (_ski_general_names_equal(gn[0], (0xA4, subject))
+                                    or any(_ski_general_names_equal(gn[0], _ski_items(n, "GeneralName")[0]) for n in san)):
+                return "the TSTInfo tsa field names neither the signer's subject nor one of its subjectAltName"
     except (ValueError, IndexError) as e:
         return "signer certificate or attributes not read: %s" % e
     up = os.path.join(tmp, "ski_untrusted.pem")
