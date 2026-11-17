@@ -40,7 +40,7 @@ This tool turns a set of SD-JWT mandates into **one evidence file** that verifie
 
 ## Try it in 30 seconds
 
-On real public data shipped in this repository, offline after the install: two consecutive pulses of the NIST
+On real public data shipped in this repository, offline once installed and cloned: two consecutive pulses of the NIST
 Randomness Beacon 2.0 (U.S. government work, `spec/vectors/beacon/README.md`) and the JOSE header of the Open Payment
 Mandate token of AP2's documentation (google-agentic-commerce/AP2 at `e1ea56d`, Apache-2.0, copied verbatim in
 `test_ap2_restriction.py`):
