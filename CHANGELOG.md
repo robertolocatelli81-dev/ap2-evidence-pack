@@ -30,6 +30,16 @@ found. `test_ap2_jose_header.py`: 9 tests; the three EUDI TS3 headers (lines 427
 is not the `ES256` shown; 5 000 generated headers agree with an oracle written apart. 15 hand mutants: 14 detected,
 1 equivalent (a profile's `typ` written in another case: the comparison ignores case).
 
+Also in 1.8.0 (SPEC §3.2): the key-identifier step closed by construction, after the port of the same step to
+omega-cra-evol, which was stricter. Measured on 2026-11-17 with that port's generative bench: a token with two
+SignerInfos, both verifying, was `tsa_verified: true` (RFC 3161 §2.4.2: "MUST NOT contain any signatures other than the
+signature of the TSA"); now `false`, as `openssl ts -verify` answers for the other form. An openssl whose `verify` does
+not know `-no-CAstore` (before OpenSSL 3.0) was `tsa_verified: false`; now `null` with the note and `_not_run` (§6.10),
+a check not run. The signed attributes, the ESS attribute and the ESSCertID get the closed shapes of
+cryptovalid-opencore (the CMS signature, checked first, already refused every change: 536 variants, 0 accepted).
+`test_ap2_tsa_key_id.py`: 3 tests added (`ClosedShapes`), all 3 fail on the head before. 11 hand mutants: 5 detected, 6
+equivalent (the shape checks behind `openssl cms -verify`, which refuses any change to the signed attributes first).
+
 Also in 1.8.0, sources (text only, no verdict changes): draft-ietf-oauth-sd-jwt-vc is cited at -27 (16 November 2026,
 current on the datatracker on 2026-11-17) everywhere; it was -23 in eight places (counted with git grep). The §2.5 sentences quoted for the key
 policy are the same in -27, which adds "The recipient's policy determines which mechanism applies to an Issuer; the

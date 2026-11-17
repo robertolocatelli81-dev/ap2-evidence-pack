@@ -1415,6 +1415,21 @@ def _ski_pem(der):
     return b"-----BEGIN CERTIFICATE-----\n" + base64.encodebytes(der) + b"-----END CERTIFICATE-----\n"
 
 
+class KeyIdCheckNotRun(Exception):
+    """the key-id step could not be run here (an openssl whose `verify` does not know an option it needs)"""
+
+
+def _ski_policies_shape(el):
+    """ESS `policies` (RFC 2634 §5.4.1): SEQUENCE OF PolicyInformation, each a SEQUENCE that starts with an OID"""
+    if el[0] != 0x30:
+        return False
+    for t, v in _ski_items(el[1], "policies"):
+        pi = _ski_items(v, "PolicyInformation") if t == 0x30 else []
+        if not pi or pi[0][0] != 0x06:
+            return False
+    return True
+
+
 def key_id_token_problem(der, digest_hex, ca_file, at, tmp, exe="openssl"):
     """the checks of `openssl ts -verify -digest D -CAfile CA -attime T`, made one by one for a token whose signer is
     named by subjectKeyIdentifier: None when they hold, else why not. `tmp` is an empty private directory."""
@@ -1423,6 +1438,10 @@ def key_id_token_problem(der, digest_hex, ca_file, at, tmp, exe="openssl"):
     import subprocess
     try:
         token = _ski_token(der)
+        ci = _ski_items(_ski_one(token, "ContentInfo", 0x30), "ContentInfo")
+        sis = _ski_items(_ski_items(_ski_one(ci[1][1], "SignedData", 0x30), "SignedData")[-1][1], "signerInfos")
+        if len(sis) != 1 or sis[0][0] != 0x30:   # RFC 3161 §2.4.2: no signature other than the TSA's
+            return "%d SignerInfos (exactly one is evaluated here)" % len(sis)
         si, tst, certs = _ski_parts(token)
         mi = _ski_items(tst[2][1], "messageImprint")
         if mi[1][1].hex() != digest_hex.lower():
@@ -1453,8 +1472,10 @@ def key_id_token_problem(der, digest_hex, ca_file, at, tmp, exe="openssl"):
                     if _ski_oid(e[0][1]) == _SKI_SAN:
                         san = [_ski_tlv(gt, gv) for gt, gv in _ski_items(_ski_one(e[-1][1], "subjectAltName", 0x30), "GeneralNames")]
         attrs = {}
-        for _t, av in _ski_items(si[3][1], "signedAttrs"):
-            a = _ski_items(av, "Attribute")
+        for t, av in _ski_items(si[3][1], "signedAttrs"):   # Attribute ::= SEQUENCE { attrType OID, attrValues SET }
+            a = _ski_items(av, "Attribute") if t == 0x30 else []
+            if len(a) != 2 or a[0][0] != 0x06 or a[1][0] != 0x31:
+                return "a signed attribute is not {attrType, attrValues SET}"
             attrs.setdefault(_ski_oid(a[0][1]), []).append(a[1][1])
         found = [o for o in (_SKI_ESS_V1, _SKI_ESS_V2) if o in attrs]
         if not found:
@@ -1464,9 +1485,13 @@ def key_id_token_problem(der, digest_hex, ca_file, at, tmp, exe="openssl"):
             if len(vals) != 1 or len(_ski_items(vals[0], "attrValues")) != 1:
                 return "ESS attribute %s: not exactly one value" % o
             sc = _ski_items(_ski_one(vals[0], "SigningCertificate", 0x30), "SigningCertificate")
+            if not 1 <= len(sc) <= 2 or sc[0][0] != 0x30 or (len(sc) == 2 and not _ski_policies_shape(sc[1])):
+                return "ESS attribute %s: not {certs, policies?}" % o
             ids = _ski_items(sc[0][1], "certs")
             if len(ids) != 1:
                 return "ESS attribute %s: %d ESSCertIDs (exactly one is evaluated here)" % (o, len(ids))
+            if ids[0][0] != 0x30:
+                return "ESS attribute %s: the ESSCertID is not a SEQUENCE" % o
             cid = _ski_items(ids[0][1], "ESSCertID")
             alg = "sha1"
             if o == _SKI_ESS_V2:
@@ -1503,6 +1528,9 @@ def key_id_token_problem(der, digest_hex, ca_file, at, tmp, exe="openssl"):
     cmd = [exe, "verify", "-purpose", "timestampsign", "-attime", str(int(at)), "-CAfile", ca_file, "-no-CApath",
            "-no-CAstore"] + (["-untrusted", up] if certs else []) + [sp]
     r = subprocess.run(cmd, capture_output=True, timeout=30)
+    if r.returncode != 0 and b"nknown option" in (r.stderr or b"") + (r.stdout or b""):   # before OpenSSL 3.0
+        raise KeyIdCheckNotRun("this openssl does not know an option of `verify` (OpenSSL 3.0 or later is needed): "
+                               + (r.stderr or r.stdout or b"").decode(errors="replace").strip()[-120:])
     if r.returncode != 0:
         return "openssl verify: " + ((r.stderr or r.stdout or b"").decode(errors="replace").strip().splitlines() or ["refused"])[-1][:160]
     return None
@@ -1546,7 +1574,11 @@ def _verify_rfc3161(tsr_b64: str, expected_digest_hex: str, timeout: int = 15, t
             import calendar, time as _t
             at = calendar.timegm(_t.strptime(info["gen_time"].split(".")[0].rstrip("Z"), "%Y%m%d%H%M%S")) \
                 if info.get("gen_time") else int(_t.time())
-            why = key_id_token_problem(tsr, expected_digest_hex, tsa_cert, at, d, exe)
+            try:
+                why = key_id_token_problem(tsr, expected_digest_hex, tsa_cert, at, d, exe)
+            except KeyIdCheckNotRun as e:   # SPEC §3.2, §6.10: not run here = not measured (None), never a failed TSA
+                out["tsa_verified"] = None; out["tsa_note"] = f"check not run here: {e}"[:200]; out["_not_run"] = str(e)
+                return out
             out["tsa_verified"] = why is None
             if why:
                 out["tsa_note"] = why[-160:]

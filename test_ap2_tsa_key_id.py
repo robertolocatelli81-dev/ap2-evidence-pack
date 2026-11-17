@@ -425,5 +425,82 @@ class NameEquality(unittest.TestCase):
         self.assertFalse(ge((0x82, b"tsa.example"), (0x82, b"TSA.example")))   # bytes, not a Name
 
 
+@NEEDS
+class ClosedShapes(unittest.TestCase):
+    """SPEC §3.2: the key-id step closed (measured on 2026-11-17 with omega-cra-evol's generative bench): one
+    SignerInfo (RFC 3161 §2.4.2), and an openssl too old for `verify -no-CAstore` is a check not run. Positive control:
+    on the head before this change the two-signer token passed this step and the old openssl gave a refusal."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.td = tempfile.mkdtemp()
+        cls.a, cls.b = Lab(cls.td, "a"), Lab(cls.td, "b")
+        cls.tok = cls.a.token()
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.td)
+
+    def two_signers(self, key_id):
+        j, o = self.a.j, self.b.j
+        with open(j("in2.der"), "wb") as f:
+            f.write(self.tok)
+        _run("openssl", "cms", "-verify", "-noverify", "-inform", "DER", "-in", j("in2.der"), "-out", j("tst2.der"))
+        _run("openssl", "cms", "-sign", "-binary", "-nodetach", "-econtent_type", OID_TSTINFO, *(["-keyid"] if key_id else []),
+             "-cades", "-md", "sha256", "-nosmimecap", "-signer", j("tsa.crt"), "-inkey", j("tsa.key"),
+             "-signer", o("tsa.crt"), "-inkey", o("tsa.key"), "-certfile", j("ca.crt"), "-in", j("tst2.der"),
+             "-outform", "DER", "-out", j("two.der"))
+        with open(j("two.der"), "rb") as f:
+            return reply(f.read())
+
+    def both_cas(self):
+        p = os.path.join(self.td, "both.pem")
+        with open(p, "wb") as f:
+            f.write(open(self.a.j("ca.crt"), "rb").read() + open(self.b.j("ca.crt"), "rb").read())
+        return p
+
+    def test_two_signer_infos(self):
+        pin = self.both_cas()
+        ski, iss = self.two_signers(True), self.two_signers(False)
+        self.assertEqual(tsa_ok(ski, pin)[0], False)
+        self.assertIn("2 SignerInfos", tsa_ok(ski, pin)[1])
+        self.assertEqual(tsa_ok(iss, pin)[0], False)          # the other form: openssl ts -verify refuses two signers
+        self.assertEqual(tsa_ok(reply(self.a.resign(self.tok, key_id=True)), self.a.j("ca.crt"))[0], True)   # control
+
+    def test_policies_shape(self):
+        oid = _tlv(0x06, bytes.fromhex("2a0304"))
+        ok = [(0x30, _tlv(0x30, oid)), (0x30, _tlv(0x30, oid + _tlv(0x30, b""))), (0x30, b"")]
+        bad = [(0x31, _tlv(0x30, oid)), (0x30, _tlv(0x31, oid)), (0x30, _tlv(0x30, b"")), (0x30, _tlv(0x30, _tlv(0x02, b"\x01"))),
+               (0x04, b"x")]
+        for el in ok:
+            self.assertTrue(A._ski_policies_shape(el), el)
+        for el in bad:
+            self.assertFalse(A._ski_policies_shape(el), el)
+
+    def old_openssl(self):
+        import stat
+        bindir = os.path.join(self.td, "bin")
+        os.makedirs(bindir, exist_ok=True)
+        fake = os.path.join(bindir, "openssl")
+        with open(fake, "w") as f:
+            f.write("#!/bin/sh\nif [ \"$1\" = verify ]; then echo 'verify: Unknown option: -no-CAstore' >&2; exit 1; fi\n"
+                    "exec %s \"$@\"\n" % shutil.which("openssl"))
+        os.chmod(fake, os.stat(fake).st_mode | stat.S_IXUSR)
+        return bindir
+
+    def test_openssl_without_no_castore(self):
+        bindir, old = self.old_openssl(), os.environ["PATH"]
+        os.environ["PATH"] = bindir + os.pathsep + old
+        try:
+            r = A._verify_rfc3161(base64.b64encode(reply(self.a.resign(self.tok, key_id=True))).decode(), DIGEST.hex(),
+                                  tsa_cert=self.a.j("ca.crt"))
+            self.assertIsNone(r["tsa_verified"], r)
+            self.assertIn("check not run here", r["tsa_note"])
+            self.assertTrue(r["_not_run"])
+            self.assertEqual(tsa_ok(reply(self.a.resign(self.tok, key_id=False)), self.a.j("ca.crt"))[0], True)   # other form
+        finally:
+            os.environ["PATH"] = old
+
+
 if __name__ == "__main__":
     unittest.main()
