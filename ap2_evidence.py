@@ -403,9 +403,13 @@ def decode_jose_header(segment: str) -> Dict:
     return header
 
 
+_ASCII_LOWER = {c: c + 32 for c in range(0x41, 0x5B)}
+
+
 def _media_type(typ: str) -> str:
-    """RFC 7515 §4.1.9: compared without regard to case; 'application/' implied when the value has no '/'"""
-    t = typ.lower()
+    """RFC 7515 §4.1.9: compared without regard to ASCII case (only A-Z folded: str.lower makes U+212A KELVIN SIGN a
+    'k', SPEC §13); 'application/' implied when the value has no '/'"""
+    t = typ.translate(_ASCII_LOWER)
     return t if "/" in t else "application/" + t
 
 
@@ -1063,7 +1067,8 @@ def verify_kb_jwt(parsed: Dict, resolved_claims: Dict) -> Dict:
     # 1.4.0 (SPEC §9.2): RFC 9901 §4.3 — typ REQUIRED and MUST be kb+jwt (§7.3 step 5.d); iat/aud/nonce/sd_hash REQUIRED with
     # their types. Presence and type, never the values (the sealed scope: aud/nonce/iat are recorded, not validated). Checked
     # whether or not the holder key is known, like the §3.1 segment profile.
-    if header.get("typ") != "kb+jwt":
+    # 1.8.0 (SPEC §7.3, §13): compared as RFC 7515 §4.1.9 says, so "KB+JWT" and "application/kb+jwt" are kb+jwt
+    if not isinstance(header.get("typ"), str) or _media_type(header["typ"]) != _media_type("kb+jwt"):
         raise Ap2EvidenceError("kb-jwt typ must be \"kb+jwt\" (RFC 9901 §4.3)")
     ignored = {"kb_jwt_header": _jose_header_ignored(header, "kb-jwt header")}
     for claim, pred, desc in (("iat", lambda v: isinstance(v, int) and not isinstance(v, bool), "an integer"), ("aud", _is_str, "a string"),

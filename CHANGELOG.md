@@ -28,8 +28,18 @@ SD-JWT VC -27 §2.2.1 `dc+sd-jwt`, RFC 9901 §4.3 `kb+jwt`; versions read on 202
 found. `test_ap2_jose_header.py`: 9 tests; the three EUDI TS3 headers (lines 427, 439, 496, `typ` `JWT`) give
 `typ_mismatch` against their profiles; the ModI example's truncated token prefix is refused as a header and its `RS256`
 is not the `ES256` shown; 5 000 generated headers agree with an oracle written apart. 15 hand mutants: 14 detected,
-1 equivalent (a profile's `typ` written in another case: the comparison ignores case). Not changed, noted:
-`verify_kb_jwt` compares `typ` with `kb+jwt` byte for byte.
+1 equivalent (a profile's `typ` written in another case: the comparison ignores case).
+
+Also in 1.8.0 (SPEC §7.3, §9, §13): the KB-JWT header's `typ` is compared as RFC 7515 §4.1.9 says, in the reference and
+in the JavaScript verifier: `KB+JWT` and `application/kb+jwt` are `kb+jwt`. Up to 1.7.3 the comparison was byte for byte,
+so a holder-binding JWT with `typ: "KB+JWT"`, the same media type, was that artifact's error. Only A-Z are folded: the
+first wording of `check_jose_header` lowercased with `str.lower`, which makes U+212A KELVIN SIGN a "k" (JavaScript's
+`toLowerCase` too; measured on 2026-11-17), so `\u212aB+JWT` passed as `kb+jwt`; it no longer does (§13 already said
+"ASCII case"). `test_ap2_kb_typ.py`: 6 tests; seven spellings of the type accepted, nineteen others and five
+non-strings refused, a missing `typ` refused; 2 000 generated values against an oracle written apart and, the same
+values, the reference against the JavaScript function (no difference); a pack whose KB-JWT says `KB+JWT` verified by
+both. On the branch before this change 4 of the 6 fail. 13 hand mutants of the changed lines (Python and
+JavaScript): 12 detected, 1 equivalent (`str()` of a JSON value that is not a string is never `kb+jwt`).
 
 Also in 1.8.0 (SPEC §3.2): an RFC 3161 token whose SignerInfo names its signer by subjectKeyIdentifier (RFC 5652 §5.3) was
 `tsa_verified: false` even when valid, because `openssl ts -verify` cannot read that form (measured on 2026-11-17 with

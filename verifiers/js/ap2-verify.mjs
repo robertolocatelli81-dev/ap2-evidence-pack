@@ -203,6 +203,10 @@ function deriveStates({ digestOk, artResults, bindingSetMatch, tsBlock, rfcBlock
   if (!issuer.length) issuer = [["not_evaluated", "not_present", notSeen ?? "the pack carries no artifact"]];
   return { sealed_content: subject(sealed), holder_binding: subject(holder), time_anchor: subject(time), producer_signature: subject(prod), issuer_identity: subject(issuer) };
 }
+function mediaType(typ) {   // SPEC §13: RFC 7515 §4.1.9, A-Z only (toLowerCase makes U+212A KELVIN SIGN a "k")
+  const t = typ.replace(/[A-Z]/g, (c) => c.toLowerCase());
+  return t.includes("/") ? t : "application/" + t;
+}
 function verifyKbJwt(parsed, resolved) {
   const kb = parsed.kbJwt; if (!kb) return { present: false };
   const seg = kb.split("."); if (seg.length !== 3) throw new Refused("kb-jwt must have 3 dot-separated segments");
@@ -211,7 +215,8 @@ function verifyKbJwt(parsed, resolved) {
   if (typeof header !== "object" || header === null || Array.isArray(header) || typeof payload !== "object" || payload === null || Array.isArray(payload)) throw new Refused("kb-jwt header and payload must be objects");
   // 1.4.0 (SPEC §9.2): RFC 9901 §4.3 — typ REQUIRED, MUST be kb+jwt (§7.3 step 5.d); iat/aud/nonce/sd_hash REQUIRED with their types.
   // Presence and type, never the values (sealed scope: recorded, not validated). Checked whether or not the holder key is known.
-  if (header.typ !== "kb+jwt") throw new Refused('kb-jwt typ must be "kb+jwt" (RFC 9901 §4.3)');
+  // 1.8.0 (SPEC §7.3, §13): compared as RFC 7515 §4.1.9 says (only A-Z folded; "application/" implied), as the reference
+  if (typeof header.typ !== "string" || mediaType(header.typ) !== mediaType("kb+jwt")) throw new Refused('kb-jwt typ must be "kb+jwt" (RFC 9901 §4.3)');
   const ignored = { kb_jwt_header: joseHeaderIgnored(header, "kb-jwt header") };
   for (const [claim, pred, desc] of [["iat", (v) => Number.isInteger(v), "an integer"], ["aud", isStr, "a string"], ["nonce", isStr, "a string"], ["sd_hash", isStr, "a string"]]) {
     if (!(claim in payload)) throw new Refused("kb-jwt payload: missing " + claim + " (RFC 9901 §4.3)");
