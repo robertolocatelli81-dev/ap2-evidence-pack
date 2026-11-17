@@ -109,6 +109,12 @@ key-identifier form refused the uppercase one). 29 hand mutants of the new lines
 `cms -verify` refuses a duplicated or multi-valued ESS attribute before the attribute check, and writes the signer only
 after a successful verification).
 
+README, "Try it in 30 seconds": two commands on the NIST pulses and the AP2 documentation token shipped here, with
+their output as measured.
+
+README, "Contact and citation": the offer of paid evaluation pilots is removed; no paid pilot, support contract or
+commercial licence is offered (non-commercial open source).
+
 ## 1.7.3 — 2026-11-06 — the key the caller names is the policy; header key sources not used are named and compared
 
 **The defect** (SPEC §2, measured 2026-11-03 on 1.7.2). The key was chosen in the order supplied key > header `x5c` >

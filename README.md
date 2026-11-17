@@ -38,6 +38,34 @@ This tool turns a set of SD-JWT mandates into **one evidence file** that verifie
   third-party clock — re-checked offline for binding (status + imprint) by both verifiers,
   and for TSA authenticity by the reference when the TSA certificate is supplied (`--tsa-cert`).
 
+## Try it in 30 seconds
+
+On real public data shipped in this repository, offline after the install: two consecutive pulses of the NIST
+Randomness Beacon 2.0 (U.S. government work, `spec/vectors/beacon/README.md`) and the JOSE header of the Open Payment
+Mandate token of AP2's documentation (google-agentic-commerce/AP2 at `e1ea56d`, Apache-2.0, copied verbatim in
+`test_ap2_restriction.py`):
+
+```bash
+pip install ap2-evidence-pack==1.8.0
+git clone --depth 1 https://github.com/robertolocatelli81-dev/ap2-evidence-pack && cd ap2-evidence-pack/spec/vectors/beacon
+python3 -c "import json, ap2_nist_beacon as B; L=lambda f: json.load(open(f))['pulse']; c=open('cert_chain2.pem').read(); [print(B.verify_pair(L(a), L(b), c, B.PINNED)['reason'] or 'verified', a) for a, b in (('chain2_2030310.json', 'chain2_2030309.json'), ('chain2_2030309.json', 'chain2_2030310.json'))]"
+cd ../../.. && python3 -c "import base64, json, ap2_evidence as A, test_ap2_restriction as T; h = json.loads(base64.urlsafe_b64decode(T.AP2_PAY_OPEN.split('.')[0] + '==')); print(h); print(A.check_jose_header(h, 'example+sd-jwt', ['ES256'])); print(A.check_jose_profile(h, 'sd-jwt-vc', ['ES256']))"
+```
+
+Output (measured on 2026-11-17, Python 3.13, network off):
+
+```
+verified chain2_2030310.json
+pulse_mismatch chain2_2030309.json
+{'alg': 'ES256', 'typ': 'example+sd-jwt', 'kid': 'agent-provider-key-1'}
+{'ok': True, 'why': None, 'typ': 'example+sd-jwt', 'alg': 'ES256'}
+{'ok': False, 'why': 'typ_mismatch', 'typ': 'example+sd-jwt', 'alg': 'ES256', 'profile': 'sd-jwt-vc'}
+```
+
+The pulse of 13:11 UTC verifies with its predecessor (signature, outputValue, link, period, commitment), the pair in the
+wrong order does not. The AP2 header passes the check against the `typ` it declares, and is refused under the SD-JWT VC
+profile, whose `typ` is `dc+sd-jwt` (draft-ietf-oauth-sd-jwt-vc-27 §2.2.1).
+
 ## Usage
 
 ```bash
@@ -563,11 +591,12 @@ Other people's work this repository uses or learned from, each under its own lic
   text, not the reader, decided the answer (the RFC 3161 trust root among them); the `anchors` list of SPEC §3.3 (1.5.0) answers giskard09's point that a pack could carry one commitment and a
   nested one was silently ignored (comment of 2026-10-11).
 
-## Contact, pilots, citation
+## Contact and citation
 
 - **Questions, interoperability reports, divergences found by your own verifier**: open a thread in this repository's
   [Discussions](https://github.com/robertolocatelli81-dev/ap2-evidence-pack/discussions) or an issue; e-mail: roberto.locatelli.81@gmail.com.
-- **Pilots**: the author runs short evaluation pilots (four to six weeks, scoped and priced up front) with payment networks, PSPs and wallets that need offline dispute evidence for AP2 mandates. Write with the use case; the answer says what is measured and what is not.
+- **No paid work**: no paid pilot, support contract or commercial licence is offered: this is non-commercial open
+  source.
 - **Licence**: Apache-2.0: use it freely, also in closed products. If you build on it, a note in Discussions helps the roadmap (and tells the author the work is used).
 - **Citation**: DOI [10.5281/zenodo.22539659](https://doi.org/10.5281/zenodo.22539659) (Zenodo, concept DOI: always the latest version).
 - Author: Roberto Locatelli, 2026. Public interventions by his AI agent (Noûs) are signed as such.
