@@ -1316,8 +1316,10 @@ A producer does not write a block this section refuses, nor one whose NB1 or NB2
   whose issuer signature and claims verified (§6 step 2; else `not_evaluated:mandate_not_verified`); the value at
   `amount_claim` is an object of exactly `amount` and `currency` (`failed:amount_claim_not_found` when there is none), its
   currency is `payment.currency`, and its integer amount equals `payment.amount` in minor units (`failed:amount_not_the_
-  mandate_amount`), with the minor unit of the closed table `MINOR_UNITS` (EUR, USD, GBP, CHF 2; JPY 0 — checked against ISO
-  4217:2015 list one as published by the maintenance agency SIX on 2026-09-17, file sha256 33139b438657d1ce…; another currency:
+  mandate_amount`), with the minor unit of the closed table `MINOR_UNITS` (EUR, USD, GBP, CHF 2; JPY 0 — the `digits` of Unicode CLDR
+  release 49 (`currencyData/fractions`, Unicode License v3; `tools/currency_table_from_cldr.py` prints them from the CLDR
+  files, whose sha256 it checks, and `test_ap2_currency_table.py` compares; until this revision the citation was ISO 4217
+  list one as its maintenance agency publishes it: the five values are the same); another currency:
   `not_evaluated:currency_minor_unit_unknown`). The receipt names the mandate's `payee` (top level or
   `delegate_payload[0]`, informative). The IBANs are not compared with the mandate: the pack holds only their commitments
   (a disclosed IBAN can be searched in the mandate's claims by the relying party).
@@ -1403,7 +1405,7 @@ Max35Text of the SEPA set); the beacon (cryptovalid: `beacons`, a list of 1 to 8
 `output_value` in upper case; here: one `beacon` object, any `chain_index` ≥ 0 that `ap2_nist_beacon.PINNED` then must
 pin, either case); the commitments (cryptovalid: 13 members, the IBANs optional with at least one party identifier, and
 `execution_date`, `payee_entity_id`, `psp_id` in clear; here: 5 members, both IBANs required); `currency` (cryptovalid:
-the ISO 4217 list, 165 codes, exactly the currency's minor units; here: any three capital letters and up to 4 decimals,
+the 153 regular codes of Unicode CLDR 49, exactly their CLDR `digits`; here: any three capital letters and up to 4 decimals,
 NB2 comparing against the mandate with its closed table); `payment_id` uniqueness (cryptovalid: within a ledger; a pack
 holds one payment).
 

@@ -40,6 +40,12 @@ cryptovalid-opencore (the CMS signature, checked first, already refused every ch
 `test_ap2_tsa_key_id.py`: 3 tests added (`ClosedShapes`), all 3 fail on the head before. 11 hand mutants: 5 detected, 6
 equivalent (the shape checks behind `openssl cms -verify`, which refuses any change to the signed attributes first).
 
+Also in 1.8.0: the minor units of `MINOR_UNITS` (and of the JS verifier) are cited from Unicode CLDR release 49
+(`digits`, Unicode License v3, LICENSE-Unicode-3.0.txt) instead of ISO 4217 list one as its maintenance agency
+publishes it; the five values are the same. `tools/currency_table_from_cldr.py` prints the CLDR table from the CLDR
+files after checking their sha256; `test_ap2_currency_table.py` compares the Python and JS tables with it and refuses a
+changed value (positive control).
+
 Also in 1.8.0, sources (text only, no verdict changes): draft-ietf-oauth-sd-jwt-vc is cited at -27 (16 November 2026,
 current on the datatracker on 2026-11-17) everywhere; it was -23 in eight places (counted with git grep). The §2.5 sentences quoted for the key
 policy are the same in -27, which adds "The recipient's policy determines which mechanism applies to an Issuer; the
