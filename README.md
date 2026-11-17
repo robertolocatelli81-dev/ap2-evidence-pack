@@ -549,8 +549,8 @@ AP2_SDK_PATH=... python3 verifiers/sdk_crosscheck.py --hostile   # a third stack
 Other people's work this repository uses or learned from, each under its own licence (see also [NOTICE](NOTICE)):
 
 - **Data**: NIST Randomness Beacon 2.0 pulses and certificates (U.S. government work, 17 U.S.C. §105) in
-  `spec/vectors/beacon/`; 15 NIST ACVP ML-DSA-65 sigVer cases in `pqcrypto/vectors/` (generated from NIST's JSON); the minor units of five
-  currencies from Unicode CLDR release 49 (Unicode License v3, [LICENSE-Unicode-3.0.txt](LICENSE-Unicode-3.0.txt)).
+  `spec/vectors/beacon/`; 15 NIST ACVP ML-DSA-65 sigVer cases in `pqcrypto/vectors/` (generated from NIST's JSON); the ISO 4217 minor units
+  of five currencies (facts; no currency list is shipped).
 - **Independent verifiers used as oracles**: the AP2 Python SDK of google-agentic-commerce/AP2 (Apache-2.0), run by
   `verifiers/sdk_crosscheck.py` from a checkout the user provides; OpenSSL (Apache-2.0) for `--tsa-cert` and
   `--trust-anchor`; pyca/cryptography (Apache-2.0 or BSD-3-Clause) for the signatures.

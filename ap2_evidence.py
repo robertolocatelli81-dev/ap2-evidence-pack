@@ -2061,7 +2061,7 @@ IBAN_MEMBERS = ("payer_iban_commitment", "payee_iban_commitment")
 TEXT_MEMBERS = ("payer_name_commitment", "payer_details_commitment", "payee_name_commitment")
 COMMITMENT_MEMBERS = IBAN_MEMBERS + TEXT_MEMBERS
 # ISO 4217 minor units of the currencies whose amount NB2 can compare with an AP2 integer (closed; another currency:
-# not_evaluated). The `digits` of Unicode CLDR 49 (Unicode License v3; tools/currency_table_from_cldr.py, SPEC §12.3).
+# not_evaluated). The ISO 4217 minor units of these five (SPEC §12.3; test_ap2_currency_table.py compares them with list one).
 MINOR_UNITS = {"EUR": 2, "USD": 2, "GBP": 2, "CHF": 2, "JPY": 0}
 _AMOUNT = re.compile(r"(0|[1-9][0-9]{0,17})(?:\.([0-9]{1,4}))?")
 _HEX64L = re.compile(r"[0-9a-f]{64}")

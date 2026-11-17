@@ -60,11 +60,12 @@ longer here. `pqcrypto/test_acvp_mldsa65.py` reads the new file closed (exactly 
 positive control: a valid case with one signature byte changed does not verify, and lines outside the format
 (upper-case hex, a number for a boolean, a missing or extra key such as `sk`, the old pipe format) are refused.
 
-Also in 1.8.0: the minor units of `MINOR_UNITS` (and of the JS verifier) are cited from Unicode CLDR release 49
-(`digits`, Unicode License v3, LICENSE-Unicode-3.0.txt) instead of ISO 4217 list one as its maintenance agency
-publishes it; the five values are the same. `tools/currency_table_from_cldr.py` prints the CLDR table from the CLDR
-files after checking their sha256; `test_ap2_currency_table.py` compares the Python and JS tables with it and refuses a
-changed value (positive control).
+Also in 1.8.0: the minor units of `MINOR_UNITS` (and of the JS verifier) are cited as the ISO 4217 minor units of
+five currencies (EUR, USD, GBP, CHF 2; JPY 0), five facts, not a copy of the agency's list one;
+`test_ap2_currency_table.py` compares them with the caller's own download of list one (`CV_ISO4217_LIST`; measured on
+the list published 2026-09-17) and the JS table with the Python one, and catches a changed value (positive control). A
+draft of this release cited Unicode CLDR 49 instead; CLDR's `digits` are not ISO 4217 minor units (HUF, IDR, COP, IQD
+differ), so that citation is removed. As cryptovalid-opencore SPEC §18 "Currencies", no currency list is shipped.
 
 Also in 1.8.0, sources (text only, no verdict changes): draft-ietf-oauth-sd-jwt-vc is cited at -27 (16 November 2026,
 current on the datatracker on 2026-11-17) everywhere; it was -23 in eight places (counted with git grep). The §2.5 sentences quoted for the key
