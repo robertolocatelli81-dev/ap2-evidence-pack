@@ -29,3 +29,9 @@ packages = ["ap2_pqcrypto"]
 
 [tool.setuptools.package-dir]
 ap2_pqcrypto = "pqcrypto"
+
+# 1.8.0: the ACVP vectors and NIST's notice travel with the test that reads them (measured 2026-11-17: the 1.7.3 wheel
+# shipped ap2_pqcrypto/test_acvp_mldsa65.py without its vectors file, FileNotFoundError when run installed; the
+# signature suite itself never reads the file)
+[tool.setuptools.package-data]
+ap2_pqcrypto = ["vectors/acvp_mldsa65_sigver_pure.jsonl", "vectors/NIST-ACVP-NOTICE.txt"]

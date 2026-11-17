@@ -40,6 +40,13 @@ cryptovalid-opencore (the CMS signature, checked first, already refused every ch
 `test_ap2_tsa_key_id.py`: 3 tests added (`ClosedShapes`), all 3 fail on the head before. 11 hand mutants: 5 detected, 6
 equivalent (the shape checks behind `openssl cms -verify`, which refuses any change to the signed attributes first).
 
+Also in 1.8.0, packaging: the wheel carries `ap2_pqcrypto/vectors/acvp_mldsa65_sigver_pure.jsonl` and
+`NIST-ACVP-NOTICE.txt` (package data). Measured on 2026-11-17 on the 1.7.3 wheel from PyPI (sha256 109227df…) in a
+clean venv: ML-DSA-65 is registered and verifies (the signature suite never reads a vectors file), but the shipped
+`ap2_pqcrypto/test_acvp_mldsa65.py` failed with FileNotFoundError, its vectors file not being in the wheel.
+`test_ap2_wheel_contents.py` builds the wheel from the tracked files, checks both files are inside and runs the
+installed test (positive control: the build without the package-data table lacks the file).
+
 Also in 1.8.0: the ACVP vectors of `pqcrypto/` are generated from NIST's data. Until now
 `pqcrypto/vectors/acvp_mldsa65_sigver.txt` was a byte-for-byte copy of the nine-case file of navigatorbuilds/elara-mesh,
 a project under AGPL-3.0, inside this Apache-2.0 repository; it is removed (a new commit, the history is not
