@@ -1358,8 +1358,9 @@ the JS verifier cannot verify a TSA signature (no openssl), so it never has a TS
 `not_evaluated:no_verified_time_anchor` where the reference, given `--tsa-cert`, closes the window; the window rule itself
 is the same, compared by calling both functions with the same genTimes (`verifiers/js/nb_parity.mjs`). Measured by
 `verifiers/differential_oracle.py`: 232 not_before packs + 1 positive control + 48 function cases, 0 disagreements of 281
-(`test_js_not_before.py`). cryptovalid-opencore vendors `ap2_evidence.py` alone: that copy refuses a pack with the block
-(`format_unsupported`) until it vendors `ap2_nist_beacon.py` too. The SWIFT registry's
+(`test_js_not_before.py`). cryptovalid-opencore does not carry a copy of this verifier (since its 0.18.0 it uses the installed
+ap2-evidence-pack, `>=1.6.0,<2`): with 1.7.3 installed a pack with the block is refused there as here by 1.7.3 (an
+unknown top-level member), until 1.8.0 is installed. The SWIFT registry's
 per-country BBAN rules; ISO 4217 minor units beyond the closed table; the payment-id character set re-read on the official
 schema; a second beacon (CURBy, drand); the relying party's own pinned certificates; the KB-JWT `nonce` (RFC 9901 §4.3,
 chosen by the verifier; RFC 9901, Proposed Standard, November 2025, per datatracker on 2026-11-16) as the place where a beacon value would be inside bytes the HOLDER signs — a profile of AP2's flow,
