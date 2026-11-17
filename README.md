@@ -541,6 +541,25 @@ AP2_SDK_PATH=... python3 verifiers/sdk_crosscheck.py --hostile   # a third stack
 ```
 
 
+## Credits
+
+Other people's work this repository uses or learned from, each under its own licence (see also [NOTICE](NOTICE)):
+
+- **Data**: NIST Randomness Beacon 2.0 pulses and certificates (U.S. government work, 17 U.S.C. §105) in
+  `spec/vectors/beacon/`; nine NIST ACVP ML-DSA-65 sigVer cases in `pqcrypto/vectors/`; ISO 4217 minor units from SIX's
+  list one.
+- **Independent verifiers used as oracles**: the AP2 Python SDK of google-agentic-commerce/AP2 (Apache-2.0), run by
+  `verifiers/sdk_crosscheck.py` from a checkout the user provides; OpenSSL (Apache-2.0) for `--tsa-cert` and
+  `--trust-anchor`; pyca/cryptography (Apache-2.0 or BSD-3-Clause) for the signatures.
+- **Formats learned from others**: the NIST beacon serialization, cross-checked with clcert/beacon-verifier (MIT; no
+  code copied); the AP2 mandates of google-agentic-commerce/AP2; SD-JWT (RFC 9901), SD-JWT VC, OpenID4VCI, RFC 3161,
+  RFC 7515 and the other standards named with their versions in SPEC_AP2_EVIDENCE.md.
+- **People**, from the public discussion of google-agentic-commerce/AP2 issue #338: the conformance vectors with
+  declared verdicts and the shared ACVP subset answer a proposal of navigatorbuilds (the Elara project, elara-mesh),
+  whose independent reader written from SPEC_AP2_EVIDENCE.md alone (comment of 2026-09-06) named the places where the
+  text, not the reader, decided the answer (the RFC 3161 trust root among them); the `anchors` list of SPEC §3.3 (1.5.0) answers giskard09's point that a pack could carry one commitment and a
+  nested one was silently ignored (comment of 2026-10-11).
+
 ## Contact, pilots, citation
 
 - **Questions, interoperability reports, divergences found by your own verifier**: open a thread in this repository's
