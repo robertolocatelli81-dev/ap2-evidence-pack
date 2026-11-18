@@ -54,9 +54,9 @@ a pack built by 1.8.x is read as before, with the bindings over the issuer JWT i
   format does not read, declared). A chain mixing two mandates (the SDK refuses it) is refused at build (§2.1).
 - **A plain JWS** (an AP2 receipt) enters as `<jwt>~`; `sd_jwt_no_separator` now says so.
 - **Benches.** `test_ap2_chains.py` (18 tests; on an archive of 6728413, with the vectors copied, the first 12 fail;
-  the two of the all-or-none rule fail on 5a09a53; of the three added on review, the delegate KB-JWT one fails on
-  98520d6, with two more for the cases added to them, two hold rules whose mutants no test killed, and one holds the
-  declared case of a KB-JWT outside a chain). The differential oracle gains the chain cases — packs built from
+  the two of the all-or-none rule fail on 5a09a53; four were added on review: the delegate KB-JWT one fails on
+  98520d6, two hold rules whose mutants no test killed there, one holds the declared case of a KB-JWT outside a chain;
+  `test_cli_require_binding` and `test_hop_rules_at_verify`, with the cases added to them, fail on 98520d6 too). The differential oracle gains the chain cases — packs built from
   the SDK and goodmeta vectors, the policy met and unmet, the three new members given wrong values, removed and moved,
   ten CLI forms of `--require-binding` — and
   compares each artifact's `chain_hop`, the policy's missing pairs and `bindings_not_recorded`: 574 cases, 0
