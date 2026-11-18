@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (1.8.1) — the SD-JWT grammar closed; sd_hash checked without the holder key
+## Unreleased (1.8.1) — the SD-JWT grammar closed; sd_hash checked without the holder key; typ parameters
 
 SPEC 1.8.1 (§6 step 2, §7, §9.2; written before the code). Measured on 2026-11-18 on the PyPI wheel 1.7.3 (sha256
 109227df…203b5c00) and on the tag v1.8.0 (d5601e4), identical in both:
@@ -22,6 +22,15 @@ SPEC 1.8.1 (§6 step 2, §7, §9.2; written before the code). Measured on 2026-1
   holder_key_unknown`, `valid` unchanged. `build` does not seal the member in that branch, so a 1.8.0 verifier, which
   would refuse a sealed `sd_hash_ok` it does not recompute (§9.1), reads a 1.8.1 pack; a copy that carries it must equal
   the recomputation, as with a key.
+- **`typ` with parameters (SPEC §13).** `_media_type` folded the whole value, so `check_jose_header` found
+  `x+jwt;p=A` equal to `x+jwt;p=a` (parameter values are case-sensitive, RFC 7515 §4.1.9) and `kb+jwt; p=a`,
+  `kb+jwt;p="a"`, `KB+JWT;P=a` different from `kb+jwt;p=a` (measured on 2026-11-18 on v1.8.0). Now the value is read as
+  an RFC 9110 media type (type, subtype and parameter names folded A–Z, values as written, quoted-string equivalent to
+  token, parameters in any order, a name twice or anything outside the grammar is no media type), in the reference and in
+  the JavaScript verifier. `test_ap2_media_type.py`: 3 000 generated pairs (parameters, quoted values and quoted-pairs,
+  whitespace, KELVIN SIGN in names and values, duplicates) against an oracle written apart, both verifiers; on v1.8.0 3
+  of its 5 tests fail. A KB-JWT `typ` with a parameter stays refused; an `expected_typ` that is no media type is a
+  ValueError (it was any non-empty string).
 - Vectors: + `sd_jwt_no_separator`, `sd_jwt_empty_component` (both `valid` under 1.8.0 in both verifiers),
   `sd_jwt_no_trailing_tilde` (an artifact error under 1.8.0 too, for the other reason); 56 vectors.
   `verifiers/differential_oracle.py` compares each artifact's KB-JWT receipt and the name of a grammar error, with seven

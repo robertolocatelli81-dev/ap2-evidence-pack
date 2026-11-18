@@ -13,7 +13,10 @@
 > verifiers). §6 step 2 and §9.2: without `cnf.jwk` the KB-JWT's `sd_hash` is checked too (RFC 9901 §4.3.1 needs no key)
 > and the receipt reports `sd_hash_ok`; `verified` stays `null` and the state `not_evaluated / holder_key_unknown`, the
 > verdict does not change (up to 1.8.0 a right and a wrong `sd_hash` gave the same receipt). Three vectors added (§7).
-> §1, §3–§5, §8 and §10–§13 are unchanged.
+> §13: `typ` compared as a media type with the parameter values case-sensitive (RFC 7515 §4.1.9) and the grammar of
+> RFC 9110; up to 1.8.0 the whole value was folded, so `x+jwt;p=A` equalled `x+jwt;p=a` (measured on 2026-11-18 on
+> v1.8.0), against the 1.8.0 text of this section, which said parameters were "compared as written".
+> §1, §3–§5, §8 and §10–§12 are unchanged.
 >
 > Revision 1.8.0 (2026-11-18): §12, the `not_before` block — a NIST Beacon pulse inside the sealed
 > content, in one object with salted commitments to the payer's and payee's IBANs (and names and details), the amount,
@@ -1461,8 +1464,22 @@ draft-ietf-oauth-rfc8725bis is at -10, a draft, not in force) recommends explici
   2013, updated by RFC 9694; status read on rfc-editor.org on 2026-11-17): `\u212aB+JWT` (KELVIN SIGN) is not `kb+jwt`,
   though Python's `str.lower` and JavaScript's `toLowerCase` make it so (measured on 2026-11-17; the first wording of
   `check_jose_header` used `str.lower` and accepted it). The KB-JWT of §7.3 uses this comparison.
-  `Key-Attestation+JWT` and `application/key-attestation+jwt` are `key-attestation+jwt`; `JWT` is not. A media type
-  parameter (`; …`) is compared as written: none of the profiles below has one.
+  `Key-Attestation+JWT` and `application/key-attestation+jwt` are `key-attestation+jwt`; `JWT` is not.
+  **Parameters (1.8.1).** RFC 7515 §4.1.9 (text read on rfc-editor.org on 2026-11-18): "Per RFC 2045, all media type
+  values, subtype values, and parameter names are case insensitive. However, parameter values are case sensitive unless
+  otherwise specified for the specific parameter." Both values are read with the grammar of RFC 9110 (Internet Standard,
+  June 2022, not obsoleted or updated on 2026-11-18) §8.3.1 and §5.6.6: `type "/" subtype *( OWS ";" OWS [ name "="
+  ( token / quoted-string ) ] )`, ASCII only (no obs-text), no whitespace around `=` and none after the last parameter
+  unless a `;` follows; a quoted-string is read without its quotes and with each quoted-pair replaced by the character
+  after the backslash (§5.6.4), equal to the token of the same value (§5.6.6: "The quoted and unquoted values are
+  equivalent"); `application/` is prepended only when the whole value has no `/`. The type, subtype and parameter names
+  are folded A–Z, the values are not; parameters are compared in any order (this format's reading: neither RFC makes the
+  order significant); a parameter named twice makes the value no media type. A `typ` that is no media type is
+  `typ_mismatch`; an `expected_typ` that is none is a ValueError. So `x+jwt;p=A` is not `x+jwt;p=a`, and `KB+JWT; P="a"`
+  is `kb+jwt;p=a`. Up to 1.8.0 the whole value was folded and the parameters compared byte for byte after that: the
+  first pair was equal and the second not, against the sentence of 1.8.0 here that parameters were compared as written
+  (measured on 2026-11-18, `test_ap2_media_type.py`). None of the profiles below has a parameter; a KB-JWT `typ` with one
+  is not `kb+jwt`, as before.
 - **Profiles** (`check_jose_profile(header, profile, allowed_algs)`; an unknown profile is `profile_unknown`), each with
   its source and version, read on 2026-11-17:
 

@@ -89,7 +89,12 @@ def oracle(typ) -> bool:
     folded = "".join(chr(ord(c) + 32) if "A" <= c <= "Z" else c for c in typ)
     if "/" not in folded:
         folded = "application/" + folded
-    return folded == "application/kb+jwt"
+    if folded == "application/kb+jwt":
+        return True
+    # 1.8.1 (SPEC §13): RFC 9110 §5.6.6 allows empty parameters, so `kb+jwt;` and `kb+jwt; ;` are kb+jwt too; the media
+    # type oracle of test_ap2_media_type.py (written apart from the code) decides those
+    from test_ap2_media_type import oracle as media_type_oracle
+    return media_type_oracle(typ) == media_type_oracle("kb+jwt")
 
 
 class KbTyp(unittest.TestCase):
@@ -111,8 +116,11 @@ class KbTyp(unittest.TestCase):
 
     def test_ascii_boundaries(self):
         """A-Z folded, and nothing else: '@' (0x40) and '[' (0x5B) stay; every letter, Z included"""
-        self.assertEqual(A._media_type("ABCDEFGHIJKLMNOPQRSTUVWXYZ"), "application/abcdefghijklmnopqrstuvwxyz")
-        self.assertEqual(A._media_type("@[`{"), "application/@[`{")
+        # 1.8.1 (SPEC §13): the value read as an RFC 9110 media type, (type/subtype, parameters); '@', '[', '{' are no
+        # token characters, '`' is one and stays
+        self.assertEqual(A._media_type("ABCDEFGHIJKLMNOPQRSTUVWXYZ"), ("application/abcdefghijklmnopqrstuvwxyz", ()))
+        self.assertEqual(A._media_type("`|~^"), ("application/`|~^", ()))
+        self.assertIsNone(A._media_type("@[`{"))
         self.assertTrue(A.check_jose_header({"alg": "ES256", "typ": "ZZ+JWT"}, "zz+jwt", ["ES256"])["ok"])
 
     def test_generated_against_the_oracle_and_js(self):

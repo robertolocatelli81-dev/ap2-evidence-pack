@@ -209,9 +209,54 @@ function deriveStates({ digestOk, artResults, bindingSetMatch, tsBlock, rfcBlock
   if (!issuer.length) issuer = [["not_evaluated", "not_present", notSeen ?? "the pack carries no artifact"]];
   return { sealed_content: subject(sealed), holder_binding: subject(holder), time_anchor: subject(time), producer_signature: subject(prod), issuer_identity: subject(issuer) };
 }
-function mediaType(typ) {   // SPEC §13: RFC 7515 §4.1.9, A-Z only (toLowerCase makes U+212A KELVIN SIGN a "k")
-  const t = typ.replace(/[A-Z]/g, (c) => c.toLowerCase());
-  return t.includes("/") ? t : "application/" + t;
+// SPEC §13 (1.8.1), as the reference's _media_type: RFC 7515 §4.1.9 (type, subtype and parameter names case-insensitive,
+// parameter values case-sensitive; "application/" implied without "/"), the grammar of RFC 9110 §8.3.1/§5.6.6, ASCII only,
+// A-Z only folded (toLowerCase makes U+212A KELVIN SIGN a "k"), a quoted-string read without quotes and quoted-pairs,
+// parameters in any order, a name twice is no media type. null when typ is not a media type; else a comparable string.
+const TCHAR = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]$/;
+const foldAZ = (t) => t.replace(/[A-Z]/g, (c) => c.toLowerCase());
+function mediaType(typ) {
+  if (typeof typ !== "string") return null;
+  const n = typ.length; let i = 0;
+  const token = (k) => { let j = k; while (j < n && TCHAR.test(typ[j])) j++; return j > k ? [typ.slice(k, j), j] : [null, k]; };
+  let t; [t, i] = token(0); if (t === null) return null;
+  let full;
+  if (i < n && typ[i] === "/") { let sub; [sub, i] = token(i + 1); if (sub === null) return null; full = t + "/" + sub; }
+  else if (typ.includes("/")) return null;
+  else full = "application/" + t;
+  const params = new Map();
+  while (i < n) {
+    while (i < n && (typ[i] === " " || typ[i] === "\t")) i++;
+    if (i >= n || typ[i] !== ";") return null;
+    i++;
+    while (i < n && (typ[i] === " " || typ[i] === "\t")) i++;
+    if (i >= n || typ[i] === ";") continue;
+    let name; [name, i] = token(i);
+    if (name === null || i >= n || typ[i] !== "=") return null;
+    i++;
+    let value;
+    if (i < n && typ[i] === '"') {
+      i++; const val = [];
+      for (;;) {
+        if (i >= n) return null;
+        const c = typ[i]; const o = c.charCodeAt(0);
+        if (c === '"') { i++; break; }
+        if (c === "\\") {
+          if (i + 1 >= n) return null;
+          const d = typ[i + 1]; const od = d.charCodeAt(0);
+          if (!(d === "\t" || d === " " || (od >= 0x21 && od <= 0x7e))) return null;
+          val.push(d); i += 2;
+        } else if (c === "\t" || c === " " || c === "!" || (o >= 0x23 && o <= 0x5b) || (o >= 0x5d && o <= 0x7e)) { val.push(c); i++; }
+        else return null;
+      }
+      value = val.join("");
+    } else { [value, i] = token(i); if (value === null) return null; }
+    const key = foldAZ(name);
+    if (params.has(key)) return null;
+    params.set(key, value);
+  }
+  const sorted = [...params.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  return JSON.stringify([foldAZ(full), sorted]);
 }
 function verifyKbJwt(parsed, resolved) {
   const kb = parsed.kbJwt; if (!kb) return { present: false };

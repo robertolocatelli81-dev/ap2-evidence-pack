@@ -416,17 +416,90 @@ def decode_jose_header(segment: str) -> Dict:
 _ASCII_LOWER = {c: c + 32 for c in range(0x41, 0x5B)}
 
 
-def _media_type(typ: str) -> str:
-    """RFC 7515 §4.1.9: compared without regard to ASCII case (only A-Z folded: str.lower makes U+212A KELVIN SIGN a
-    'k', SPEC §13); 'application/' implied when the value has no '/'"""
-    t = typ.translate(_ASCII_LOWER)
-    return t if "/" in t else "application/" + t
+_TCHAR = frozenset("!#$%&'*+-.^_`|~0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")   # RFC 9110 §5.6.2
+
+
+def _media_type(typ):
+    """SPEC §13 (1.8.1): a `typ` read as a media type, for comparison, or None when it is not one.
+    RFC 7515 §4.1.9: "Per RFC 2045, all media type values, subtype values, and parameter names are case insensitive.
+    However, parameter values are case sensitive unless otherwise specified"; 'application/' implied when the value has no
+    '/'. The grammar is RFC 9110 §8.3.1 and §5.6.6 (type "/" subtype *( OWS ";" OWS [ name "=" ( token / quoted-string ) ] )),
+    ASCII only: the type, subtype and parameter names with A-Z folded (str.lower makes U+212A KELVIN SIGN a 'k'), each
+    value as written, a quoted-string read without its quotes and quoted-pairs (RFC 9110 §5.6.4, §5.6.6: "The quoted and
+    unquoted values are equivalent"); parameters in any order, a name twice is no media type. Up to 1.8.0 the whole value
+    was folded, so `x+jwt;p=A` equalled `x+jwt;p=a`, and `kb+jwt; p=a` or `kb+jwt;p="a"` did not equal `kb+jwt;p=a`."""
+    if not isinstance(typ, str):
+        return None
+    n = len(typ)
+
+    def token(i):
+        j = i
+        while j < n and typ[j] in _TCHAR:
+            j += 1
+        return (typ[i:j], j) if j > i else (None, i)
+
+    t, i = token(0)
+    if t is None:
+        return None
+    if i < n and typ[i] == "/":
+        sub, i = token(i + 1)
+        if sub is None:
+            return None
+        full = t + "/" + sub
+    elif "/" in typ:   # a '/' elsewhere: the value contains one, so nothing is prepended, and it is no type/subtype
+        return None
+    else:
+        full = "application/" + t
+    params = {}
+    while i < n:
+        while i < n and typ[i] in " \t":
+            i += 1
+        if i >= n or typ[i] != ";":
+            return None
+        i += 1
+        while i < n and typ[i] in " \t":
+            i += 1
+        if i >= n or typ[i] == ";":   # an empty parameter, as RFC 9110 §5.6.6 allows
+            continue
+        name, i = token(i)
+        if name is None or i >= n or typ[i] != "=":
+            return None
+        i += 1
+        if i < n and typ[i] == '"':
+            i, val = i + 1, []
+            while True:
+                if i >= n:
+                    return None
+                c = typ[i]
+                if c == '"':
+                    i += 1
+                    break
+                if c == "\\":
+                    if i + 1 >= n or not (typ[i + 1] in "\t " or 0x21 <= ord(typ[i + 1]) <= 0x7E):
+                        return None
+                    val.append(typ[i + 1])
+                    i += 2
+                elif c in "\t " or c == "!" or 0x23 <= ord(c) <= 0x5B or 0x5D <= ord(c) <= 0x7E:
+                    val.append(c)
+                    i += 1
+                else:
+                    return None
+            value = "".join(val)
+        else:
+            value, i = token(i)
+            if value is None:
+                return None
+        key = name.translate(_ASCII_LOWER)
+        if key in params:
+            return None
+        params[key] = value
+    return full.translate(_ASCII_LOWER), tuple(sorted(params.items()))
 
 
 def check_jose_header(header, expected_typ: str, allowed_algs) -> Dict:
     """SPEC §13: {"ok", "why", "typ", "alg"}; never raises on `header`, ValueError on the caller's arguments"""
-    if not isinstance(expected_typ, str) or not expected_typ:
-        raise ValueError("expected_typ: a non-empty string")
+    if not isinstance(expected_typ, str) or _media_type(expected_typ) is None:   # 1.8.1: a media type (SPEC §13)
+        raise ValueError("expected_typ: a media type (RFC 9110 §8.3.1; 'application/' implied without '/')")
     if not isinstance(allowed_algs, (list, tuple)) or not allowed_algs \
             or not all(isinstance(a, str) and a for a in allowed_algs) or "none" in allowed_algs:
         raise ValueError('allowed_algs: a non-empty list of algorithm names, without "none" (RFC 8725 §3.2)')
@@ -447,7 +520,7 @@ def check_jose_header(header, expected_typ: str, allowed_algs) -> Dict:
         out["why"] = "typ_missing"
     elif not isinstance(header["typ"], str):
         out["why"] = "typ_not_string"
-    elif _media_type(header["typ"]) != _media_type(expected_typ):
+    elif _media_type(header["typ"]) is None or _media_type(header["typ"]) != _media_type(expected_typ):
         out["why"] = "typ_mismatch"
     else:
         out["ok"] = True
@@ -1079,7 +1152,7 @@ def verify_kb_jwt(parsed: Dict, resolved_claims: Dict) -> Dict:
     # their types. Presence and type, never the values (the sealed scope: aud/nonce/iat are recorded, not validated). Checked
     # whether or not the holder key is known, like the §3.1 segment profile.
     # 1.8.0 (SPEC §7.3, §13): compared as RFC 7515 §4.1.9 says, so "KB+JWT" and "application/kb+jwt" are kb+jwt
-    if not isinstance(header.get("typ"), str) or _media_type(header["typ"]) != _media_type("kb+jwt"):
+    if not isinstance(header.get("typ"), str) or _media_type(header["typ"]) != _media_type("kb+jwt"):   # None != the tuple
         raise Ap2EvidenceError("kb-jwt typ must be \"kb+jwt\" (RFC 9901 §4.3)")
     ignored = {"kb_jwt_header": _jose_header_ignored(header, "kb-jwt header")}
     for claim, pred, desc in (("iat", lambda v: isinstance(v, int) and not isinstance(v, bool), "an integer"), ("aud", _is_str, "a string"),
