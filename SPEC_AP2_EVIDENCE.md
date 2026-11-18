@@ -6,7 +6,11 @@
 > Revision 1.8.0 (2026-11-18): §12, the `not_before` block — a NIST Beacon pulse inside the sealed
 > content, in one object with salted commitments to the payer's and payee's IBANs (and names and details), the amount,
 > the currency, a payment id and a record salt — no personal data in clear; a lower time bound to go with the RFC 3161
-> upper one. A pack without the block is read exactly as by 1.7.3; a 1.7.3 verifier refuses a pack with it (unknown top-level key).
+> upper one. A 1.7.3 verifier refuses a pack with it (unknown top-level key). Also in 1.8.0: §3.2 (a TSA token that names
+> its signer by key identifier is checked; a token with two SignerInfos is not `tsa_verified`; an openssl before 3.0 gives
+> `null`, a check not run, §6.10), §6, §7, §9.2 and §13 (the KB-JWT `typ` compared as RFC 7515 §4.1.9 says; the JOSE header
+> profile). A pack without the block is read as by 1.7.3 except where these change the outcome: a KB-JWT whose `typ` is
+> `KB+JWT` or `application/kb+jwt` was that artifact's error under 1.7.3 and verifies now, and the tokens of §3.2 above.
 >
 > Revision 1.7.3 (2026-11-03): §2, the key the caller names for an artifact is the verification key, whatever the
 > protected header carries; the JWKS key is chosen by a written rule (`kid`, one usable key, otherwise a refusal); every
@@ -208,7 +212,7 @@ sealing without changing what they attest.
 So that every implementation computes the same canonical bytes or refuses the same
 file, a verifier MUST refuse (a receipt with `valid: false`, never a crash) an evidence
 file that: is not a regular file (a FIFO, a device, a directory — decided on the opened file, which is opened without
-blocking and never read past 64 MiB + 1 byte; added 25/09/2026, Unreleased); is not valid UTF-8 or starts with a BOM;
+blocking and never read past 64 MiB + 1 byte; added 25/09/2026, 1.2.1); is not valid UTF-8 or starts with a BOM;
 exceeds 64 MiB; is not a JSON object;
 contains a duplicate object key at any depth; contains a number with a fraction or an
 exponent (floats are not portable — use a string) or an integer outside ±(2^53−1);

@@ -13,7 +13,8 @@ block differs from cryptovalid's payment entry). NB3 compares a genTime with any
 certificate), the amount against the AP2 mandate the block names (NB2), and the window [T, the earliest TSA-verified
 genTime] (NB3); a failed check makes the pack not `valid`. `build_evidence(..., not_before=...)` writes it and refuses a
 block that does not verify; `make_payment` makes the commitments from clear values; `check_disclosure` checks a disclosure. New module `ap2_nist_beacon.py`
-(prototype, standard library). The AP2 mandates are unchanged; a pack without the block is read as by 1.7.3; a 1.7.3
+(prototype, standard library). The AP2 mandates are unchanged; a pack without the block is read as by 1.7.3 except where
+the §13 and §3.2 changes below change the outcome (a KB-JWT `typ` of `KB+JWT`, the TSA tokens named there); a 1.7.3
 verifier refuses a pack with it (unknown top-level key). The JavaScript verifier reads and checks the block as the reference does (same grammar, NB codes, receipt,
 commitment encoding and disclosure check); `verifiers/differential_oracle.py` compares them on 232 not_before packs, 1
 positive control and 48 direct function cases (0 disagreements of 281, `test_js_not_before.py`); its NB3 never closes the window, having no TSA

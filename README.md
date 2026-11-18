@@ -69,7 +69,7 @@ profile, whose `typ` is `dc+sd-jwt` (draft-ietf-oauth-sd-jwt-vc-27 §2.2.1).
 ## Usage
 
 ```bash
-pip install --extra-index-url https://robertolocatelli81-dev.github.io/pypi/ ap2-evidence-pack   # not on PyPI: this index (see Install); cryptography >= 48 comes with it
+pip install ap2-evidence-pack   # PyPI since 1.7.3 (or the index of Install, same files); cryptography >= 48 comes with it
 
 python3 examples/make_samples.py     # generates sample checkout.sdjwt + payment.sdjwt
 python3 ap2_evidence.py build evidence.json checkout=checkout.sdjwt payment=payment.sdjwt \
@@ -638,7 +638,8 @@ cryptovalid-opencore >= 0.18.0 depends on this package (its `ap2` extra) and shi
 ## Install (pip)
 
 ```bash
-pip install --extra-index-url https://robertolocatelli81-dev.github.io/pypi/ ap2-evidence-pack
+pip install ap2-evidence-pack   # PyPI, since 1.7.3 (2026-11-13)
+pip install --extra-index-url https://robertolocatelli81-dev.github.io/pypi/ ap2-evidence-pack   # or this index: the same files
 ```
 
 Installed beside PyPI's `pqcrypto` package? Fine since 1.3.0: this wheel ships its signature suite as `ap2_pqcrypto/`
