@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (1.8.0-draft, local) — a "not before" bound: a NIST Beacon value sealed with the payment
+## 1.8.0 — 2026-11-18 — a "not before" bound: a NIST Beacon value sealed with the payment
 
 SPEC §12, the optional top-level block `not_before`, inside the §3 digest: one object with salted commitments to the
 payer's and payee's IBANs (MOD 97-10 checked before committing) and, optionally, to the names and the payer's details —

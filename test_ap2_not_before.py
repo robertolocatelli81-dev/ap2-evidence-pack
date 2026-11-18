@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Roberto Locatelli
-"""1.8.0-draft — SPEC §12, the `not_before` block: a NIST Beacon value sealed in one object with the payer's and payee's
+"""1.8.0 — SPEC §12, the `not_before` block: a NIST Beacon value sealed in one object with the payer's and payee's
 IBANs, the amount, the currency, a payment id and salted commitments to the names, beside an AP2 payment mandate.
 
 Real NIST pulses and the real certificate (spec/vectors/beacon, fetched 2026-11-16). The IBANs are the published examples

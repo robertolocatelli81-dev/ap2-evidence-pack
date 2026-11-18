@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""SPEC §12 (1.8.0-draft), tests added after the second review (16/11/2026): the Unicode version of committed values and
+"""SPEC §12 (1.8.0), tests added after the second review (16/11/2026): the Unicode version of committed values and
 the exact comparison of a genTime with many fraction digits, in the reference and in the JavaScript verifier."""
 import json
 import os

@@ -75,7 +75,7 @@ for _pqc in ("pqcrypto", "ap2_pqcrypto"):        # the clone has pqcrypto/; the 
         sys.path.insert(0, os.path.join(_HERE, _pqc))
         break
 import sigsuite as _sigsuite  # noqa: E402  (crypto-agile hybrid classical + ML-DSA-65 producer signatures)
-try:   # SPEC §12, 1.8.0-draft: the NIST Beacon pulse check. A copy of this file without it (cryptovalid-opencore vendors
+try:   # SPEC §12, 1.8.0: the NIST Beacon pulse check. A copy of this file without it (cryptovalid-opencore vendors
     import ap2_nist_beacon as _nb  # noqa: E402  ap2_evidence.py alone) reads every pack but one with `not_before`
 except ImportError:   # which it refuses (format_unsupported), never verifies
     _nb = None
@@ -695,7 +695,7 @@ _TOP_KEYS = {"evidence_format": (_is_str, "a string", True), "subject": (_is_str
              "artifacts": (_is_list, "a list", True), "bindings": (_is_list, "a list", False), "honest_scope": (_is_str, "a string", True),
              "evidence_digest_sha256": (_is_str, "a string", True), "rfc3161_timestamp": (_is_obj, "an object", False), "producer_signatures": (_is_obj, "an object", False),
              "anchors": (lambda v: isinstance(v, list) and len(v) > 0, "a non-empty list", False),   # 1.5.0 — SPEC §3.3
-             "not_before": (_is_obj, "an object", False)}   # 1.8.0-draft — SPEC §12
+             "not_before": (_is_obj, "an object", False)}   # 1.8.0 — SPEC §12
 _ANCHOR_MECHANISMS = ("rfc3161",)   # SPEC §3.3: the mechanisms this revision defines; any other is a refusal naming it
 _ANCHOR_RFC3161_KEYS = {"mechanism": (lambda v: v == "rfc3161", '"rfc3161"', True), "tsr_b64": (_is_str, "a string", True),
                         "tsa_url": (_is_str, "a string", False), "note": (_is_str, "a string", False)}
@@ -1706,7 +1706,7 @@ def _build_evidence(artifacts: List[Dict], out_path: str,
                     tsa_url: Optional[str] = None,
                     subject: str = "agentic-payment mandate evidence",
                     extra_tsa_urls: Optional[List[str]] = None, not_before: Optional[Dict] = None) -> Dict:
-    """artifacts: [{name, sd_jwt}]. not_before (1.8.0-draft, SPEC §12): the block, sealed with the artifacts; refused
+    """artifacts: [{name, sd_jwt}]. not_before (1.8.0, SPEC §12): the block, sealed with the artifacts; refused
     (no file) when §12.2 refuses it or when its NB1/NB2 check does not verify at build. Verifies every artifact NOW, snapshots the key material
     used, records bindings, and writes ONE self-contained evidence file. Any artifact that
     fails to verify aborts the build (an evidence file must never contain a red light
@@ -1770,7 +1770,7 @@ def _build_evidence(artifacts: List[Dict], out_path: str,
         "bindings": find_bindings(for_bindings),
         "honest_scope": HONEST_SCOPE,
     }
-    if not_before is not None:   # 1.8.0-draft — SPEC §12: inside the digest; a producer does not write a block §12 refuses
+    if not_before is not None:   # 1.8.0 — SPEC §12: inside the digest; a producer does not write a block §12 refuses
         parse_not_before(not_before)
         chk = check_not_before(not_before, evidence, [{"signature_ok": True, "claims_match": True}] * len(entries), None)
         bad = {k: v for k, v in chk["checks"].items() if k in ("NB1", "NB2") and v != "verified"}
@@ -2049,7 +2049,7 @@ def derive_states(*, digest_ok, art_results, binding_set_match, ts_block, rfc_bl
             "producer_signature": _subject(prod), "issuer_identity": _subject(issuer)}
 
 
-# ────────────────────────────────────────────────────────── not-before block (SPEC §12, 1.8.0-draft)
+# ────────────────────────────────────────────────────────── not-before block (SPEC §12, 1.8.0)
 # OURS: a NIST Beacon value inside the sealed content, in one object with the payment it dates — salted commitments to the
 # payer's and payee's IBANs (and names, details), the amount, the currency, a payment id and a record salt (Regulation (EU)
 # 2023/1113 Art. 5(1) minimum; disclosure on request, Art. 5(2); no personal data in clear). Member names and commitment
@@ -2507,7 +2507,7 @@ def _verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = F
     if "producer_signatures" in ev and not isinstance(ev["producer_signatures"], dict):
         return refusal("producer_signatures must be an object")
     # 1.4.0 — SPEC §9.1: the top-level object, the anchor block, the producer block and every binding entry are CLOSED
-    if "not_before" in ev and _nb is None:   # 1.8.0-draft — SPEC §12: a copy without the beacon module never verifies one
+    if "not_before" in ev and _nb is None:   # 1.8.0 — SPEC §12: a copy without the beacon module never verifies one
         return refusal("not_before: this copy of the verifier has no ap2_nist_beacon module (SPEC §12)", "format_unsupported")
     try:
         _check_closed(ev, "top level", _TOP_KEYS)
@@ -2538,7 +2538,7 @@ def _verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = F
         sigs = ev.get("producer_signatures", {}).get("signatures")
         for i, e in enumerate(sigs if isinstance(sigs, list) else []):
             _check_unknown(e, f"producer_signatures.signatures[{i}]", _sigsuite.ENTRY_KEYS)
-        if "not_before" in ev:   # 1.8.0-draft — SPEC §12.2: closed at every level, IBANs checked, before any check runs
+        if "not_before" in ev:   # 1.8.0 — SPEC §12.2: closed at every level, IBANs checked, before any check runs
             parse_not_before(ev["not_before"])
     except Ap2UnknownMember as e:
         return refusal(str(e), "unknown_member")
@@ -2705,7 +2705,7 @@ def _verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = F
         rfc.pop("_not_run", None)
 
     nb_rep = None
-    if "not_before" in ev:   # 1.8.0-draft — SPEC §12.3: NB1-NB3 after the time anchors (proven_time) and the artifacts
+    if "not_before" in ev:   # 1.8.0 — SPEC §12.3: NB1-NB3 after the time anchors (proven_time) and the artifacts
         nb_rep = check_not_before(ev["not_before"], ev, art_results, proven_time)
     receipt = {"digest_ok": digest_ok, "artifacts": art_results,
             "producer_signatures": producer, "pq_protected": producer.get("pq_protected", False),
@@ -2727,7 +2727,7 @@ def _verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = F
             "policy_ok": policy_ok,
             "valid": bool(art_results and digest_ok and all_ok and bindings_ok
                           and rfc.get("verified") is not False and policy_ok
-                          and (nb_rep is None or nb_rep["state"] != "failed")),   # 1.8.0-draft — SPEC §12.3
+                          and (nb_rep is None or nb_rep["state"] != "failed")),   # 1.8.0 — SPEC §12.3
             "honest_scope": ev.get("honest_scope"),
             "admission": "admitted", "refusal_class": None,   # 1.6.0 — SPEC §6.9
             "states_vocabulary": STATES_VOCABULARY, "states": states,
@@ -2735,7 +2735,7 @@ def _verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = F
             # informative, both verifiers (SPEC §6): whether THIS verifier can check ML-DSA-65 at all — without it a
             # producer signature is SKIP, never a pass, and the reader of the receipt should not have to guess why
             "mldsa_backend": bool(_sigsuite.MLDSA_AVAILABLE)}
-    if nb_rep is not None:   # 1.8.0-draft — SPEC §12.3: only when the pack carries the block
+    if nb_rep is not None:   # 1.8.0 — SPEC §12.3: only when the pack carries the block
         receipt["not_before"] = nb_rep
     if not_run:   # 1.6.0 — SPEC §6.10: a check asked for could not be run here — the COMPLETE receipt travels with the error
         raise Ap2WriteError(not_run[0], receipt=receipt)

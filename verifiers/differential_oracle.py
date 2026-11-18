@@ -64,7 +64,7 @@ def _forged_tsr(digest, extra_tst=b""):
 # declaration must be updated with them (the run then reports the mismatch instead of silently passing).
 # the cases that must PASS: they prove the bench can tell green from red (never hostile files)
 POSITIVE_CONTROLS = frozenset({"non-ascii-subject-rehashed", "fresh-pack-control-valid", "must-created_utc-ok", "file-exactly-at-the-bound",
-                               "nb-valid"})   # 1.8.0-draft: the not_before pack built by the reference
+                               "nb-valid"})   # 1.8.0: the not_before pack built by the reference
 MAX_EVIDENCE_BYTES = 64 << 20
 # 25/09/2026 — what a verifier must refuse BEFORE reading it, with a DECLARED reason that both must give: agreement alone is
 # not enough (a FIFO blocked both verifiers and a symlink to /dev/zero exhausted memory in both: they "agreed").
@@ -224,7 +224,7 @@ def run(cmd, path, flags):
                tuple(tuple(a["integral_literals_read"]) if "integral_literals_read" in a else None for a in (r.get("artifacts") or [])),
                # 1.7.3 — SPEC §9.2: each artifact's ignored names (key_material included), or that it is an error
                tuple("error" if "error" in a else json.dumps(a.get("ignored"), sort_keys=True) for a in (r.get("artifacts") or [])),
-               # 1.8.0-draft — SPEC §12.3: the whole not_before receipt (checks, window, covers, payee, state), or None
+               # 1.8.0 — SPEC §12.3: the whole not_before receipt (checks, window, covers, payee, state), or None
                json.dumps(r.get("not_before"), sort_keys=True))
         return (r.get("valid"), r.get("digest_ok"), r.get("bindings_ok"), prod.get("present"), prod.get("ok"), prod.get("trusted"),
                 r.get("pq_protected"), ts.get("claimed"), ts.get("verified"), ts.get("granted"), ts.get("imprint_ok"), ts.get("gen_time"),
@@ -495,7 +495,7 @@ def build_cases(d):
     dd = os.path.join(d, "dir.json"); os.makedirs(dd); cases["file-directory"] = (dd, [])
     for nm, size in (("file-one-byte-over-the-bound", MAX_EVIDENCE_BYTES + 1), ("file-exactly-at-the-bound", MAX_EVIDENCE_BYTES)):
         raw = base_text.encode("utf-8"); cases[nm] = (w(nm, raw + b" " * (size - len(raw))), [])
-    cases.update(_nb_cases(d, w))   # 1.8.0-draft — SPEC §12
+    cases.update(_nb_cases(d, w))   # 1.8.0 — SPEC §12
     return cases
 
 
@@ -596,7 +596,7 @@ def _fresh_pack(base, sk, n, header_txt, payload_txt, resolved, disclosures=(), 
     return rehash(ev)
 
 
-# ── 1.8.0-draft — SPEC §12, the `not_before` block: a pack built by the reference with real NIST pulses (spec/vectors/beacon),
+# ── 1.8.0 — SPEC §12, the `not_before` block: a pack built by the reference with real NIST pulses (spec/vectors/beacon),
 # the SWIFT registry example IBANs as commitments and test names, then generated variants (unknown keys at every level,
 # wrong types, missing keys, malformed values, moved commitments, another pulse or certificate, an impossible time, a
 # creation before the beacon). No TSA token: NB3's upper bound (a TSA-VERIFIED genTime) is openssl-only, so the window rule
@@ -857,7 +857,7 @@ def main():
             ok = py == js; diffs += 0 if ok else 1
             print(f"  [{'OK ' if ok else 'DIFF'}] {name:34} py={py} js={js}")
         n_nbf = 0
-        for name, py, js in nb_function_parity(tmp):   # 1.8.0-draft — SPEC §12: the window rule and the disclosures, called directly
+        for name, py, js in nb_function_parity(tmp):   # 1.8.0 — SPEC §12: the window rule and the disclosures, called directly
             ok = py == js; diffs += 0 if ok else 1; n += 1; n_nbf += 1
             print(f"  [{'OK ' if ok else 'DIFF'}] {name:34} py={json.dumps(py, sort_keys=True)[:160]} js={json.dumps(js, sort_keys=True)[:160]}")
         valid = os.path.join(ROOT, "spec", "vectors", "ap2", "valid_signed.json")

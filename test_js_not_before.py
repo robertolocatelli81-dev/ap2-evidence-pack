@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Roberto Locatelli
-"""1.8.0-draft — SPEC §12: the JavaScript verifier reads and checks the `not_before` block exactly as the reference: the
+"""1.8.0 — SPEC §12: the JavaScript verifier reads and checks the `not_before` block exactly as the reference: the
 not_before cases of verifiers/differential_oracle.py (a pack built with real NIST pulses and its generated variants, the
 window rule with an upper bound and the disclosures called directly) must give 0 disagreements. Positive control: with
 AP2_ORACLE_JS pointing at the JS verifier as it was before it read the block (2026-11-16), this test fails (measured 2026-11-16: 278 disagreements of 281)."""

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// SPEC §12 (1.8.0-draft): the not-before rules of this verifier called directly, for verifiers/differential_oracle.py — the
+// SPEC §12 (1.8.0): the not-before rules of this verifier called directly, for verifiers/differential_oracle.py — the
 // window rule with an upper bound this verifier never has on its own (a TSA-verified genTime needs openssl), and the
 // disclosures of the commitments. Input: one JSON file {pack, window: [genTime or null], disclosures: [object]}; output: one
 // JSON line {window: [receipt], disclosures: [result or "refused"]}.

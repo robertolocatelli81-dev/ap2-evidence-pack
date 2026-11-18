@@ -7,7 +7,7 @@
 // +/-(2^53-1), nesting <= 512, no lone surrogate escape, 64 MiB bound. A refused file is a receipt with valid=false.
 // Inside the SD-JWTs (1.7.2) a literal with a fraction or an exponent is that artifact's error; with --accept-integral-floats
 // one whose value is an integer in that range is read as it, and the receipt names it.
-// 1.8.0-draft (SPEC §12): the `not_before` block — closed grammar, NIST Beacon pulse pair, NB1-NB3 and the receipt member
+// 1.8.0 (SPEC §12): the `not_before` block — closed grammar, NIST Beacon pulse pair, NB1-NB3 and the receipt member
 // `not_before` as the reference; `paymentCommitment` / `checkDisclosure` exported. No TSA verification here, so NB3 never
 // closes the window (declared, as tsa_verified).
 // Usage: ap2-verify.mjs <evidence.json> [--trusted-producer-key ALG=B64]... [--require-producer] [--require-pq] [--require-anchor] [--min-anchors N] [--tsa-cert PEM] [--trust-set-complete] [--accept-integral-floats]
@@ -257,7 +257,7 @@ const T = {
 const TOP_KEYS = { evidence_format: [T.str, 1], subject: [T.str, 1], created_utc: [T.str, 1], artifacts: [T.list, 1], bindings: [T.list, 0], honest_scope: [T.str, 1],
                    evidence_digest_sha256: [T.str, 1], rfc3161_timestamp: [T.obj, 0], producer_signatures: [T.obj, 0],
                    anchors: [[(v) => isList(v) && v.length > 0, "a non-empty list"], 0],   // 1.5.0 — SPEC §3.3
-                   not_before: [T.obj, 0] };   // 1.8.0-draft — SPEC §12
+                   not_before: [T.obj, 0] };   // 1.8.0 — SPEC §12
 const ANCHOR_MECHANISMS = ["rfc3161"];   // SPEC §3.3: the mechanisms this revision defines; any other is a refusal naming it
 const ANCHOR_RFC3161_KEYS = { mechanism: [[(v) => v === "rfc3161", '"rfc3161"'], 1], tsr_b64: [T.str, 1], tsa_url: [T.str, 0], note: [T.str, 0] };
 const DIGEST_EXCLUDED = ["evidence_digest_sha256", "rfc3161_timestamp", "producer_signatures", "anchors"];   // SPEC §3 (1.5.0: + anchors)
@@ -457,7 +457,7 @@ function readEvidenceBytes(path) {
     return Buffer.concat(chunks, total);
   } finally { closeSync(fd); }
 }
-// ---- not-before block (SPEC §12, 1.8.0-draft): written again here from the SPEC and the reference's rules, line for line
+// ---- not-before block (SPEC §12, 1.8.0): written again here from the SPEC and the reference's rules, line for line
 // (ap2_evidence.parse_not_before / check_not_before, ap2_nist_beacon), node:crypto for SHA-2 only; RSA by BigInt as the
 // reference does it (pure modular exponentiation), so both verifiers decide the same pulses the same way.
 const NB_PROFILE = "ap2-evidence-pack.not-before/1";
@@ -765,7 +765,7 @@ function verifyEvidenceInner(path, opts) {
     ev.artifacts.forEach((a, i) => { checkUnknown(a, "artifacts[" + i + "]", ARTIFACT_KEYS);
       for (const [sub, keys] of [["key", KEY_KEYS], ["kb_jwt", KB_COPY_KEYS], ["verified_at_build", VAB_KEYS]]) checkUnknown(a[sub], "artifacts[" + i + "]." + sub, keys); });
     const sigs = ev.producer_signatures?.signatures; if (Array.isArray(sigs)) sigs.forEach((e, i) => checkUnknown(e, "producer_signatures.signatures[" + i + "]", ENTRY_KEYS));
-    if ("not_before" in ev) parseNotBefore(ev.not_before);   // 1.8.0-draft — SPEC §12.2: closed at every level, before any check runs
+    if ("not_before" in ev) parseNotBefore(ev.not_before);   // 1.8.0 — SPEC §12.2: closed at every level, before any check runs
   } catch (e) { return refuse(String(e.message ?? e), e instanceof UnknownMember ? "unknown_member" : e instanceof FormatUnsupported ? "format_unsupported" : "malformed"); }
   const e2 = Object.create(null); for (const k of Object.keys(ev)) if (!DIGEST_EXCLUDED.includes(k)) e2[k] = ev[k];
   const recomputed = sha256(Buffer.from(canon(e2), "utf-8")).toString("hex"); const digestOk = recomputed === ev.evidence_digest_sha256;
@@ -832,7 +832,7 @@ function verifyEvidenceInner(path, opts) {
   const states = deriveStates({ digestOk, artResults, bindingSetMatch, tsBlock: ts, rfcBlock, anchorResults, tsaRequested: Boolean(opts.tsaCert),
     producer, pinned: (opts.trusted ?? null) !== null, trustAnchorGiven: false });
   if (opts.trustSetComplete && states.producer_signature.reasons.includes("key_unresolved")) unmet.push("trust_set_complete");
-  // 1.8.0-draft — SPEC §12.3: NB1-NB3. The upper bound is a TSA-VERIFIED genTime; this verifier cannot check a TSA signature
+  // 1.8.0 — SPEC §12.3: NB1-NB3. The upper bound is a TSA-VERIFIED genTime; this verifier cannot check a TSA signature
   // (no openssl), so it never has one: NB3 is at best not_evaluated:no_verified_time_anchor here (declared, as tsa_verified)
   const nbRep = "not_before" in ev ? checkNotBefore(ev.not_before, ev, artResults, null) : null;
   return { digest_ok: digestOk, artifacts: artResults, producer_signatures: producer, pq_protected: producer.pq_protected ?? false, bindings_ok: bindingsOk, rfc3161: rfc, anchors: anchorResults, anchors_verified: anchorsVerified, provenance_classes: classes,

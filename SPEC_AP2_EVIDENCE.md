@@ -1,9 +1,9 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Copyright 2026 Roberto Locatelli -->
 
-# ap2-evidence-pack — normative format v1.0 (2026-09-05), specification revision 1.7.3 (2026-11-03)
+# ap2-evidence-pack — normative format v1.0 (2026-09-05), specification revision 1.8.0 (2026-11-18)
 
-> Revision 1.8.0-draft (2026-11-16, local, not released): §12, the `not_before` block — a NIST Beacon pulse inside the sealed
+> Revision 1.8.0 (2026-11-18): §12, the `not_before` block — a NIST Beacon pulse inside the sealed
 > content, in one object with salted commitments to the payer's and payee's IBANs (and names and details), the amount,
 > the currency, a payment id and a record salt — no personal data in clear; a lower time bound to go with the RFC 3161
 > upper one. A pack without the block is read exactly as by 1.7.3; a 1.7.3 verifier refuses a pack with it (unknown top-level key).
@@ -762,7 +762,7 @@ after JSON unescaping — `"subj\u0065ct"` IS `subject`).
 
 | Object | Keys (type) | Unknown / wrong type / missing MUST |
 |---|---|---|
-| top level | `evidence_format` (string, MUST), `subject` (string, MUST), `created_utc` (string, MUST), `artifacts` (list, MUST), `bindings` (list; absent reads as `[]`), `honest_scope` (string, MUST), `evidence_digest_sha256` (string, MUST), `rfc3161_timestamp` (object), `producer_signatures` (object), `anchors` (non-empty list, 1.5.0), `not_before` (object, 1.8.0-draft, closed at every level as §12.2 states) | refusal |
+| top level | `evidence_format` (string, MUST), `subject` (string, MUST), `created_utc` (string, MUST), `artifacts` (list, MUST), `bindings` (list; absent reads as `[]`), `honest_scope` (string, MUST), `evidence_digest_sha256` (string, MUST), `rfc3161_timestamp` (object), `producer_signatures` (object), `anchors` (non-empty list, 1.5.0), `not_before` (object, 1.8.0, closed at every level as §12.2 states) | refusal |
 | `anchors[i]` (1.5.0) | `mechanism` (string, MUST, one of the mechanisms of §3.3: `"rfc3161"`); for `rfc3161`: `tsr_b64` (string, MUST), `tsa_url` (string), `note` (string); an entry that is not an object | refusal (an unknown `mechanism` is named: `anchors[i]: mechanism "x" is not defined by this revision (SPEC §3.3)`) |
 | `rfc3161_timestamp` | `anchored` (boolean, MUST), `tsr_b64` (string; when `anchored` is true and it is ABSENT the §6.4 rule applies: `rfc3161_verified: false`, not a refusal), `tsa_url` (string), `tsa` (string, 1.0–1.3 spelling), `note` (string) | refusal |
 | `producer_signatures` | `scheme` (`"hybrid"` or `"classical-only"`, MUST), `over` (`"evidence_digest_sha256"`, MUST), `signatures` (list, MUST) | refusal |
@@ -1187,7 +1187,7 @@ the equalities of §11.4 in three places (allowed lists, date forms, the order o
 profile can say `contradicted` or `not_evaluated` where AP2 would find the terms equivalent — never `verified` where they
 are broader.
 
-## 12. Not-before block `not_before` (revision 1.8.0-draft, 2026-11-16, local; NORMATIVE when present)
+## 12. Not-before block `not_before` (revision 1.8.0, 2026-11-18; NORMATIVE when present)
 
 ### 12.1 Why, what binds the payment today, and what is ours
 Up to 1.7.3 a pack has an upper time bound only: an RFC 3161 token over the digest (§3.2, §3.3) shows the sealed content
@@ -1383,7 +1383,7 @@ after T and the disclosures, called directly in both); positive control: with th
 block (2026-11-16) it fails, 278 disagreements of 281.
 
 ### 12.6 Open
-Both verifiers read the block (1.8.0-draft, 2026-11-16): `verifiers/js/ap2-verify.mjs` checks the same closed grammar,
+Both verifiers read the block (1.8.0): `verifiers/js/ap2-verify.mjs` checks the same closed grammar,
 the same pulse pair, the same NB1-NB3 codes and receipt, and exports the same commitment encoding and disclosure check
 (`paymentCommitment`, `checkDisclosure`). One difference stays, the one the format already declares for every TSA check:
 the JS verifier cannot verify a TSA signature (no openssl), so it never has a TSA-verified genTime and its NB3 is at best
