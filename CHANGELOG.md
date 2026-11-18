@@ -30,6 +30,22 @@ before it, `Ap2EvidenceError: sd_jwt_no_separator: …`): `sd_jwt_no_separator`,
 The 84 artifacts of the shipped vectors are none of these (79 end with `~`, 5 with a KB-JWT). One test helper of this
 repository wrote `<jwt>~~` for a token without disclosures (test_ap2_evidence.py): corrected.
 
+### Found by an external review of 1.8.0 (2026-11-18), each measured on the PyPI wheel 1.8.0
+
+- **The trust anchor included the system CAs (§6 step 7).** `_verify_x5c_chain` ran `openssl verify -CAfile <anchor>`
+  without `-no-CApath -no-CAstore`, so openssl added its default store (the system CAs, `SSL_CERT_FILE`,
+  `SSL_CERT_DIR`). An ES256 artifact whose `x5c` leaf is issued by a CA "rp-ca", verified with `--trust-anchor` an
+  unrelated CA, gave `issuer_identity` `verified / ca_certified` and `self_asserted_only: false` as soon as rp-ca was in
+  the default store (`not_evaluated / chain_unresolved`, `true`, without it). Anyone holding a certificate of a public CA
+  passed as certified under the relying party's anchor. Now the anchor given is the only one, as the TSA key-identifier
+  step already did; an openssl before 3.0, which does not know `-no-CAstore`, gives `chain_verified: null`,
+  `instrument_failure`, a check not run here (§6.10, exit 74), never `chain_unresolved`. Reference only (the JavaScript
+  verifier validates no chain and never clears `self_asserted_only`). The other openssl calls were checked:
+  `ts -verify -CAfile` does not read the default store (measured with the same environment: FAILED under an unrelated
+  CA file), `cms -verify -noverify` validates no chain, `ts -query` trusts nothing. `test_ap2_x5c_anchor_only.py`
+  (3 of 6 tests fail on the previous commit; the bench's positive control: plain `openssl verify` answers OK under the
+  simulated store).
+
 ### Changed
 
 - **`sd_hash` without `cnf.jwk`** (§9.2): computed in both verifiers; a wrong one is the error above; a right one gives

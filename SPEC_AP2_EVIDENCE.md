@@ -582,7 +582,11 @@ flags: `require_producer`, `require_pq`, `require_anchor`, and `min_anchors` (1.
    cleared only when EVERY artifact's key was reconciled to an
    `x5c` chain that VALIDATES to a trust anchor the relying party supplies (`--trust-anchor`,
    reported in `chain_verified`: `true`/`false`, or `null` when no anchor was given, the verifier
-   cannot validate chains, or the check was not measurable — openssl absent). 1.6.0: a verifier that cannot validate
+   cannot validate chains, or the check was not measurable — openssl absent). That anchor and nothing
+   else (1.8.1): no default certificate store of the platform (system CAs, `SSL_CERT_FILE`, `SSL_CERT_DIR`) takes part —
+   the reference runs `openssl verify -CAfile <anchor> -no-CApath -no-CAstore`, and an openssl that does not know those
+   options (before 3.0) is a check not run here, `null` (§6.10). Up to 1.8.0 the default store was added: measured on
+   2026-11-18, a leaf of a CA in that store was `ca_certified` under an unrelated anchor. 1.6.0: a verifier that cannot validate
    chains refuses `--trust-anchor` as a usage error instead of accepting a flag that does nothing (the JS verifier). The chain is validated
    at the `genTime` of a TSA-VERIFIED RFC 3161 token when the pack carries one, and at the current
    time otherwise (1.1.0 r9: a signing certificate lives 1-3 years, so at today's clock a leaf valid

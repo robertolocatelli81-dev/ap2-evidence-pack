@@ -960,7 +960,11 @@ def _verify_x5c_chain(x5c: List[str], trust_anchor: str, at_time: Optional[str] 
             return False
         leaf_path = os.path.join(d, "leaf.pem")
         _tmp_write(leaf_path, pem(chain[0]))
-        cmd = [exe, "verify", "-CAfile", trust_anchor]
+        # 1.8.1 (SPEC §6 step 7): the anchor the relying party supplies and nothing else. Without -no-CApath -no-CAstore
+        # openssl adds its default store (the system CAs, SSL_CERT_FILE, SSL_CERT_DIR): measured on 2026-11-18 on 1.8.0,
+        # a leaf of a CA in that store was verified / ca_certified under an unrelated --trust-anchor. As the TSA
+        # key-identifier step (key_id_token_problem).
+        cmd = [exe, "verify", "-CAfile", trust_anchor, "-no-CApath", "-no-CAstore"]
         if at_time:
             import calendar
             import time as _t
@@ -973,6 +977,9 @@ def _verify_x5c_chain(x5c: List[str], trust_anchor: str, at_time: Optional[str] 
             _tmp_write(unt, b"".join(pem(c) for c in chain[1:]))
             cmd += ["-untrusted", unt]
         r = _run_openssl(cmd + [leaf_path], timeout, text=True)
+        if r.returncode != 0 and "nknown option" in (r.stderr or "") + (r.stdout or ""):   # before OpenSSL 3.0
+            raise Ap2WriteError("this openssl does not know an option of `verify` (OpenSSL 3.0 or later is needed): "
+                                + ((r.stderr or r.stdout or "").strip()[-120:]))
         ok = r.returncode == 0 and ": OK" in (r.stdout or "")
         if not ok and diag is not None and "certificate signature failure" in ((r.stdout or "") + (r.stderr or "")):
             diag["broken"] = "certificate signature failure"   # 1.6.0 (SPEC §6.9): a signature inside the chain does not verify
