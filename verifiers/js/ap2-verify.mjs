@@ -126,6 +126,9 @@ function resolveDisclosures(payload, disclosures) {
   function* walk(node, depth) {
     if (node !== null && typeof node === "object" && depth > MAX_DEPTH) throw new Refused("disclosures_too_deep: the resolved claims nest deeper than " + MAX_DEPTH + " (SPEC §6 step 2, rejected fail-closed)");
     if (node !== null && typeof node === "object" && !Array.isArray(node)) { const out = Object.create(null);
+      // 1.8.1 — SPEC §6 step 2: "..." only as an array placeholder (RFC 9901 §4.1 item 7), _sd_alg only at the payload's top level (§4.1.1)
+      if (Object.hasOwn(node, "...")) throw new Refused('sd_dots_outside_placeholder: a key "..." outside an array placeholder {"...": <digest>} (RFC 9901 §4.1 item 7, rejected fail-closed)');
+      if (Object.hasOwn(node, "_sd_alg") && depth > 1) throw new Refused("sd_alg_not_top_level: a key _sd_alg below the top level of the issuer payload (RFC 9901 §4.1.1, rejected fail-closed)");
       for (const k of Object.keys(node)) { if (k === "_sd" || k === "_sd_alg") continue; out[k] = yield [node[k], depth + 1]; }
       const sd = "_sd" in node ? node._sd : []; if (!Array.isArray(sd) || sd.some((x) => typeof x !== "string")) throw new Refused("_sd must be a list of digest strings");
       for (const dig of sd) { meet(dig); if (byDigest.has(dig)) { const arr = byDigest.get(dig); if (arr.length !== 3) throw new Refused("object disclosure must be [salt,name,value]"); if (typeof arr[1] !== "string") throw new Refused("disclosed claim name must be a string"); if (arr[1] === "_sd" || arr[1] === "...") throw new Refused("disclosed claim name is reserved (RFC 9901 §7.1 step 3.c.ii.2, rejected fail-closed)"); if (arr[1] in out) throw new Refused("disclosed claim collides"); out[arr[1]] = yield [arr[2], depth + 1]; used.add(dig); } }

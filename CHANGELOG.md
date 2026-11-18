@@ -58,9 +58,27 @@ repository wrote `<jwt>~~` for a token without disclosures (test_ap2_evidence.py
   unreachable there, as it has no TSA-verified time). `test_ap2_beacon_times.py`: 4 009 generated UTCTime and
   GeneralizedTime values (out-of-range fields, 29 February, other tags, non-ASCII digits, offsets, fractions) against an
   oracle written apart, in both verifiers; 5 of 9 tests fail on the previous commit.
+- **The reserved names as plain keys (§3.1, §6 step 2).** RFC 9901 §4.1 item 7: "The payload MUST NOT contain the
+  claims _sd or ... except for the purpose of conveying digests"; §4.1.1: `_sd_alg` "MUST NOT be used in any object
+  nested within the payload". Both verifiers kept a plain `"..."` key as an ordinary claim (`{"iss":"x","...":"hidden"}`,
+  a nested one, an array element `{"...": d, "k": 1}`) and dropped a nested plain `_sd_alg` in silence, `valid: true`
+  (measured on the PyPI wheel 1.8.0). Now, in the payload and in every disclosed value, a key `...` anywhere but as the
+  only key of an array placeholder is `sd_dots_outside_placeholder`, and a key `_sd_alg` below the payload's top level
+  is `sd_alg_not_top_level`, each that artifact's error in `build` and `verify`, reference and JavaScript. The RFC
+  addresses both to the Issuer and gives the Verifier no rejection step, so this is this format's rule (the `sd-jwt`
+  reference implementation 0.10.4 keeps the first and drops the second, read in its source). A disclosed claim NAMED
+  `_sd_alg` stays an ordinary claim, as since 1.7.0; the control of `test_ap2_sd_rules.py` that carried a plain nested
+  `_sd_alg` beside it now carries a plain claim instead. `test_ap2_sd_plain_reserved.py`: 400 generated payloads (a
+  reserved key planted once at a random depth, in the payload or inside a disclosed value, or none), library, `build`,
+  sealed packs in both verifiers; on the previous commit the four tests that expect a refusal fail.
 
 ### Changed
 
+- **`ap2-evidence --help`.** `-h` or `--help` as the only argument prints every command with its options (stdout,
+  exit 0), and no argument at all is a usage error that names the commands (exit 2); the usage line says
+  `ap2-evidence`, the installed command (it said `ap2-evidence-pack`). Up to 1.8.0 both answered "error: unexpected
+  argument" and there was no help anywhere (measured on the PyPI wheel 1.8.0). After a command, `-h`/`--help` stays a
+  usage error, as the grammar of `verify` is shared with the JavaScript verifier. `test_ap2_cli_help.py`.
 - **`sd_hash` without `cnf.jwk`** (§9.2): computed in both verifiers; a wrong one is the error above; a right one gives
   `kb_jwt.sd_hash_ok: true` with `verified: null` and the state `not_evaluated / holder_key_unknown`, as before. `build`
   does not seal `sd_hash_ok` in that branch, so a 1.8.0 verifier, which would refuse a sealed member it does not

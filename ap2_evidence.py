@@ -591,6 +591,15 @@ def resolve_disclosures(payload: Dict, disclosures: List[str], census: Optional[
             raise Ap2EvidenceError(f"disclosures_too_deep: the resolved claims nest deeper than {MAX_JSON_DEPTH} "
                                    "(SPEC §6 step 2, rejected fail-closed)")
         if isinstance(node, dict):
+            # 1.8.1 (SPEC §6 step 2): the reserved names as plain keys. RFC 9901 §4.1 item 7, "..." only to convey a
+            # digest (an array placeholder, handled in the list branch, never reaches here); §4.1.1, _sd_alg only at the
+            # top level of the payload (depth 1). Up to 1.8.0 a plain "..." was an ordinary claim, a nested _sd_alg dropped.
+            if "..." in node:
+                raise Ap2EvidenceError('sd_dots_outside_placeholder: a key "..." outside an array placeholder {"...": '
+                                       '<digest>} (RFC 9901 §4.1 item 7, rejected fail-closed)')
+            if "_sd_alg" in node and depth > 1:
+                raise Ap2EvidenceError("sd_alg_not_top_level: a key _sd_alg below the top level of the issuer payload "
+                                       "(RFC 9901 §4.1.1, rejected fail-closed)")
             out = {}
             for k, v in node.items():
                 if k in ("_sd", "_sd_alg"):
@@ -3656,7 +3665,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 def _main(argv: Optional[List[str]] = None) -> int:
-    p = _Parser(prog="ap2-evidence-pack", allow_abbrev=False, add_help=False,
+    p = _Parser(prog="ap2-evidence", allow_abbrev=False, add_help=False,   # 1.9.0: the installed command's name
                                 description="Self-contained, offline-verifiable dispute "
                                             "evidence for agentic-payment SD-JWT mandates")
     sub = p.add_subparsers(dest="cmd")
@@ -3691,6 +3700,19 @@ def _main(argv: Optional[List[str]] = None) -> int:
     rs.add_argument("--tsa-cert", help="PEM certificate (or chain) of the TSA, as for verify: without it `existed_by` is null")
     rs.add_argument("--accept-integral-floats", action="store_true", help="1.7.2 (SPEC §3.1): read a number of a token written with a fraction or an exponent whose value is an integer within +/-(2^53-1) (10.0, as the AP2 SDK writes a budget) as that integer, and say so in the result; without it such a token is refused")
     raw = list(sys.argv[1:] if argv is None else argv)
+    # 1.9.0: `ap2-evidence -h` / `--help` ALONE prints the commands and their options (stdout, exit 0); no argument at all
+    # is a usage error that names them (exit 2). Up to 1.8.0 both answered "unexpected argument" and no help existed
+    # (measured on the PyPI wheel 1.8.0, 2026-11-18). After a command, -h/--help stays a usage error: the grammar of
+    # `verify` is shared with the JavaScript verifier (verifiers/differential_oracle.py, cases cli-help and cli-h).
+    if raw in (["-h"], ["--help"]):
+        out = [p.format_help().rstrip(), "", "commands (each refuses -h; the options below are all there is):"]
+        for name, sp in (("build", b), ("stamp", st), ("verify", v), ("restriction", rs)):
+            sp.prog = "ap2-evidence " + name
+            out += ["", sp.format_help().rstrip()]
+        print("\n".join(out))
+        return 0
+    if not raw:
+        p.error("a command is needed: build, stamp, verify or restriction (ap2-evidence --help lists them)")
     # 1.1.0: one CLI grammar with the sibling verifiers — "" or a flag as a value, "--", -h/--help, a value on a boolean flag,
     # an abbreviated flag = usage (exit 2, no verdict); the file path itself must not be "" or flag-like
     if "--" in raw or any(x in ("-h", "--help") for x in raw) or any(x.split("=", 1)[0] in ("--require-producer", "--require-pq", "--require-anchor", "--trust-set-complete", "--accept-integral-floats") and "=" in x for x in raw):

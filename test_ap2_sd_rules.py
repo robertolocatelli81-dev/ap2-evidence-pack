@@ -196,10 +196,11 @@ class TestGenerativeSdRules(unittest.TestCase):
             controls.append((f"pc_top_{name}", {"iss": "w", "_sd": [ap2._disclosure_digest(d1)], "_sd_alg": "sha-256"}, [d1], {"iss": "w", name: 1}))
             d2 = _disclosure(_b64u(os.urandom(8)), name, 2); inner = _disclosure(_b64u(os.urandom(8)), "inner", {"_sd": [ap2._disclosure_digest(d2)]})
             controls.append((f"pc_nested_{name}", {"iss": "w", "_sd": [ap2._disclosure_digest(inner)], "_sd_alg": "sha-256"}, [inner, d2], {"iss": "w", "inner": {name: 2}}))
-        # a disclosed `_sd_alg` beside a plain `_sd_alg` in the same nested object: the plain one is dropped, the disclosed one
-        # kept (SPEC §6 step 2, this format's declared reading; §7.1 step 3.c.ii.3 read literally would reject the SD-JWT)
+        # a disclosed `_sd_alg` beside a plain claim in a nested object is kept (SPEC §6 step 2, this format's declared reading).
+        # 1.8.1: a PLAIN `_sd_alg` in a nested object is sd_alg_not_top_level (test_ap2_sd_plain_reserved.py); up to 1.8.0 this
+        # control carried one beside the disclosed name and expected it dropped
         d3 = _disclosure(_b64u(os.urandom(8)), "_sd_alg", 3)
-        controls.append(("pc_nested_beside_plain__sd_alg", {"iss": "w", "inner": {"_sd": [ap2._disclosure_digest(d3)], "_sd_alg": "sha-512", "k": 1}, "_sd_alg": "sha-256"}, [d3], {"iss": "w", "inner": {"k": 1, "_sd_alg": 3}}))
+        controls.append(("pc_nested_beside_plain_claim__sd_alg", {"iss": "w", "inner": {"_sd": [ap2._disclosure_digest(d3)], "k": 1}, "_sd_alg": "sha-256"}, [d3], {"iss": "w", "inner": {"k": 1, "_sd_alg": 3}}))
         for cname, payload, discs, want in controls:
             ev = O._fresh_pack(base, sk, n, '{"alg":"ES256","typ":"ap2-mandate+sd-jwt"}', json.dumps(payload), want, disclosures=discs)
             path = os.path.join(d, cname + ".json")

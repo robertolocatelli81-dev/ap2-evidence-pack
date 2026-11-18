@@ -246,8 +246,8 @@ duplicate keys, no floats, bounded integers and depth, no lone surrogate. A sign
 payload with a duplicate key (`{"amount":"1","amount":"999"}`) is refused, not read
 "last wins" by one verifier and "first wins" by another. Shapes are imposed, and a key
 present with `null` is NOT the same as an absent key: `_sd` absent or a list of strings;
-`_sd_alg` absent or exactly `"sha-256"`; an array placeholder `{"...": d}` with `d` a
-string; a disclosed claim name a string; `cnf` absent or an object, `cnf.jwk` absent or an
+`_sd_alg` absent or exactly `"sha-256"`, and only at the top level of the issuer payload; an array placeholder
+`{"...": d}` with `d` a string, and the key `...` nowhere else (1.8.1, §6 step 2); a disclosed claim name a string; `cnf` absent or an object, `cnf.jwk` absent or an
 object (an empty object is a holder key that fails to parse, not an unknown holder);
 JWK `x`/`y` exactly 32 bytes each (RFC 7518 §6.2.1); `key.provenance_class` in the §2 enum;
 `rfc3161_timestamp.anchored` a boolean; `producer_signatures.signatures[].sig_alg` a
@@ -522,10 +522,18 @@ flags: `require_producer`, `require_pq`, `require_anchor`, and `min_anchors` (1.
    matched from an `_sd` array whose claim name is `_sd` or `...`, at any level, → reject, §7.1 step 3.c.ii.2 verbatim,
    "If the claim name is _sd or ..., the SD-JWT MUST be rejected" (vector `sd_claim_name_reserved`; up to 1.6.0 both
    verifiers inserted it as an ordinary claim, measured 2026-10-28) — the name `_sd_alg` is not in that rule: this
-   format keeps a disclosure so named as an ordinary claim at every level, and drops a plain `_sd_alg` below the top
-   level, as `sd-jwt` 0.10.4 does (measured 2026-10-29) — this format's declared reading, both verifiers. §7.1 read
-   literally does not give the same result in every case: for one, where a plain `_sd_alg` is at the level of the
-   disclosure's `_sd` key, step 3.c.ii.3 rejects the SD-JWT as a collision; for an `_sd`
+   format keeps a disclosure so named as an ordinary claim at every level (this format's declared reading, both
+   verifiers); 1.8.1, the reserved names as PLAIN keys, in the payload and in every disclosed value, at any level: a key
+   `...` anywhere but as the only key of an array element whose value is a string (the placeholder of RFC 9901
+   §4.2.4.2) → `sd_dots_outside_placeholder`, and a key `_sd_alg` in any object but the payload's top level →
+   `sd_alg_not_top_level`, each that artifact's error, its name first in the message. RFC 9901 §4.1 item 7: "The
+   payload MUST NOT contain the claims _sd or ... except for the purpose of conveying digests as described in
+   Sections 4.2.4.1 and 4.2.4.2"; §4.1.1: `_sd_alg` "MUST appear at the top level of the SD-JWT payload. It MUST NOT be
+   used in any object nested within the payload" (text read on rfc-editor.org on 2026-11-18). Both are addressed to the
+   Issuer and §7.1 gives the Verifier no rejection step for them, so refusing is this format's rule. Up to 1.8.0 both
+   verifiers kept a plain `...` key as an ordinary claim and dropped a nested plain `_sd_alg` in silence, as the
+   `sd-jwt` reference implementation 0.10.4 does in `SDJWTVerifier._unpack_disclosed_claims` (read in its source on
+   2026-11-18, not run; it refuses `_sd` only in the Issuer's input). For an `_sd`
    that is not an array of digest strings and for an array placeholder whose value is not a digest
    string, §4.2.4.1 and §4.2.4.2 address the MUST to the Issuer and §7.1 gives the verifier no rejection
    step of its own — §7.1 step 3.b collects only well-formed shapes and step 3.e removes every `_sd`
