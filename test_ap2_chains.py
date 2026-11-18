@@ -8,7 +8,7 @@ Measured on 2026-11-18 on 1.8.0 (gtm reports of that day): 0 of 157 native chain
 accepted, with the message "malformed disclosure: invalid base64url segment"; the KB of a chain hop was never evaluated
 (0 of 109 split chains); 16 goodmeta/ap2-conformance vectors declared "reject" came out `valid: true`; a receipt issued
 by the AP2 SDK bound nothing. Data: spec/vectors/ap2_chains/ (README.md there: sources, licences, sha256). On the
-commit before this change (6728413) all eleven tests fail (measured with this file and the vectors copied onto an
+commit before this change (6728413) all twelve tests fail (measured with this file and the vectors copied onto an
 archive of that commit); `test_not_a_chain` only for its message (the refusal of an empty component is 1.8.1's, the
 mention of the chain form is new)."""
 import base64
@@ -396,6 +396,59 @@ class Chains(unittest.TestCase):
         for name, r in _js_many(self, manifest + [("control", out, [])]).items():
             with self.subTest(js=name):
                 self.assertEqual(r["valid"], name == "control", r["artifacts"])
+
+    def test_new_members_closed(self):
+        """The three members 1.9.0 adds are closed (SPEC §9.1): on a pack with an SDK chain and its receipt, `over` and
+        `chain_from` given every wrong type and value, removed, moved where they do not belong, and a member nobody
+        defined beside them — with the digest recomputed, so only the member is wrong. None is valid, and the two
+        verifiers give the same admission, refusal class and artifact errors' positions."""
+        _, out = self._build([{"name": "chain", "sd_jwt": _load("sdk_chainA.txt")},
+                              {"name": "receipt", "sd_jwt": _load("sdk_receiptA.jwt") + "~"}],
+                             {"chain": _load("sdk_issuer_pub.json"), "receipt": _load("sdk_mpp_pub.json")}, "closed")
+        with open(out, encoding="utf-8") as f:
+            base = json.load(f)
+        bi = next(i for i, b in enumerate(base["bindings"]) if b.get("over") == "issuer_jwt")
+        bc = next(i for i, b in enumerate(base["bindings"]) if "over" not in b)
+        wrong = [None, 1, 1.5, True, [], {}, "", "compact", "issuer_jwt ", "Issuer_JWT", ["issuer_jwt"], {"issuer_jwt": 1}]
+        muts = {}
+        for n, w in enumerate(wrong):
+            muts[f"over={n}"] = lambda ev, w=w: ev["bindings"][bi].__setitem__("over", w)
+            if w != "":
+                muts[f"chain_from={n}"] = lambda ev, w=w: ev["artifacts"][1]["key"].__setitem__("chain_from", w)
+        muts["chain_from=empty"] = lambda ev: ev["artifacts"][1]["key"].__setitem__("chain_from", "")
+        muts["over_removed"] = lambda ev: ev["bindings"][bi].pop("over")
+        muts["over_added_to_compact_binding"] = lambda ev: ev["bindings"][bc].__setitem__("over", "issuer_jwt")
+        muts["class_to_supplied_keeping_chain_from"] = lambda ev: ev["artifacts"][1]["key"].__setitem__("provenance_class", "supplied")
+        muts["class_to_supplied"] = lambda ev: (ev["artifacts"][1]["key"].__setitem__("provenance_class", "supplied"),
+                                                ev["artifacts"][1]["key"].pop("chain_from"))
+        muts["root_to_chain_cnf"] = lambda ev: (ev["artifacts"][0]["key"].__setitem__("provenance_class", "chain_cnf"),
+                                                ev["artifacts"][0]["key"].__setitem__("chain_from", "chain.1"))
+        for where, get in (("binding", lambda ev: ev["bindings"][bi]), ("key", lambda ev: ev["artifacts"][1]["key"]),
+                           ("artifact", lambda ev: ev["artifacts"][1]), ("top", lambda ev: ev)):
+            for k in ("over", "chain_from", "chain_hop", "x"):
+                if (where, k) in (("binding", "over"), ("key", "chain_from")):
+                    continue
+                muts[f"{where}+{k}"] = lambda ev, get=get, k=k: get(ev).__setitem__(k, "issuer_jwt")
+        manifest, py = [], {}
+        for name, mut in muts.items():
+            ev = copy.deepcopy(base); mut(ev); _rehash(ev)
+            p = os.path.join(self.d, "closed_%d.json" % len(manifest))
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump(ev, f)
+            r = ap2.verify_evidence(p)
+            with self.subTest(case=name):
+                # `class_to_supplied` is a consistent pack of another kind (a hop under a supplied key, as a chain split
+                # by hand): valid, with no chain_hop and no holder_binding element — the control that the others are
+                # refused for the member, not for the rehash
+                self.assertEqual(r["valid"], name == "class_to_supplied", (name, r.get("refused"), r.get("artifacts")))
+            py[name] = r; manifest.append((name, p, []))
+        self.assertEqual(py["class_to_supplied"]["states"]["holder_binding"]["state"], "not_evaluated")
+        self.assertGreater(len(manifest), 40)
+        for name, r in _js_many(self, manifest).items():
+            with self.subTest(js=name):
+                self.assertEqual((r["valid"], r["admission"], r["refusal_class"]),
+                                 (py[name]["valid"], py[name]["admission"], py[name]["refusal_class"]), (r.get("refused"), py[name].get("refused")))
+                self.assertEqual(["error" in a for a in r.get("artifacts") or []], ["error" in a for a in py[name].get("artifacts") or []])
 
     def test_legacy_1_0_pack_named(self):
         r = ap2.verify_evidence(_LEGACY)

@@ -1492,6 +1492,16 @@ class TestThirdReview(PackCase):
         for extra in ({"_sd": []}, {"_sd_alg": "sha-256"}, {"_sd": [], "_sd_alg": "sha-256"}):
             with self.subTest(extra=extra):
                 r = issue(with_ref(PAY, ap2.issuer_jwt_hash(o), extra))
+                if "_sd_alg" in extra:
+                    # 1.8.1 (SPEC §6 step 2, RFC 9901 §4.1.1): `_sd_alg` below the top level of the payload is no SD-JWT at
+                    # all, so the token never reaches the restriction rules — refused when it is resolved and at build
+                    # (up to 1.8.0 the nested key was dropped and the record was `restricts_disclosable`)
+                    with self.assertRaisesRegex(ap2.Ap2EvidenceError, "sd_alg_not_top_level"):
+                        ap2._digest_census(ap2.parse_sd_jwt(r))
+                    with self.assertRaisesRegex(ap2.Ap2EvidenceError, "sd_alg_not_top_level"):
+                        self.pack(("original", o), ("restriction", r), name="sdalg.json")
+                    self.assertFalse(os.path.exists(os.path.join(self.d, "sdalg.json")))
+                    continue
                 self.assertEqual(ap2._digest_census(ap2.parse_sd_jwt(r)), 0)   # nothing to leave out
                 e = self.run_pair(o, r)[1]
                 self.assertEqual(why(e), [("contradicted", "restricts_disclosable")])

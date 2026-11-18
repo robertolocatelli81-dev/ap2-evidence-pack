@@ -30,6 +30,30 @@ class Help(unittest.TestCase):
                          "ap2-evidence restriction", "--trust-anchor", "--tsa-cert", "--key", "--min-anchors"):
                 self.assertIn(word, p.stdout, (flag, word))
 
+    def test_help_lists_the_1_9_0_option(self):
+        self.assertIn("--require-binding", cli("--help").stdout)
+
+    def test_help_that_cannot_be_written_is_74(self):
+        """The help goes through the receipt's writer: stdout on /dev/full or closed is exit 74 (EX_IOERR), never 0 with
+        nothing written (measured on the first 1.9.0 draft, which used print(): exit 0 in both cases). A lost stderr does
+        not matter to the help: exit 0, the text on stdout."""
+        env = dict(os.environ); env.pop("PYTHONPATH", None)
+        cmd = [sys.executable, "-B", os.path.join(ROOT, "ap2_evidence.py"), "--help"]
+        if os.path.exists("/dev/full"):
+            with open("/dev/full", "wb") as full:
+                p = subprocess.run(cmd, stdout=full, stderr=subprocess.PIPE, env=env)
+            self.assertEqual(p.returncode, 74, p.stderr)
+            self.assertIn(b"help not written", p.stderr)
+            with open("/dev/full", "wb") as full:
+                p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=full, env=env)
+            self.assertEqual(p.returncode, 0)
+            self.assertIn(b"usage: ap2-evidence", p.stdout)
+        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, preexec_fn=lambda: os.close(1))
+        self.assertEqual(p.returncode, 74, p.stderr)
+        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, preexec_fn=lambda: os.close(2))
+        self.assertEqual(p.returncode, 0)
+        self.assertIn(b"usage: ap2-evidence", p.stdout)
+
     def test_no_argument_names_the_commands(self):
         p = cli()
         self.assertEqual(p.returncode, 2)

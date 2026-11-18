@@ -46,6 +46,11 @@ a pack without them reads as before. The work started as 1.8.1; the entries belo
   `missing_reference` are not valid; `missing_payment_id` and `error_without_error_code` stay valid (receipt contents this
   format does not read, declared). A chain mixing two mandates (the SDK refuses it) is refused at build (§2.1).
 - **A plain JWS** (an AP2 receipt) enters as `<jwt>~`; `sd_jwt_no_separator` now says so.
+- **Benches.** `test_ap2_chains.py` (12 tests; on an archive of the commit before, with the vectors copied, all 12
+  fail). The differential oracle gains the chain cases — packs built from the SDK and goodmeta vectors, the policy met
+  and unmet, the three new members given wrong values, removed and moved, ten CLI forms of `--require-binding` — and
+  compares each artifact's `chain_hop` and the policy's missing pairs: 569 cases, 0 disagreements, 12 declared (Node
+  24.19.0); with the JavaScript check of `chain_from` switched off it reports 1.
 
 ### TSA signer named by key identifier (SPEC §3.2)
 
@@ -135,7 +140,9 @@ repository wrote `<jwt>~~` for a token without disclosures (test_ap2_evidence.py
   `_sd_alg` stays an ordinary claim, as since 1.7.0; the control of `test_ap2_sd_rules.py` that carried a plain nested
   `_sd_alg` beside it now carries a plain claim instead. `test_ap2_sd_plain_reserved.py`: 400 generated payloads (a
   reserved key planted once at a random depth, in the payload or inside a disclosed value, or none), library, `build`,
-  sealed packs in both verifiers; on the previous commit the four tests that expect a refusal fail.
+  sealed packs in both verifiers; on the previous commit the four tests that expect a refusal fail. A restriction
+  record (§11) whose reference constraint carries a `_sd_alg` key was `restricts_disclosable`; such a token is now
+  refused before that rule (`test_ap2_restriction.py`, SPEC §11.1 and §11.3 say so).
 
 ### Changed
 
@@ -143,7 +150,10 @@ repository wrote `<jwt>~~` for a token without disclosures (test_ap2_evidence.py
   exit 0), and no argument at all is a usage error that names the commands (exit 2); the usage line says
   `ap2-evidence`, the installed command (it said `ap2-evidence-pack`). Up to 1.8.0 both answered "error: unexpected
   argument" and there was no help anywhere (measured on the PyPI wheel 1.8.0). After a command, `-h`/`--help` stays a
-  usage error, as the grammar of `verify` is shared with the JavaScript verifier. `test_ap2_cli_help.py`.
+  usage error, as the grammar of `verify` is shared with the JavaScript verifier. `test_ap2_cli_help.py`. A help that cannot be written
+  (stdout on `/dev/full`, or closed) is exit 74 with "help not written" on stderr, through the receipt's writer; the first
+  draft of this entry used `print()` and exited 0 there (`test_ap2_cli_help.py`; `test_receipt_not_written.py` now asks
+  the usage error of `verify -h`, since `-h` alone is no longer one).
 - **`sd_hash` without `cnf.jwk`** (§9.2): computed in both verifiers; a wrong one is the error above; a right one gives
   `kb_jwt.sd_hash_ok: true` with `verified: null` and the state `not_evaluated / holder_key_unknown`, as before. `build`
   does not seal `sd_hash_ok` in that branch, so a 1.8.0 verifier, which would refuse a sealed member it does not

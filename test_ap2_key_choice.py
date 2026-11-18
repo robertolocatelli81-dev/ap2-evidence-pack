@@ -384,7 +384,10 @@ class KeyChoiceVerify(unittest.TestCase):
         # valid where the reference said error, measured 2026-11-03 on 1.7.2 for x5c_header and on the 1.7.3 draft for every class)
         X = dict(X5C, bad=["not base64!"], trail=[base64.b64encode(base64.b64decode(LEAF_S) + b"\x00").decode()]); J = JWK
         cases, n = [], 0
-        for pc, x5c, jwk, urls in itertools.product(sorted(ap2.PROVENANCE_CLASSES), X, J, URLS):
+        # 1.9.0: chain_cnf is not a class of one artifact alone (its key is the cnf.jwk of another artifact of the pack, named
+        # by chain_from: SPEC §2.1, test_ap2_chains.py); the set is pinned so that a class added later must be placed here or there
+        self.assertEqual(sorted(ap2.PROVENANCE_CLASSES), ["chain_cnf", "jwk_header", "jwks_fetched", "supplied", "x5c_header"])
+        for pc, x5c, jwk, urls in itertools.product(sorted(ap2.PROVENANCE_CLASSES - {"chain_cnf"}), X, J, URLS):
             h = {"alg": "ES256", "typ": "example+sd-jwt"}
             if X[x5c] is not None:
                 h["x5c"] = None if X[x5c] == "NULL" else X[x5c]

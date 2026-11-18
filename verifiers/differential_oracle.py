@@ -64,7 +64,8 @@ def _forged_tsr(digest, extra_tst=b""):
 # declaration must be updated with them (the run then reports the mismatch instead of silently passing).
 # the cases that must PASS: they prove the bench can tell green from red (never hostile files)
 POSITIVE_CONTROLS = frozenset({"non-ascii-subject-rehashed", "kb-no-cnf-sd-hash-right", "fresh-pack-control-valid", "must-created_utc-ok", "file-exactly-at-the-bound",
-                               "nb-valid"})   # 1.8.0: the not_before pack built by the reference
+                               "nb-valid",   # 1.8.0: the not_before pack built by the reference
+                               "chain-valid", "chain-require-binding-met", "chain-3hop-valid"})   # 1.9.0: AP2 chains built by the reference
 MAX_EVIDENCE_BYTES = 64 << 20
 # 25/09/2026 — what a verifier must refuse BEFORE reading it, with a DECLARED reason that both must give: agreement alone is
 # not enough (a FIFO blocked both verifiers and a symlink to /dev/zero exhausted memory in both: they "agreed").
@@ -216,6 +217,13 @@ def _sdjwt_error(text):
     return m.group(1) if m else "error"
 
 
+def _chain_error(text):
+    """1.9.0 — SPEC §2.1: the name of a chain error (the token before the first ':'), or "other"."""
+    head = text.split(":", 1)[0] if isinstance(text, str) else ""
+    return head if head.startswith("chain_") else ("chain_from" if isinstance(text, str) and "chain_from" in text else
+                                                    "chain_cnf_key" if isinstance(text, str) and "provenance_class chain_cnf" in text else "other")
+
+
 def run(cmd, path, flags):
     out = None
     try:
@@ -236,7 +244,12 @@ def run(cmd, path, flags):
                # 1.8.1 — SPEC §6 step 2, §9.2: each artifact's KB-JWT receipt (sd_hash_ok without cnf.jwk included), or the
                # name of its SD-JWT grammar error (RFC 9901 §4), or that it is another error
                tuple(_sdjwt_error(a["error"]) if "error" in a else json.dumps(a.get("kb_jwt"), sort_keys=True)
-                     for a in (r.get("artifacts") or [])))
+                     for a in (r.get("artifacts") or [])),
+               # 1.9.0 — SPEC §2.1, §6.9: each artifact's chain_hop (binding, terminal, from) or the name of its chain error,
+               # and the pairs a require_binding policy did not find
+               tuple(_chain_error(a["error"]) if "error" in a else json.dumps(a.get("chain_hop"), sort_keys=True)
+                     for a in (r.get("artifacts") or [])),
+               json.dumps((r.get("policy") or {}).get("require_binding_missing")))
         return (r.get("valid"), r.get("digest_ok"), r.get("bindings_ok"), prod.get("present"), prod.get("ok"), prod.get("trusted"),
                 r.get("pq_protected"), ts.get("claimed"), ts.get("verified"), ts.get("granted"), ts.get("imprint_ok"), ts.get("gen_time"),
                 r.get("policy_ok"), r.get("self_asserted_only"), r.get("chain_verified"), tuple(r.get("provenance_classes") or ()),
@@ -522,6 +535,7 @@ def build_cases(d):
     for nm, size in (("file-one-byte-over-the-bound", MAX_EVIDENCE_BYTES + 1), ("file-exactly-at-the-bound", MAX_EVIDENCE_BYTES)):
         raw = base_text.encode("utf-8"); cases[nm] = (w(nm, raw + b" " * (size - len(raw))), [])
     cases.update(_nb_cases(d, w))   # 1.8.0 — SPEC §12
+    cases.update(_chain_cases(d, w))   # 1.9.0 — SPEC §2.1, §4, §6.9
     return cases
 
 
@@ -670,6 +684,69 @@ def _nb_pack(d, names=True, claims=None, tag="", amount_claim="payment_amount", 
     with open(out, "w", encoding="utf-8") as fh:
         json.dump(ev, fh)
     return out, ev
+
+
+# ── 1.9.0 — SPEC §2.1, §4, §6.9: AP2 chains in their native form, built by the reference of THIS tree from the vectors in
+# spec/vectors/ap2_chains (a chain and a receipt emitted with the AP2 SDK; goodmeta/ap2-conformance, Apache-2.0), then the
+# policy flag met and unmet and the three new members (`chain_cnf`, `chain_from`, `over`) given wrong values, removed and
+# moved, each with the digest recomputed.
+CHAIN_VDIR = os.path.join(ROOT, "spec", "vectors", "ap2_chains")
+
+
+def _chain_cases(d, w):
+    import ap2_evidence as ap2
+    def rd(name):
+        with open(os.path.join(CHAIN_VDIR, name), encoding="utf-8") as fh:
+            return fh.read().strip()
+    keys = {"chain": json.loads(rd("sdk_issuer_pub.json")), "receipt": json.loads(rd("sdk_mpp_pub.json"))}
+    cases = {}
+    packs = {}
+    for tag, chain in (("a", "sdk_chainA.txt"), ("b", "sdk_chainB.txt")):
+        packs[tag] = os.path.join(d, "chain_%s.json" % tag)
+        ap2.build_evidence([{"name": "chain", "sd_jwt": rd(chain)}, {"name": "receipt", "sd_jwt": rd("sdk_receiptA.jwt") + "~"}], packs[tag], keys=keys)
+    cases["chain-valid"] = (packs["a"], [])
+    cases["chain-require-binding-met"] = (packs["a"], ["--require-binding", "receipt->chain.1"])
+    cases["chain-require-binding-two-met"] = (packs["a"], ["--require-binding", "receipt->chain.1", "--require-binding", "chain.1->chain.0"])
+    cases["chain-require-binding-reversed"] = (packs["a"], ["--require-binding", "chain.1->receipt"])
+    cases["chain-require-binding-to-root"] = (packs["a"], ["--require-binding", "receipt->chain.0"])
+    cases["chain-require-binding-no-such-artifact"] = (packs["a"], ["--require-binding", "receipt->chain"])
+    cases["chain-require-binding-one-of-two-unmet"] = (packs["a"], ["--require-binding", "receipt->chain.1", "--require-binding", "chain.0->chain.1"])
+    cases["chain-receipt-of-another-mandate"] = (packs["b"], [])
+    cases["chain-receipt-of-another-mandate-required"] = (packs["b"], ["--require-binding", "receipt->chain.1"])
+    gm = {v["name"]: v for v in json.loads(rd("goodmeta_chain.json"))}
+    for nm, vec in (("chain-3hop-valid", "valid_payment_3hop"), ("chain-3hop-issuer-jwt-hash", "valid_payment_3hop_issuer_jwt_hash"),
+                    ("chain-aud-mismatch-declared-valid", "aud_mismatch"), ("chain-expired-declared-valid", "expired")):
+        p = os.path.join(d, nm + ".json")
+        ap2.build_evidence([{"name": "chain", "sd_jwt": gm[vec]["chain"]}], p, keys={"chain": {k: gm[vec]["rootKey"][k] for k in ("kty", "crv", "x", "y")}})
+        cases[nm] = (p, [])
+    base = _load(packs["a"])
+    bi = next(i for i, b in enumerate(base["bindings"]) if b.get("over") == "issuer_jwt")
+    bc = next(i for i, b in enumerate(base["bindings"]) if "over" not in b)
+    def mut(name, f, flags=()):
+        e = copy.deepcopy(base); f(e); cases["chain-" + name] = (w("chain_" + name, json.dumps(rehash(e))), list(flags))
+    key1 = lambda e: e["artifacts"][1]["key"]  # noqa: E731
+    for n, wv in enumerate((None, 1, True, [], {}, "", "compact", "issuer_jwt ", "Issuer_JWT", ["issuer_jwt"])):
+        mut("over-wrong-%d" % n, lambda e, wv=wv: e["bindings"][bi].__setitem__("over", wv))
+        mut("chain-from-wrong-%d" % n, lambda e, wv=wv: key1(e).__setitem__("chain_from", wv))
+    mut("over-removed", lambda e: e["bindings"][bi].pop("over"))
+    mut("over-removed-required", lambda e: e["bindings"][bi].pop("over"), ["--require-binding", "receipt->chain.1"])
+    mut("over-added-to-compact-binding", lambda e: e["bindings"][bc].__setitem__("over", "issuer_jwt"))
+    mut("binding-removed-required", lambda e: e["bindings"].pop(bi), ["--require-binding", "receipt->chain.1"])
+    mut("from-nothing", lambda e: key1(e).__setitem__("chain_from", "nope"))
+    mut("from-itself", lambda e: key1(e).__setitem__("chain_from", "chain.1"))
+    mut("from-the-receipt", lambda e: key1(e).__setitem__("chain_from", "receipt"))
+    mut("from-removed", lambda e: key1(e).pop("chain_from"))
+    mut("class-supplied-keeping-from", lambda e: key1(e).__setitem__("provenance_class", "supplied"))
+    mut("class-supplied-no-from", lambda e: (key1(e).__setitem__("provenance_class", "supplied"), key1(e).pop("chain_from")))   # a hop under a supplied key: valid, no chain_hop
+    mut("root-as-chain-cnf", lambda e: (e["artifacts"][0]["key"].__setitem__("provenance_class", "chain_cnf"), e["artifacts"][0]["key"].__setitem__("chain_from", "chain.1")))
+    mut("key-not-the-cnf", lambda e: key1(e).__setitem__("jwk", e["artifacts"][0]["key"]["jwk"]))
+    mut("hops-swapped", lambda e: e["artifacts"].insert(0, e["artifacts"].pop(1)))
+    mut("root-tampered", lambda e: e["artifacts"][0].__setitem__("sd_jwt_compact", e["artifacts"][0]["sd_jwt_compact"].replace(".", ".e", 1)))   # the hop after it names an artifact that did not verify
+    for where, get in (("binding", lambda e: e["bindings"][bi]), ("key", key1), ("artifact", lambda e: e["artifacts"][1]), ("top", lambda e: e)):
+        for k in ("over", "chain_from", "chain_hop"):
+            if (where, k) not in (("binding", "over"), ("key", "chain_from")):
+                mut("unknown-%s-in-%s" % (k, where), lambda e, get=get, k=k: get(e).__setitem__(k, "issuer_jwt"))
+    return cases
 
 
 def _nb_cases(d, w):
@@ -854,7 +931,13 @@ CLI = {"cli-no-path": [], "cli-unknown-flag": ["V", "--no-such"], "cli-two-posit
        "cli-key-flag-as-value": ["V", "--trusted-producer-key", "--require-pq"], "cli-key-no-alg": ["V", "--trusted-producer-key", "abc"], "cli-tsa-cert-empty": ["V", "--tsa-cert", ""], "cli-repeated-key-empty-first": ["V", "--trusted-producer-key", "", "--trusted-producer-key", "ed25519=AA=="],
        "cli-eq-form-verdict": ["V", "--trusted-producer-key=ed25519=AA=="], "cli-bare-no-subcommand": ["BARE"],
        "cli-trust-anchor-empty": ["V", "--trust-anchor", ""], "cli-trust-anchor-eq-empty": ["V", "--trust-anchor="],   # r9: the flag added in r8 was outside the reference's grammar
-       "cli-trust-anchor-flag-value": ["V", "--trust-anchor", "--require-pq"]}   # r3: no "verify" prefix at all
+       "cli-trust-anchor-flag-value": ["V", "--trust-anchor", "--require-pq"],   # r3: no "verify" prefix at all
+       # 1.9.0 — SPEC §6.9: --require-binding IN->TO, both names non-empty, one "->"
+       "cli-require-binding-no-arrow": ["V", "--require-binding", "a"], "cli-require-binding-no-in": ["V", "--require-binding", "->b"],
+       "cli-require-binding-no-to": ["V", "--require-binding", "a->"], "cli-require-binding-two-arrows": ["V", "--require-binding", "a->b->c"],
+       "cli-require-binding-empty": ["V", "--require-binding", ""], "cli-require-binding-missing-value": ["V", "--require-binding"],
+       "cli-require-binding-flag-as-value": ["V", "--require-binding", "--require-pq"], "cli-require-binding-eq-empty": ["V", "--require-binding="],
+       "cli-require-binding-unmet-verdict": ["V", "--require-binding", "a->b"], "cli-require-binding-eq-form-verdict": ["V", "--require-binding=a->b"]}
 
 
 def main():

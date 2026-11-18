@@ -431,7 +431,8 @@ class TestStderrLost(unittest.TestCase):
         shutil.rmtree(cls.d, ignore_errors=True)
 
     def test_usage_and_refusal_with_stderr_lost_are_74_and_stdout_stays_empty(self):
-        cases = (["verify"], ["verify", "--bogus", "x"], ["-h"], [],
+        # 1.9.0: `-h` alone is the help, on stdout (test_ap2_cli_help.py); after a command it is still a usage error
+        cases = (["verify"], ["verify", "--bogus", "x"], ["verify", "-h"], [],
                  ["build", os.path.join(self.d, "r.json"), "checkout=not_sdjwt.txt", "payment=payment.sdjwt"],
                  ["stamp", self.bad, "--tsa", "http://127.0.0.1:9/"])
         for emode in ("full", "closed"):

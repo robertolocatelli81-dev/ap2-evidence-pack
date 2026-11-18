@@ -3923,7 +3923,10 @@ def _main(argv: Optional[List[str]] = None) -> int:
         for name, sp in (("build", b), ("stamp", st), ("verify", v), ("restriction", rs)):
             sp.prog = "ap2-evidence " + name
             out += ["", sp.format_help().rstrip()]
-        print("\n".join(out))
+        why = _emit("\n".join(out))   # 1.9.0: through the receipt's writer — print() on /dev/full or a closed stdout exited 0 with no help written
+        if why is not None:
+            _say(f"help not written: {why}\n")
+            return EX_IOERR
         return 0
     if not raw:
         p.error("a command is needed: build, stamp, verify or restriction (ap2-evidence --help lists them)")

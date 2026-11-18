@@ -11,7 +11,10 @@
 > pack built by 1.0.x is refused by name. §3.1, a non-integer number stays outside this format, stated against RFC 7519
 > §2, and is named as such with or without `accept_integral_floats`. §9.1, the three new members. §10, the mapping
 > follows draft-xg-payment-dispute-profile-02. A 1.8.x verifier refuses a pack that carries `chain_cnf`, `chain_from` or
-> `over` (unknown class or member); a pack without them is read as by 1.8.1. §5, §8, §11 and §12 are unchanged.
+> `over` (unknown class or member); a pack without them is read as by 1.8.1. §6 step 2 (written as 1.8.1, after the
+> note below): the reserved names as plain keys — `...` outside an array placeholder, `_sd_alg` below the top level of
+> the payload — are that artifact's error (RFC 9901 §4.1 item 7, §4.1.1); §11 says what that changed there. §5, §8
+> and §12 are unchanged.
 >
 > Revision 1.8.1 (2026-11-18): §6 step 2, the grammar of `sd_jwt_compact` is closed (RFC 9901 §4, Proposed Standard,
 > November 2025, no errata listed on 2026-11-18): no `~` at all (`sd_jwt_no_separator`), an empty component before the
@@ -1162,7 +1165,8 @@ original's Issuer-signed JWT)), no padding
 
 — the original O being another artifact of the same pack. The constraint has exactly these two keys, and it is a plain
 element of the list in the token as signed: not an array-element disclosure, no selectively disclosable key inside it, no
-`_sd` / `_sd_alg` key inside it (the signed element IS the resolved constraint). `constraints` itself MAY be a property
+`_sd` key inside it (the signed element IS the resolved constraint; a `_sd_alg` key inside it makes the token no
+SD-JWT since 1.8.1, §6 step 2, `sd_alg_not_top_level`, so it never reaches this rule). `constraints` itself MAY be a property
 disclosure: a mandate without it is no typed mandate (`constraints` is required in `open_payment_mandate.json` /
 `open_checkout_mandate.json`; measured 2026-10-28 with the SDK at `e1ea56d`: the token with that disclosure left out is
 refused at `constraints`). In the `delegate_payload` form, `delegate_payload` MUST be a plain key of the payload: as a
@@ -1271,8 +1275,9 @@ the complete receipt on stdout, one line `check not run here:` on stderr; or the
    `restricts_misplaced`; not exactly one constraint of the type of §11.1, a key other than `type` and `issuer_jwt_hash`
    in it, or `issuer_jwt_hash` not a string that decodes, as strict base64url (§3.1: alphabet only, no padding, canonical
    trailing bits), to 32 bytes, `restricts_malformed`; the constraint not a plain element of the signed `constraints`
-   list (an array-element disclosure, a disclosure or an `_sd` / `_sd_alg` key inside it, or `delegate_payload` itself a
-   property disclosure: §11.1), `restricts_disclosable`.
+   list (an array-element disclosure, a disclosure or an `_sd` key inside it, or `delegate_payload` itself a
+   property disclosure: §11.1), `restricts_disclosable` (up to 1.8.0 also a `_sd_alg` key inside it; since 1.8.1 such a
+   token is refused before, §6 step 2).
 3. An artifact of the pack has an issuer JWT whose hash (§11.1) equals it — else `not_evaluated` `original_not_in_pack`.
    Several artifacts with that same issuer JWT are one signed mandate presented with different disclosures: the one with
    the fewest undisclosed digests (step 5), then the first in pack order, is O; the others are listed in `same_issuer_jwt`.

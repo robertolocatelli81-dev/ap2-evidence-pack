@@ -155,12 +155,25 @@ Or as a library: `build_evidence(...)` / `verify_evidence(...)`.
 
 ## AP2 chains and receipts (1.9.0, SPEC §2.1, §4, §6.9)
 
+From a clone, on a chain and a receipt the AP2 SDK emitted (`spec/vectors/ap2_chains/`, sources and sha256 in its
+README; with the package installed the command is `ap2-evidence`, same arguments, and `ap2-evidence --help` lists them):
+
 ```bash
-ap2-evidence build pack.json chain=chain.txt receipt=receipt.sdjwt --key chain=issuer_pub.json --key receipt=psp_pub.json
-ap2-evidence verify pack.json --require-binding 'receipt->chain.1'
+V=spec/vectors/ap2_chains
+printf '%s~' "$(cat $V/sdk_receiptA.jwt)" > receipt.sdjwt          # a receipt is a plain JWS: it enters as <jwt>~
+python3 ap2_evidence.py build pack.json chain=$V/sdk_chainA.txt receipt=receipt.sdjwt \
+        --key chain=$V/sdk_issuer_pub.json --key receipt=$V/sdk_mpp_pub.json
+python3 ap2_evidence.py verify pack.json --require-binding 'receipt->chain.1'    # exit 0
 ```
 
-`chain.txt` is an AP2 presentation `<open>~~<closed>~` as the AP2 SDK writes it; `build` splits it into `chain.0`,
+Measured on 2026-11-18 (Python 3.11): `build` answers `"artifacts": 3, "ap2_chains": {"chain": ["chain.0", "chain.1"]},
+"bindings": 2`; `verify` exits 0 with `valid: true`, `holder_binding: verified`, `chain.1` of class `chain_cnf` with
+`chain_hop: {"binding": "sd_hash", "terminal": true, "from": "chain.0"}`. The same receipt beside another mandate's
+chain (`chain=$V/sdk_chainB.txt`) builds, and `verify --require-binding 'receipt->chain.1'` exits 1 with
+`policy.unmet: ["require_binding"]`; the open mandate of one chain followed by the closed mandate of the other
+(`sdk_chain_mixed.txt`) is refused at `build`: `chain_binding_mismatch: sd_hash is not the hash of the previous hop`.
+
+The chain file is an AP2 presentation `<open>~~<closed>~` as the AP2 SDK writes it; `build` splits it into `chain.0`,
 `chain.1`, … and lists them (`ap2_chains`). The root takes the key you name; every later hop is verified with the previous
 hop's `cnf.jwk` (provenance class `chain_cnf`, reconciled again offline by both verifiers) and must be bound to it by
 `sd_hash` or `issuer_jwt_hash`, with the hop `typ` and `cnf` rules of the AP2 SDK; such a hop counts in `holder_binding`.
