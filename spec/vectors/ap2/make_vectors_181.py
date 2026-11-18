@@ -7,6 +7,7 @@
   sd_jwt_no_separator        the issuer JWT alone, no '~'                       -> REJECT (sd_jwt_no_separator)
   sd_jwt_empty_component     <jwt>~~<d1>~<d2>~, an empty component              -> REJECT (sd_jwt_empty_component)
   sd_jwt_no_trailing_tilde   <jwt>~<d1>~<d2>, the trailing '~' omitted          -> REJECT (sd_jwt_final_component_not_kb_jwt)
+  holder_sd_hash_mismatch_no_key  a KB-JWT, no cnf.jwk, sd_hash of another presentation -> REJECT (sd_hash_mismatch)
 
 Assembled from parts (`_artifact`, `_pack`), not through `build_evidence`, which refuses them at build. Their
 `resolved_claims` and `kb_jwt.present` record what the 1.8.0 reader produced: the first two `valid: true` under 1.8.0 in
@@ -16,6 +17,7 @@ v1.8.0. The error text is not in the normative block; the `states` block is the 
 
   python3 make_vectors_181.py       write the three vectors (fresh keys: rebuild only deliberately)
 """
+import hashlib
 import json
 import os
 import sys
@@ -53,6 +55,17 @@ def main() -> int:
          "error only as \"kb-jwt must have 3 dot-separated segments\". 1.8.1 (SPEC §6 step 2): that artifact's error, "
          "sd_jwt_final_component_not_kb_jwt, before anything is resolved."),
     ]
+    hsk, _ = cs._signer()   # the holder's key: the issuer payload names none (no cnf.jwk)
+    pres = jwt + "~" + d1 + "~"
+    kb = cs._sign_jwt(hsk, {"alg": "ES256", "typ": "kb+jwt"},
+                      {"iat": 1760054400, "aud": "merchant-books", "nonce": "n-7f3a",
+                       "sd_hash": cs._b64u(hashlib.sha256(b"another presentation~").digest())})
+    rows.append(("holder_sd_hash_mismatch_no_key", pres + kb, dict(open_claims, max_amount="150.00 EUR"), True,
+                 "A KB-JWT whose sd_hash is the hash of another presentation, and no cnf.jwk in the issuer payload. RFC 9901 "
+                 "§7.3 step 5.g asks the Verifier to check sd_hash, which needs no key (§4.3.1): the KB-JWT is not bound to "
+                 "this presentation. Measured 2026-11-18 on v1.8.0: both verifiers valid: true, holder_binding "
+                 "not_evaluated/holder_key_unknown, the same receipt as with the right sd_hash. 1.8.1 (SPEC §9.2): that "
+                 "artifact's error, sd_hash_mismatch."))
     for name, compact, resolved, kb_present, desc in rows:
         exp = cs._expected(name, desc, {}, cs.ARTIFACT_ERROR)
         exp["states"] = STATES

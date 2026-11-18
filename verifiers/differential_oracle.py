@@ -212,7 +212,7 @@ def _refused_key(text):
 def _sdjwt_error(text):
     """1.8.1: the name an SD-JWT grammar refusal carries first (SPEC §6 step 2), the same in both verifiers; "error" otherwise"""
     import re
-    m = re.match(r"(?:Ap2EvidenceError: )?(sd_jwt_[a-z_]+):", str(text))
+    m = re.match(r"(?:Ap2EvidenceError: )?(sd_jwt_[a-z_]+|sd_hash_mismatch):", str(text))
     return m.group(1) if m else "error"
 
 
@@ -313,7 +313,7 @@ def build_cases(d):
                    ("sdjwt-final-two-segments", c + "a.b"), ("sdjwt-final-four-segments", c + "a.b.c.d")):
         e = copy.deepcopy(base); e["artifacts"][binder]["sd_jwt_compact"] = cc; cases[nm] = (w(nm, json.dumps(rehash(e))), [])
     # 1.8.1 — SPEC §9.2: a KB-JWT without cnf.jwk whose sd_hash commits to another presentation (its signature is not
-    # checked without the key, so the payload is changed in place); both verifiers must report sd_hash_ok false, valid
+    # checked without the key, so the payload is changed in place); both verifiers: that artifact's error, sd_hash_mismatch
     hk = _load(os.path.join(vdir, "holder_key_unknown.json")); hc = hk["artifacts"][0]["sd_jwt_compact"]
     pres, kbj = hc.rsplit("~", 1); kh, kp, ks = kbj.split(".")
     kpay = json.loads(base64.urlsafe_b64decode(kp + "=" * (-len(kp) % 4)))

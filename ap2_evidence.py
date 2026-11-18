@@ -1177,6 +1177,9 @@ def verify_kb_jwt(parsed: Dict, resolved_claims: Dict) -> Dict:
     presentation = parsed["compact"].rsplit("~", 1)[0] + "~"
     sd_hash_ok = payload.get("sd_hash") == _sha256_b64url(presentation.encode("ascii"))   # RFC 9901 §4.3.1: no key needed
     if "jwk" not in cnf:   # 1.8.1 (SPEC §9.2): sd_hash checked here too; `verified` stays null, the signature is not checked
+        if not sd_hash_ok:   # RFC 9901 §7.3 step 5.g: the KB-JWT is not bound to this presentation, whatever the key
+            raise Ap2EvidenceError("sd_hash_mismatch: the KB-JWT sd_hash is not the hash of this presentation "
+                                   "(RFC 9901 §4.3.1, §7.3 step 5.g; checked without cnf.jwk, SPEC §9.2)")
         return {"present": True, "verified": None, "sd_hash_ok": sd_hash_ok, "claims_recorded_not_validated": recorded,
                 "note": "no cnf.jwk in issuer payload — holder key unknown (declared)", "_ignored": ignored}
     jwk = cnf["jwk"]
@@ -1428,6 +1431,65 @@ def _ski_parts(token):
     return si, tst, certs
 
 
+def tsa_signer_certificate_absent(der, pinned_pem=None):
+    """SPEC §3.2 (1.8.1): True only when every certificate the check looks in was read and none is the one the
+    SignerInfo's `sid` names (RFC 5652 §5.3): issuerAndSerialNumber, the issuer compared as X509_NAME_cmp and the serial
+    as an integer; subjectKeyIdentifier, against the certificate's subjectKeyIdentifier extension (as OpenSSL looks it up).
+    It looks in the token's certificates, and for a subjectKeyIdentifier signer also in `pinned_pem` (the --tsa-cert file,
+    which `openssl cms -verify -certfile` searches; `openssl ts -verify -CAfile` does not search the CA file for the
+    signer). Anything not read answers False: the absence is never presumed (the check then runs as before)."""
+    import base64
+    import re
+    try:
+        token = _ski_token(der)
+        ci = _ski_items(_ski_one(token, "ContentInfo", 0x30), "ContentInfo")
+        sd = _ski_items(_ski_one(ci[1][1], "SignedData", 0x30), "SignedData")
+        sis = _ski_items(sd[-1][1], "signerInfos")
+        if len(sis) != 1 or sis[0][0] != 0x30:
+            return False
+        sid = _ski_items(sis[0][1], "SignerInfo")[1]
+        certs = []
+        for tag, val in sd[3:-1]:
+            if tag == 0xA0:
+                for t, v in _ski_items(val, "certificates"):
+                    if t != 0x30:
+                        return False
+                    certs.append(_ski_tlv(t, v))
+        if sid[0] == 0x80 and pinned_pem:
+            blocks = re.findall(rb"-----BEGIN CERTIFICATE-----([A-Za-z0-9+/=\s]+?)-----END CERTIFICATE-----", pinned_pem)
+            if pinned_pem.count(b"-----BEGIN") != len(blocks):
+                return False
+            certs += [base64.b64decode(b"".join(b.split())) for b in blocks]
+        if sid[0] == 0x30:
+            ias = _ski_items(sid[1], "issuerAndSerialNumber")
+            if len(ias) != 2 or ias[0][0] != 0x30 or ias[1][0] != 0x02:
+                return False
+            issuer, serial = _ski_tlv(0x30, ias[0][1]), int.from_bytes(ias[1][1], "big", signed=True)
+        elif sid[0] != 0x80:
+            return False
+        for c in certs:
+            tbs = _ski_items(_ski_items(_ski_one(c, "certificate", 0x30), "certificate")[0][1], "tbsCertificate")
+            k = 1 if tbs[0][0] == 0xA0 else 0
+            if tbs[k][0] != 0x02 or tbs[k + 2][0] != 0x30:
+                return False
+            if sid[0] == 0x30:
+                if int.from_bytes(tbs[k][1], "big", signed=True) == serial and _ski_names_equal(_ski_tlv(0x30, tbs[k + 2][1]), issuer):
+                    return False
+                continue
+            for t, v in tbs[k + 6:]:
+                if t != 0xA3:
+                    continue
+                for et, ev in _ski_items(_ski_one(v, "extensions", 0x30), "extensions"):
+                    e = _ski_items(ev, "Extension") if et == 0x30 else []
+                    if not e or e[0][0] != 0x06:
+                        return False
+                    if _ski_oid(e[0][1]) == "2.5.29.14" and e[-1][0] == 0x04 and _ski_one(e[-1][1], "SubjectKeyIdentifier", 0x04) == sid[1]:
+                        return False
+        return True
+    except (ValueError, IndexError):
+        return False
+
+
 def signer_named_by_key_id(der):
     """True when the token's SignerInfo names its signer by [0] subjectKeyIdentifier (False when unreadable)"""
     try:
@@ -1653,6 +1715,18 @@ def _verify_rfc3161(tsr_b64: str, expected_digest_hex: str, timeout: int = 15, t
     try:
         path = os.path.join(d, "t.tsr")
         _tmp_write(path, tsr)
+        try:
+            with open(tsa_cert, "rb") as fh:
+                pinned = fh.read()
+        except OSError:
+            pinned = None   # read by openssl below, which reports it, as before
+        if tsa_signer_certificate_absent(tsr, pinned):   # 1.8.1 (SPEC §3.2): the signature cannot be evaluated here
+            out["tsa_verified"] = None
+            out["tsa_reason"] = "signer_certificate_absent"
+            out["tsa_note"] = ("signature not evaluated: the signer certificate the SignerInfo names is not in the token"
+                               + (" nor in the --tsa-cert file" if signer_named_by_key_id(tsr) else "")
+                               + " (ETSI EN 319 102-1 V1.4.1 §5.2.3.3: INDETERMINATE / NO_SIGNING_CERTIFICATE_FOUND)")
+            return out
         if signer_named_by_key_id(tsr):   # 1.8.0 (SPEC §3.2): openssl ts cannot read this SignerInfo; same checks one by one
             import calendar, time as _t
             at = calendar.timegm(_t.strptime(info["gen_time"].split(".")[0].rstrip("Z"), "%Y%m%d%H%M%S")) \
@@ -2056,6 +2130,8 @@ def _anchor_element(r: Dict, tsa_requested: bool) -> Tuple:
         return ("verified", None)
     if r.get("tsa_verified") is False:
         return ("not_evaluated", "tsa_invalid")
+    if r.get("tsa_reason") == "signer_certificate_absent":   # 1.8.1 (SPEC §3.2, §6.9): not evaluated, not an instrument fault
+        return ("not_evaluated", "signer_certificate_absent")
     return ("not_evaluated", "instrument_failure", r.get("tsa_note") or "TSA signature not checked by this verifier")
 
 

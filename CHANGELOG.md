@@ -1,45 +1,71 @@
 # Changelog
 
-## Unreleased (1.8.1) — the SD-JWT grammar closed; sd_hash checked without the holder key; typ parameters
+## Unreleased (1.8.1) — false greens closed: SD-JWT grammar, sd_hash without the holder key; TSA signer not found; typ parameters
 
-SPEC 1.8.1 (§6 step 2, §7, §9.2; written before the code). Measured on 2026-11-18 on the PyPI wheel 1.7.3 (sha256
-109227df…203b5c00) and on the tag v1.8.0 (d5601e4), identical in both:
+SPEC 1.8.1 (§3.2, §6 step 2, §6.9, §7, §9.2, §13; each rule written before the code). Measured on 2026-11-18 on the PyPI
+wheel 1.7.3 (sha256 109227df…203b5c00) and on the tag v1.8.0 (d5601e4); the two gave the same outcomes.
 
-- **The grammar of `sd_jwt_compact` (RFC 9901 §4, Proposed Standard, November 2025).** `parse_sd_jwt` split on `~` and
-  took the last component as the KB-JWT whatever it was, dropped empty components, and read a JWT without `~` as an
-  SD-JWT with no disclosures. `<jwt>~<d1>~<d2>` (the trailing `~` omitted) gave one disclosure and `<d2>` as the KB-JWT:
-  `resolve_disclosures` answered without `d2`, and only `verify_kb_jwt` refused, as "kb-jwt must have 3 dot-separated
-  segments" (build refused, verify an artifact error with that text, both verifiers). `<jwt>` and `<jwt>~~<d1>~<d2>~`
-  (and `<jwt>~<d1>~<d2>~~`) built and verified `valid: true` in both verifiers. Now each is that artifact's error, named
-  first in the text: `sd_jwt_no_separator`, `sd_jwt_empty_component`, `sd_jwt_final_component_not_kb_jwt` (a last
-  component that is not empty and not three dot-separated segments). Verdicts that change: a pack whose artifact is a
-  bare JWT, or has an empty component, was `valid` and is not; the 84 artifacts of the shipped vectors are none of these
-  (79 end with `~`, 5 with a KB-JWT). One test helper of this repository wrote `<jwt>~~` for a token without disclosures
-  (test_ap2_evidence.py), corrected.
-- **`sd_hash` without `cnf.jwk`.** `verify_kb_jwt` returned `verified: null` and did not compute `sd_hash`, so a KB-JWT
-  bound to another presentation gave the same receipt as a right one. `sd_hash` needs no key (RFC 9901 §4.3.1): both
-  verifiers now report `kb_jwt.sd_hash_ok` in that branch too; `verified` stays `null`, the state `not_evaluated /
-  holder_key_unknown`, `valid` unchanged. `build` does not seal the member in that branch, so a 1.8.0 verifier, which
-  would refuse a sealed `sd_hash_ok` it does not recompute (§9.1), reads a 1.8.1 pack; a copy that carries it must equal
-  the recomputation, as with a key.
-- **`typ` with parameters (SPEC §13).** `_media_type` folded the whole value, so `check_jose_header` found
-  `x+jwt;p=A` equal to `x+jwt;p=a` (parameter values are case-sensitive, RFC 7515 §4.1.9) and `kb+jwt; p=a`,
-  `kb+jwt;p="a"`, `KB+JWT;P=a` different from `kb+jwt;p=a` (measured on 2026-11-18 on v1.8.0). Now the value is read as
-  an RFC 9110 media type (type, subtype and parameter names folded A–Z, values as written, quoted-string equivalent to
-  token, parameters in any order, a name twice or anything outside the grammar is no media type), in the reference and in
-  the JavaScript verifier. `test_ap2_media_type.py`: 3 000 generated pairs (parameters, quoted values and quoted-pairs,
-  whitespace, KELVIN SIGN in names and values, duplicates) against an oracle written apart, both verifiers; on v1.8.0 3
-  of its 5 tests fail. A KB-JWT `typ` with a parameter stays refused; an `expected_typ` that is no media type is a
-  ValueError (it was any non-empty string).
-- Vectors: + `sd_jwt_no_separator`, `sd_jwt_empty_component` (both `valid` under 1.8.0 in both verifiers),
-  `sd_jwt_no_trailing_tilde` (an artifact error under 1.8.0 too, for the other reason); 56 vectors.
-  `verifiers/differential_oracle.py` compares each artifact's KB-JWT receipt and the name of a grammar error, with seven
-  new hostile files: 0 disagreements on 501 cases (12 declared); against the 1.8.0 JavaScript verifier the same oracle
-  gives 12 disagreements, all of them these cases. `test_ap2_sdjwt_grammar.py`: 1 500 generated serializations (0 to 4
-  disclosures, empty components anywhere, KB-JWT present or absent, last components of one, two and four segments, no
-  `~`), each expected from the RFC 9901 ABNF and the generator's labels, in both verifiers, and `sd_hash` right or wrong
-  with and without `cnf.jwk` over 0 to 3 disclosures; on v1.8.0, 6 of its 8 tests fail; each of the three grammar checks
-  and the new `sd_hash_ok`, removed alone, turns it red.
+### False greens (`valid: true` where the input breaks RFC 9901), in 1.7.3 and 1.8.0, Python and JavaScript
+
+- **An issuer JWT with no `~` at all** (`<jwt>`): read as an SD-JWT with no disclosures; `build` wrote the pack and
+  both verifiers said `valid: true`. RFC 9901 §4: `SD-JWT = JWT "~" *(DISCLOSURE "~")`.
+- **An empty component** (`<jwt>~~<d1>~<d2>~`, and `<jwt>~<d1>~<d2>~~`): the empty component was dropped in silence;
+  `build` wrote the pack and both verifiers said `valid: true`. RFC 9901 §4: a Disclosure is at least one base64url
+  character; only the last component may be empty.
+- **A KB-JWT without `cnf.jwk` whose `sd_hash` is the hash of another presentation**: `valid: true`, `holder_binding`
+  `not_evaluated / holder_key_unknown`, the same receipt as with the right `sd_hash`. RFC 9901 §7.3 step 5.g asks the
+  Verifier to check `sd_hash`, which needs no key (§4.3.1).
+
+Each is now that artifact's error, its name first in the error text: `sd_jwt_no_separator`, `sd_jwt_empty_component`,
+`sd_hash_mismatch` (in `verify` and in `build`). Not a green, but the same class:
+
+- **The trailing `~` omitted** (`<jwt>~<d1>~<d2>`): `<d2>` was taken as the KB-JWT, so `resolve_disclosures` answered
+  without it, and the artifact failed only as "kb-jwt must have 3 dot-separated segments" (build refused, verify an
+  artifact error with that text, both verifiers). Now `sd_jwt_final_component_not_kb_jwt` (a last component that is
+  neither empty nor three dot-separated segments), before anything is resolved.
+
+The 84 artifacts of the shipped vectors are none of these (79 end with `~`, 5 with a KB-JWT). One test helper of this
+repository wrote `<jwt>~~` for a token without disclosures (test_ap2_evidence.py): corrected.
+
+### Changed
+
+- **`sd_hash` without `cnf.jwk`** (§9.2): computed in both verifiers; a wrong one is the error above; a right one gives
+  `kb_jwt.sd_hash_ok: true` with `verified: null` and the state `not_evaluated / holder_key_unknown`, as before. `build`
+  does not seal `sd_hash_ok` in that branch, so a 1.8.0 verifier, which would refuse a sealed member it does not
+  recompute (§9.1), reads a 1.8.1 pack.
+- **TSA signer certificate not found** (§3.2, §6.9; as cryptovalid-opencore SPEC v0.11 §11 step 6): under `--tsa-cert`,
+  a token whose signer certificate is neither in the token nor (for the key-identifier form) in the `--tsa-cert` file was
+  `tsa_verified: false`, `time_anchor` `not_evaluated / tsa_invalid` — a signature never evaluated reported as one that
+  does not verify (measured on v1.8.0: freetsa's token with its certificates removed and the freetsa CA given, openssl
+  "PKCS7_get0_signers:signer certificate not found"). Now `tsa_verified: null`, `tsa_reason:
+  "signer_certificate_absent"`, `time_anchor` `not_evaluated / signer_certificate_absent` (ETSI EN 319 102-1 V1.4.1
+  §5.2.3.3: INDETERMINATE / NO_SIGNING_CERTIFICATE_FOUND). Time bounds as with `tsa_invalid`: the token is not counted,
+  gives no proven upper bound, `--require-anchor` is unmet if it was the one needed; the binding and `valid` otherwise
+  unchanged. Reference only (the JavaScript verifier checks no TSA). test_ap2_tsa_key_id.py: a key identifier that names
+  no certificate given is now `null` (was `false`).
+- **`typ` with parameters (§13).** `_media_type` folded the whole value, so `check_jose_header` found `x+jwt;p=A` equal
+  to `x+jwt;p=a` (parameter values are case-sensitive, RFC 7515 §4.1.9) and `kb+jwt; p=a`, `kb+jwt;p="a"`,
+  `KB+JWT;P=a` different from `kb+jwt;p=a` (measured on v1.8.0). Now the value is read as an RFC 9110 media type (type,
+  subtype and parameter names folded A–Z, values as written, quoted-string equivalent to token, parameters in any order,
+  a name twice or anything outside the grammar is no media type), in the reference and in the JavaScript verifier. A
+  KB-JWT `typ` with a parameter stays refused; an `expected_typ` that is no media type is a ValueError.
+
+### Tests and benches
+
+- Vectors: + `sd_jwt_no_separator`, `sd_jwt_empty_component`, `holder_sd_hash_mismatch_no_key` (each `valid` under
+  1.8.0 in both verifiers), `sd_jwt_no_trailing_tilde` (an artifact error under 1.8.0 too, for the other reason); 57.
+- `verifiers/differential_oracle.py` compares each artifact's KB-JWT receipt and the name of a grammar or `sd_hash`
+  error, with seven new hostile files: 0 disagreements on 502 cases (12 declared), measured on 2026-11-18 with Node
+  24.19.0; with the 1.8.0 JavaScript verifier in its place the same oracle gives 13 disagreements, all on these cases.
+- `test_ap2_sdjwt_grammar.py`: 1 500 generated serializations (0 to 4 disclosures, empty components anywhere, KB-JWT
+  present or absent, last components of one, two and four segments, no `~`), each expected from the RFC 9901 ABNF and the
+  generator's labels, in both verifiers; `sd_hash` right or wrong with and without `cnf.jwk` over 0 to 3 disclosures; 7
+  of its 9 tests fail on v1.8.0. `test_ap2_tsa_signer_absent.py`: tokens made here in both SignerInfo forms x
+  certificates kept/removed x three pins x intact/altered, and a pack's time bounds; its 3 tests fail on v1.8.0.
+  `test_ap2_media_type.py`: 3 000 generated pairs against an oracle written apart, both verifiers; 3 of its 5 fail on
+  v1.8.0. Each new check (the three grammar names, `sd_hash_mismatch`, the TSA signer lookup and its state, the media
+  type's quoted values and folded names), removed alone, turns its test red. Tests that wrote `<jwt>~~`, a KB-JWT with
+  `sd_hash: "x"` and no `cnf.jwk`, or called `verify_kb_jwt` without the presentation, are corrected.
 
 ## 1.8.0 — 2026-11-18 — a "not before" bound: a NIST Beacon value sealed with the payment
 

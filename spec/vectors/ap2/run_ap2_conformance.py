@@ -46,7 +46,8 @@ STATE_VALUES = {"verified", "contradicted", "indeterminate", "not_evaluated"}
 REASONS = {"digest_mismatch", "artifact_invalid", "binding_mismatch", "kb_signature_invalid", "sd_hash_mismatch",
            "not_present", "holder_key_unknown", "token_invalid", "token_missing", "tsa_not_checked", "tsa_invalid",
            "instrument_failure", "signature_invalid", "self_asserted", "key_unresolved", "backend_missing", "ca_certified",
-           "chain_broken", "chain_unresolved", "no_trust_anchor", "divergence", "absence"}
+           "chain_broken", "chain_unresolved", "no_trust_anchor", "divergence", "absence",
+           "signer_certificate_absent"}   # 1.8.1 — SPEC §3.2, §6.9: time_anchor, the TSA signer certificate not found
 UNMET = ("require_producer", "require_pq", "require_anchor", "min_anchors", "trusted_producer_keys", "trust_set_complete")
 REPORT_KEYS = {"ignored", "refused"}
 NORMATIVE_KEYS = {"valid", "digest_ok", "bindings_ok", "policy_ok", "pq_protected", "producer_present", "producer_ok",

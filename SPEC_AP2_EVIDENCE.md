@@ -10,9 +10,11 @@
 > read as a JWT with no disclosures (`valid: true`), the second dropped in silence (`valid: true`), and the third taken as
 > the KB-JWT, so the last disclosure vanished from `resolve_disclosures` and the artifact failed only later, as "kb-jwt
 > must have 3 dot-separated segments" (measured on 2026-11-18 on the PyPI wheel 1.7.3 and on the tag v1.8.0, both
-> verifiers). §6 step 2 and §9.2: without `cnf.jwk` the KB-JWT's `sd_hash` is checked too (RFC 9901 §4.3.1 needs no key)
-> and the receipt reports `sd_hash_ok`; `verified` stays `null` and the state `not_evaluated / holder_key_unknown`, the
-> verdict does not change (up to 1.8.0 a right and a wrong `sd_hash` gave the same receipt). Three vectors added (§7).
+> verifiers). §6 step 2 and §9.2: without `cnf.jwk` the KB-JWT's `sd_hash` is checked too (RFC 9901 §4.3.1 needs no key;
+> §7.3 step 5.g): a wrong one is that artifact's error, `sd_hash_mismatch` (up to 1.8.0 `valid: true`, the same receipt as
+> a right one); a right one keeps `verified: null`, `sd_hash_ok: true`, `not_evaluated / holder_key_unknown`. §3.2: a
+> token whose signer certificate is not found is `tsa_verified: null`, `tsa_reason: "signer_certificate_absent"`,
+> `time_anchor` `not_evaluated / signer_certificate_absent` (up to 1.8.0 `false`, `tsa_invalid`). Four vectors added (§7).
 > §13: `typ` compared as a media type with the parameter values case-sensitive (RFC 7515 §4.1.9) and the grammar of
 > RFC 9110; up to 1.8.0 the whole value was folded, so `x+jwt;p=A` equalled `x+jwt;p=a` (measured on 2026-11-18 on
 > v1.8.0), against the 1.8.0 text of this section, which said parameters were "compared as written".
@@ -353,6 +355,25 @@ issuing the token does not turn `tsa_verified` false years later; with no usable
 the chain is validated at the current time instead (an expired certificate then fails).
 Revocation is not checked (declared).
 
+**Signer certificate absent (1.8.1, 2026-11-18).** Before openssl runs, the reference looks for the certificate the
+SignerInfo's `sid` names (RFC 5652 §5.3: issuerAndSerialNumber, the issuer compared as `X509_NAME_cmp` and the serial as
+an integer; subjectKeyIdentifier, against the certificate's subjectKeyIdentifier extension) where the check would look:
+the token's certificates, and for the subjectKeyIdentifier form also the `--tsa-cert` file (`openssl cms -verify
+-certfile`; `openssl ts -verify -CAfile` does not look for the signer in the CA file). When every certificate there was
+read and none is that one — a token requested with certReq FALSE (RFC 3161 §2.4.1), or one whose `[0] certificates` is
+present and empty, as sigstore's TSA writes it — the signature cannot be evaluated: `tsa_verified` is `null`, never
+`false`, with `tsa_reason: "signer_certificate_absent"` and a `tsa_note`, and `time_anchor` says `not_evaluated /
+signer_certificate_absent` (§6.9). ETSI EN 319 102-1 V1.4.1 (2024-06) §5.2.3.3: "In case the signing certificate cannot
+be identified, the output shall be the indication INDETERMINATE and the sub-indication NO_SIGNING_CERTIFICATE_FOUND";
+cryptovalid-opencore SPEC v0.11 §11 step 6 reads such a token the same way. Anything not read keeps the check as
+before. Effect on the time bounds, the same as `tsa_invalid`: under `--tsa-cert` only a `tsa_verified: true` token is
+counted (§3.3), so this token gives no proven upper bound — `anchors_verified` does not count it, `existed_by` and the
+§12 window take no time from it, `--require-anchor` / `--min-anchors` are unmet if it was the one needed; the binding
+(`rfc3161.verified`) and `valid` do not change. Up to 1.8.0 such a token was `tsa_verified: false`,
+`not_evaluated / tsa_invalid` — measured on 2026-11-18 on v1.8.0: freetsa's token of cryptovalid-opencore's
+spec/vectors/rfc3161 with its certificates removed, the freetsa CA given, openssl "PKCS7_get0_signers:signer
+certificate not found". The JavaScript verifier does not check a TSA (`instrument_failure`, as before).
+
 ### 3.3 Additional time anchors: `anchors` (NORMATIVE, 1.5.0)
 
 One RFC 3161 token depends on one TSA key, which ages; mechanisms that fail in different ways (another TSA; in a later
@@ -520,10 +541,12 @@ flags: `require_producer`, `require_pq`, `require_anchor`, and `min_anchors` (1.
    `resolved_claims`; re-verify the KB-JWT when the issuer payload carries
    `cnf.jwk` (its ES256 signature under `cnf.jwk`, AND its `sd_hash` equal to BASE64URL(SHA-256) of
    `issuer-JWT~disclosure*~` — RFC 9901 §7.3 step 5.c and 5.g; a KB-JWT that fails either verifies FALSE; without `cnf.jwk` a present
-   KB-JWT is recorded as unverifiable, never treated as verified-green (1.8.1: its `sd_hash` is still compared, RFC 9901
-   §4.3.1 needs no key, and the receipt's `kb_jwt.sd_hash_ok` says the outcome while `verified` stays `null`; a producer
-   does not seal that member, so a 1.8.0 verifier reads the pack), and
-   never fails the pack by itself — but a KB-JWT that verifies FALSE does, and a §3.1 profile
+   KB-JWT is recorded as unverifiable, never treated as verified-green (1.8.1: its `sd_hash` is still compared — RFC 9901
+   §7.3 step 5.g asks it and §4.3.1 needs no key — and a wrong one is that artifact's error, `sd_hash_mismatch`, in
+   `verify` and in `build`: the KB-JWT is not bound to this presentation, whatever the key; a right one gives
+   `kb_jwt.sd_hash_ok: true` with `verified: null`; a producer does not seal that member, so a 1.8.0 verifier reads the
+   pack; up to 1.8.0 a wrong `sd_hash` without `cnf.jwk` was `valid: true`, vector `holder_sd_hash_mismatch_no_key`), and
+   otherwise never fails the pack by itself — but a KB-JWT that verifies FALSE does, and a §3.1 profile
    violation in any of its three segments is that artifact's failure whether or not the holder
    key is known: the strict segment rule does not depend on being able to check the signature;
    1.4.0, likewise independent of the holder key: the KB-JWT header MUST carry `typ: "kb+jwt"`
@@ -631,8 +654,8 @@ element is `not_evaluated` with `not_present`.
 | subject | elements | `verified` | `contradicted` (reason) | `not_evaluated` (reason) |
 |---|---|---|---|---|
 | `sealed_content` | the digest (§3); each artifact (§6 step 2: issuer signature and claims); the binding set (§4), recomputed for this subject whenever every artifact's signature and claims verified — also when a KB-JWT failed, where `bindings_ok` is false by §6 step 3 | every element | `digest_mismatch`; `artifact_invalid` (an artifact error, a signature or claims that do not verify, or no artifact); `binding_mismatch` | — |
-| `holder_binding` | each artifact that is not an error and carries a KB-JWT | its KB-JWT verifies under `cnf.jwk` | `kb_signature_invalid` (the signature does not verify, whatever `sd_hash`); `sd_hash_mismatch` (the signature verifies, `sd_hash` does not) | `holder_key_unknown` (no `cnf.jwk`: recorded, never fails the pack, §6 step 2); `not_present` |
-| `time_anchor` | the `rfc3161_timestamp` token when `anchored`; each `anchors` entry | binding verified (§3.2) AND, under `--tsa-cert`, the TSA signature verified | `binding_mismatch` (an imprint was read and is another digest, whatever else fails); `token_invalid` (otherwise: not a parseable, granted token); `token_missing` (`anchored` with no `tsr_b64`, §6 step 4) | `tsa_not_checked` (binding verified, no TSA certificate given: a self-issued token satisfies the binding, §3.2); `tsa_invalid` (the TSA signature does not verify under the certificate given: not counted, §3.3); `instrument_failure`; `not_present` |
+| `holder_binding` | each artifact that is not an error and carries a KB-JWT | its KB-JWT verifies under `cnf.jwk` | `kb_signature_invalid` (the signature does not verify, whatever `sd_hash`); `sd_hash_mismatch` (the signature verifies, `sd_hash` does not) | `holder_key_unknown` (no `cnf.jwk`: recorded, never fails the pack, §6 step 2 — except an `sd_hash` that does not match, an artifact error since 1.8.1); `not_present` |
+| `time_anchor` | the `rfc3161_timestamp` token when `anchored`; each `anchors` entry | binding verified (§3.2) AND, under `--tsa-cert`, the TSA signature verified | `binding_mismatch` (an imprint was read and is another digest, whatever else fails); `token_invalid` (otherwise: not a parseable, granted token); `token_missing` (`anchored` with no `tsr_b64`, §6 step 4) | `tsa_not_checked` (binding verified, no TSA certificate given: a self-issued token satisfies the binding, §3.2); `tsa_invalid` (the TSA signature does not verify under the certificate given: not counted, §3.3); `signer_certificate_absent` (1.8.1, §3.2: the signer certificate is not found, the signature not evaluated: not counted); `instrument_failure`; `not_present` |
 | `producer_signature` | each signature entry; the block itself | `PASS` with a key in the pinned set | `signature_invalid` (a `FAIL` entry; also a block with no entry, or whose `scheme` does not match its entries, §5, with a `detail`) | `self_asserted` (`PASS`, no pinned set: the key is carried by the pack — `valid` can be true without pins, a policy of this format, never a trust statement; krausz §5.4.2(a) has no resolved result without the relying party's trust material); `key_unresolved` (`PASS`, a pinned set that does not hold the key — not a failed signature); `backend_missing` (`SKIP`: no ML-DSA-65 backend, or a `sig_alg` this format does not define); `not_present` |
 | `issuer_identity` | the key of each artifact that is not an error | an `x5c_header` key whose chain validates to the relying party's trust anchor (§6 step 7) — qualifier `ca_certified`: a CA under YOUR anchor certified the key, never "this is the issuer" | `chain_broken` (openssl reports a certificate signature failure inside the chain, or an `x5c` entry is not strict base64) | `self_asserted` (`jwk_header`, `supplied`, `jwks_fetched`); `no_trust_anchor` (`x5c_header`, no anchor given); `chain_unresolved` (the chain does not reach the anchor given: not resolved in the relying party's material, not a defect of the input); `instrument_failure`; `not_present` |
 
@@ -694,9 +717,10 @@ openssl ABSENT is neither: as in 1.5.x the field is `null` (`tsa_verified`, `cha
 Run every `spec/vectors/ap2/<name>.json` under the policy in
 `<name>.expected.json` and reproduce the `normative` block exactly
 (`run_ap2_conformance.py` does this for the reference; exit 0 = conformant).
-The set contains fifty-six vectors (1.8.1: + 3, the grammar of §6 step 2 — `sd_jwt_no_separator` and
+The set contains fifty-seven vectors (1.8.1: + 4, the grammar of §6 step 2 — `sd_jwt_no_separator` and
 `sd_jwt_empty_component`, both `valid` under 1.8.0 in both verifiers, and `sd_jwt_no_trailing_tilde`, an artifact error
-under 1.8.0 too, with another reason; each an artifact error, `sealed_content` `contradicted` `artifact_invalid`, no
+under 1.8.0 too, with another reason — and `holder_sd_hash_mismatch_no_key` (§9.2), `valid` under 1.8.0 in both
+verifiers; each an artifact error, `sealed_content` `contradicted` `artifact_invalid`, no
 producer block; the error text is not part of the normative block; 1.7.3: + 3, the key sources of the header of §2 (d) — `key_header_jwk_differs`, a
 `supplied` key beside a header `jwk` naming another key, and `key_header_x5c_differs`, a `jwks_fetched` key beside an `x5c`
 whose leaf is another key, both an artifact error, `sealed_content` `contradicted` `artifact_invalid`; `key_material_not_used`,

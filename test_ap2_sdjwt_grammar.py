@@ -6,9 +6,11 @@ the holder key (RFC 9901 §4.3.1), in the reference and in the JavaScript verifi
 
 Positive control: on v1.8.0 (d5601e4) `<jwt>~<d1>~<d2>` gave `parse_sd_jwt` one disclosure and `<d2>` as the KB-JWT, and
 `resolve_disclosures` resolved without `<d2>`; `<jwt>` and `<jwt>~~<d1>~` parsed with no error (valid: true in a pack);
-a KB-JWT without cnf.jwk gave the same object for a right and a wrong `sd_hash`. Measured on v1.8.0 with this file:
+a KB-JWT without cnf.jwk gave the same object for a right and a wrong `sd_hash` (valid: true; now a wrong one is that
+artifact's error, sd_hash_mismatch, in verify and build). Measured on v1.8.0 with this file, 7 of its 9 tests fail:
 `test_generative_grammar_python`, `test_generative_grammar_js`, `test_named_cases`, `test_sd_hash_without_key_python`,
-`test_sd_hash_without_key_js` and `test_build_does_not_seal_it` (the receipt has no `sd_hash_ok`) fail;
+`test_sd_hash_without_key_js`, `test_build_does_not_seal_it` (the receipt has no `sd_hash_ok`) and
+`test_build_refuses_a_wrong_sd_hash_without_key`;
 `test_generator_reaches_every_class` and `test_with_key_unchanged` pass on both.
 
 The expected outcome of each generated serialization comes from the generator's own labels of each component, matched
@@ -220,9 +222,15 @@ class SdHashWithoutKey(unittest.TestCase):
         return r
 
     def test_sd_hash_without_key_python(self):
+        """1.8.1 (SPEC §9.2, RFC 9901 §7.3 step 5.g): right -> verified null, sd_hash_ok true; wrong -> that artifact's
+        error, sd_hash_mismatch, whatever the key"""
         for compact, resolved, right in self.cases(cnf=False):
+            if not right:
+                with self.assertRaisesRegex(A.Ap2EvidenceError, "^sd_hash_mismatch:", msg=compact):
+                    self.py_kb(compact, resolved)
+                continue
             r = self.py_kb(compact, resolved)
-            self.assertEqual((r["present"], r["verified"], r["sd_hash_ok"]), (True, None, right), compact)
+            self.assertEqual((r["present"], r["verified"], r["sd_hash_ok"]), (True, None, True), compact)
             self.assertNotIn("signature_ok", r)   # the signature is not checked without the key: nothing said about it
 
     def test_with_key_unchanged(self):
@@ -235,8 +243,22 @@ class SdHashWithoutKey(unittest.TestCase):
         cases = self.cases(cnf=False) + self.cases(cnf=True)
         got = js_parse_many([[c, res] for c, res, _ in cases])
         for (compact, resolved, right), g in zip(cases, got):
+            if not right and "cnf" not in resolved:
+                self.assertEqual(g, ["refused", "sd_hash_mismatch"], compact)
+                continue
             self.assertEqual(g[1].get("sd_hash_ok"), right, compact)
             self.assertEqual(g, ["kb", json.loads(json.dumps(self.py_kb(compact, resolved)))], compact)
+
+    def test_build_refuses_a_wrong_sd_hash_without_key(self):
+        pres, _ = self.presentation(2, cnf=False)
+        d = tempfile.mkdtemp(prefix="ap2sdh_")
+        try:
+            out = os.path.join(d, "p.json")
+            with self.assertRaisesRegex(A.Ap2EvidenceError, "sd_hash_mismatch"):
+                A.build_evidence([{"name": "m", "sd_jwt": pres + self.kb(pres, "other_presentation")}], out)
+            self.assertFalse(os.path.exists(out))
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
 
     def test_build_does_not_seal_it(self):
         """the member is the receipt's: a producer does not seal it in the holder-key-unknown branch, so a 1.8.0 verifier,

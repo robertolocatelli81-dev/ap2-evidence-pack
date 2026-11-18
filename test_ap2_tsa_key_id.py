@@ -250,8 +250,10 @@ class SignerByKeyId(unittest.TestCase):
         self.assertEqual(tok.count(sid), 1)
         forged = reply(tok.replace(sid, bytes([0x80, len(theirs)]) + theirs))
         self.assertTrue(A.signer_named_by_key_id(forged))
-        for pin in (self.a.j("ca.crt"), self.b.j("ca.crt"), self.b.j("tsa.crt")):
-            self.assertEqual(tsa_ok(forged, pin)[0], False, pin)
+        # 1.8.1 (SPEC §3.2): no certificate with that key identifier in the token or the --tsa-cert file is a signer
+        # certificate not found, `null` (it was `false`); with b's TSA certificate given it is found, and the signature fails
+        for pin, want in ((self.a.j("ca.crt"), None), (self.b.j("ca.crt"), None), (self.b.j("tsa.crt"), False)):
+            self.assertEqual(tsa_ok(forged, pin)[0], want, pin)
 
     def test_the_system_store_is_not_a_pin(self):
         store = os.path.join(self.td, "store")

@@ -44,7 +44,9 @@ def kb_with(typ) -> str:
     header = {"alg": "ES256"}
     if typ is not MISSING:
         header["typ"] = typ
-    payload = {"aud": "m", "nonce": "n1", "iat": 1760000000, "sd_hash": "x"}
+    # 1.8.1 (SPEC §9.2): sd_hash checked without the holder key too: the hash of the presentation py_outcome passes
+    payload = {"aud": "m", "nonce": "n1", "iat": 1760000000,
+               "sd_hash": b64u(__import__("hashlib").sha256(b"h.p.s~").digest())}
     return ".".join([b64u(json.dumps(header).encode()), b64u(json.dumps(payload).encode()), b64u(b"\0" * 64)])
 
 
