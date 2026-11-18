@@ -46,6 +46,19 @@ repository wrote `<jwt>~~` for a token without disclosures (test_ap2_evidence.py
   (3 of 6 tests fail on the previous commit; the bench's positive control: plain `openssl verify` answers OK under the
   simulated store).
 
+- **A traceback on a Beacon certificate time (§12.2).** A `not_before` pack with the real NIST pulses and certificate,
+  the certificate's notBefore carried to month 13 (`261321000000Z`, the digit pattern still matches) and the pack
+  resealed: `verify` ended with `ValueError: time data '20261321000000Z' does not match format`, exit 1 and an empty
+  stdout, against the README's "never a traceback" (`ap2_nist_beacon._gtime` called `strptime` outside any try; `build`
+  stopped the same way). Now the fields are read at fixed positions and a value that is no calendar time is
+  `certificate_time`, that block's error (exit 1 with its receipt), as the JavaScript verifier already answered. Same
+  class, found by reading the code: a TSA-verified genTime with second 60 or 61 (a leap second) passes `time.strptime`
+  and stopped `datetime.strptime` in the window check; it is now NB3 `not_evaluated:verified_time_not_a_time` (§12.3),
+  in the reference and in the JavaScript window rule (which gave `failed:window_inverted`, a null compared as 0;
+  unreachable there, as it has no TSA-verified time). `test_ap2_beacon_times.py`: 4 009 generated UTCTime and
+  GeneralizedTime values (out-of-range fields, 29 February, other tags, non-ASCII digits, offsets, fractions) against an
+  oracle written apart, in both verifiers; 5 of 9 tests fail on the previous commit.
+
 ### Changed
 
 - **`sd_hash` without `cnf.jwk`** (§9.2): computed in both verifiers; a wrong one is the error above; a right one gives

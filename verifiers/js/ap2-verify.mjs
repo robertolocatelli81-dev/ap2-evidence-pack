@@ -725,7 +725,8 @@ function checkNotBefore(nb, ev, artResults, provenTime, pinned = NB_PINNED) {   
     else if (provenTime === null) c.NB3 = "not_evaluated:no_verified_time_anchor";
     else { const [whole, frac = ""] = provenTime.replace(/Z$/, "").split(".");
       const gt = nbCalendar([0, 4, 6, 8, 10, 12].map((i) => +whole.slice(i, i + (i ? 2 : 4))));
-      if (gt + Number((frac + "000").slice(0, 3)) < T) c.NB3 = "failed:window_inverted";   // exact: T in whole ms
+      if (gt === null) c.NB3 = "not_evaluated:verified_time_not_a_time";   // 1.8.1 (SPEC §12.3): second 60/61, no calendar time
+      else if (gt + Number((frac + "000").slice(0, 3)) < T) c.NB3 = "failed:window_inverted";   // exact: T in whole ms
       else { c.NB3 = "verified"; out.window.not_after = provenTime; } } }
   if (c.NB1 === "verified" && c.NB2 === "verified") { out.window.not_before = nbFmt(T); out.window.not_before_operator_promise = nbFmt(T - r.period_s * 1000); }
   const vals = Object.values(c);

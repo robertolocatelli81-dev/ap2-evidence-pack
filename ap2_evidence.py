@@ -2577,9 +2577,14 @@ def check_not_before(nb: Dict, ev: Dict, art_results: List[Dict], proven_time: O
             c["NB3"] = "not_evaluated:no_verified_time_anchor"
         else:
             whole, _, frac = proven_time.rstrip("Z").partition(".")
-            gt = datetime.strptime(whole, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+            try:   # 1.8.1 (SPEC §12.3): second 60 or 61 passes time.strptime (-attime) and is no datetime
+                gt = datetime.strptime(whole, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+            except ValueError:
+                gt = None
             # exact: T is in whole milliseconds, so genTime < T iff its whole milliseconds are (a float rounds .9999995 up)
-            if gt + timedelta(milliseconds=int((frac + "000")[:3])) < T:
+            if gt is None:
+                c["NB3"] = "not_evaluated:verified_time_not_a_time"
+            elif gt + timedelta(milliseconds=int((frac + "000")[:3])) < T:
                 c["NB3"] = "failed:window_inverted"
             else:
                 c["NB3"] = "verified"

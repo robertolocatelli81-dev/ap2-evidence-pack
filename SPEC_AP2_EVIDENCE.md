@@ -1357,7 +1357,12 @@ writes the merchant's name in clear (`payee.name`), and a destroyed salt does no
 - `beacon.source` a closed list (`nist-beacon-2.0`); the pulses are closed as `ap2_nist_beacon.check_grammar` states (their
   fifteen members, `external` three, `listValues` the five types once each, fixed-length hex, the `uri` naming its own
   chain and index, `cipherSuite` 0, `version` "2.0", a `timeStamp` that is a real calendar time); the certificate one PEM
-  block with an RSA key.
+  block with an RSA key, whose `notBefore` and `notAfter` are each a UTCTime `YYMMDDHHMMSSZ` (RFC 5280 §4.1.2.5.1,
+  `YY` ≥ 50 is 19YY) or a GeneralizedTime `YYYYMMDDHHMMSSZ` (§4.1.2.5.2) of ASCII digits naming a real calendar time
+  (month 1-12, a day of that month, hour 0-23, minute and second 0-59); anything else is `certificate_time`, an error of
+  the block. 1.8.1: up to 1.8.0 a value of the right digits that is no calendar time (month 13, measured on 2026-11-18 on
+  the PyPI wheel 1.8.0 with the real NIST certificate so altered) ended the reference with a traceback, exit 1 and no
+  receipt; the JavaScript verifier already refused it as `certificate_time`.
 A producer does not write a block this section refuses, nor one whose NB1 or NB2 is not `verified` at build.
 `build_evidence` takes the clear values and makes the commitments (`make_payment`); it never writes a clear IBAN or name.
 
@@ -1389,7 +1394,11 @@ A producer does not write a block this section refuses, nor one whose NB1 or NB2
   is the earliest TSA-verified genTime of §3.2/§3.3 (a token whose TSA signature verified with the relying party's
   `--tsa-cert`): genTime before T `failed:window_inverted` (compared exactly, whatever the number of fraction digits) (one of the two time sources is wrong or was subverted;
   cryptovalid-opencore §19.5 uses the same name); genTime = T is one instant; no such token:
-  `not_evaluated:no_verified_time_anchor` (the window stays open above). NB3 runs only when NB1 is `verified`.
+  `not_evaluated:no_verified_time_anchor` (the window stays open above). A TSA-verified genTime that is no calendar time
+  — second 60 or 61, which `-attime` accepts (a leap second is written `…235960Z`) — cannot be compared with T:
+  `not_evaluated:verified_time_not_a_time`, the window stays open above (1.8.1; up to 1.8.0 the reference stopped there
+  with a traceback, found by reading the code: Python's `time.strptime` accepts second 60 and 61, its `datetime` does not;
+  not reproduced with a real TSA). NB3 runs only when NB1 is `verified`.
 `state` is `failed` when any of NB1-NB3 failed, `verified` when all three are, else `not_evaluated`. A pack whose
 `not_before` state is `failed` is not `valid`. `window`: `{"not_before": T, "not_before_operator_promise": T − period,
 "not_after": the genTime or null}`, the first two filled only when NB1 and NB2 are `verified`. `covers` lists the fields

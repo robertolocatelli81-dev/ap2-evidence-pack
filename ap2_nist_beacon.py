@@ -80,18 +80,20 @@ def _children(b, s, e):
 
 
 def _gtime(b, t):
-    s = b.decode("ascii")
-    if t == 0x17:   # UTCTime YYMMDDHHMMSSZ (RFC 5280 4.1.2.5.1)
-        if not re.fullmatch(r"[0-9]{12}Z", s):
-            raise PulseError("certificate_time")
-        y = int(s[:2])
-        s = ("19" if y >= 50 else "20") + s
-    elif t == 0x18:
-        if not re.fullmatch(r"[0-9]{14}Z", s):
-            raise PulseError("certificate_time")
-    else:
+    """SPEC §12.2 (1.8.1): a UTCTime YYMMDDHHMMSSZ (RFC 5280 4.1.2.5.1, YY >= 50 is 19YY) or a GeneralizedTime
+    YYYYMMDDHHMMSSZ (4.1.2.5.2) of ASCII digits naming a real calendar time; anything else PulseError("certificate_time").
+    Up to 1.8.0 `strptime` ran outside any try: month 13 ended `verify` with a ValueError traceback (measured 2026-11-18)."""
+    if not isinstance(b, (bytes, bytearray)) or not re.fullmatch(rb"[0-9]{12}Z" if t == 0x17 else rb"[0-9]{14}Z", b) \
+            or t not in (0x17, 0x18):
         raise PulseError("certificate_time")
-    return datetime.strptime(s, "%Y%m%d%H%M%SZ").replace(tzinfo=timezone.utc)
+    s = b.decode("ascii")
+    if t == 0x17:
+        s = ("19" if int(s[:2]) >= 50 else "20") + s
+    try:   # fixed fields: datetime() refuses month 13, 30 February, hour 24, second 60
+        return datetime(int(s[0:4]), int(s[4:6]), int(s[6:8]), int(s[8:10]), int(s[10:12]), int(s[12:14]),
+                        tzinfo=timezone.utc)
+    except ValueError:
+        raise PulseError("certificate_time")
 
 
 def read_certificate(pem):
