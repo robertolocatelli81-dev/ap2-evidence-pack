@@ -51,7 +51,8 @@ def kb_with(typ) -> str:
 def py_outcome(typ):
     """'ok' (the typ check passed: no holder key, so the KB-JWT is present and not verified) or the refusal"""
     try:
-        r = A.verify_kb_jwt({"kb_jwt": kb_with(typ)}, {})
+        kb = kb_with(typ)   # 1.8.1: verify_kb_jwt reads the presentation (sd_hash) without the holder key too: a parsed SD-JWT
+        r = A.verify_kb_jwt({"kb_jwt": kb, "compact": "h.p.s~" + kb}, {})
         return "ok" if (r["present"], r["verified"]) == (True, None) else f"other {r}"
     except A.Ap2EvidenceError as e:
         return str(e)
@@ -69,7 +70,7 @@ def js_outcomes(typs):
         with open(os.path.join(d, "run.mjs"), "w", encoding="utf-8") as f:
             f.write('import { __verifyKbJwt } from "./m.mjs";\nimport { readFileSync } from "node:fs";\n'
                     'const out = [];\nfor (const kb of JSON.parse(readFileSync(process.argv[2], "utf8"))) {\n'
-                    '  try { const r = __verifyKbJwt({ kbJwt: kb }, {});\n'
+                    '  try { const r = __verifyKbJwt({ kbJwt: kb, compact: "h.p.s~" + kb }, {});\n'
                     '    out.push(r.present === true && r.verified === null ? "ok" : "other " + JSON.stringify(r)); }\n'
                     '  catch (e) { out.push(e.message); } }\nprocess.stdout.write(JSON.stringify(out));\n')
         p = subprocess.run(["node", os.path.join(d, "run.mjs"), os.path.join(d, "in.json")], capture_output=True,

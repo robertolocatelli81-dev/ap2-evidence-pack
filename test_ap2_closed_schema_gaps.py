@@ -111,7 +111,10 @@ class TestClosedSchemaGaps(unittest.TestCase):
             edits = [("claims_recorded_not_validated", dict(kb.get("claims_recorded_not_validated", {}), x_unknown=1)),
                      ("claims_recorded_not_validated", dict(kb.get("claims_recorded_not_validated", {}), aud="someone else")),
                      ("verified", True if kb.get("verified") is not True else False),
-                     ("signature_ok", not kb.get("signature_ok", False)), ("sd_hash_ok", not kb.get("sd_hash_ok", False))]
+                     ("signature_ok", not kb.get("signature_ok", False)),
+                     # 1.8.1 (SPEC §9.2): without cnf.jwk sd_hash_ok is recomputed too (true here) and not sealed by the
+                     # builder, so the contradicting value is false in both branches
+                     ("sd_hash_ok", not kb.get("sd_hash_ok", True))]
             for k, v in edits:
                 with self.subTest(with_cnf=with_cnf, key=k, value=v):
                     ev = copy.deepcopy(built); ev["artifacts"][0]["kb_jwt"][k] = v

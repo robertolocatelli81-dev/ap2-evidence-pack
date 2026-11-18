@@ -146,7 +146,9 @@ class TestSdJwtProcessingRules(_Base):
     claim inserted twice, not for the rule (measured 2026-10-28 and 2026-10-29, both verifiers)."""
 
     def _token(self, payload, discs):
-        return _sign_jwt(self.sk, {"alg": "ES256", "typ": "ap2-mandate+sd-jwt", "jwk": self.jwk}, payload) + "~" + "~".join(discs) + "~"
+        # 1.8.1: RFC 9901 §4 serialization, each disclosure followed by '~' (with no disclosure this wrote "<jwt>~~", an
+        # empty component that 1.8.0 dropped in silence and SPEC §6 step 2 now refuses)
+        return _sign_jwt(self.sk, {"alg": "ES256", "typ": "ap2-mandate+sd-jwt", "jwk": self.jwk}, payload) + "~" + "".join(d + "~" for d in discs)
 
     def _resolve(self, payload, discs):
         p = ap2.parse_sd_jwt(self._token(payload, discs))

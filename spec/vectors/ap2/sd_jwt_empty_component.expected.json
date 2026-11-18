@@ -1,0 +1,59 @@
+{
+ "description": "An empty component between two '~'. RFC 9901 §4: DISCLOSURE = BASE64URL, at least one character; only the last component may be empty. Measured 2026-11-18 on v1.8.0: both verifiers valid: true (the empty component dropped in silence). 1.8.1 (SPEC §6 step 2): that artifact's error, sd_jwt_empty_component.",
+ "normative": {
+  "anchors_verified": 0,
+  "bindings_ok": false,
+  "digest_ok": true,
+  "policy_ok": true,
+  "pq_protected": false,
+  "producer_ok": null,
+  "producer_present": false,
+  "producer_trusted": null,
+  "rfc3161_claimed": false,
+  "rfc3161_verified": null,
+  "self_asserted_only": true,
+  "valid": false
+ },
+ "policy": {},
+ "states": {
+  "admission": "admitted",
+  "policy": {
+   "met": true,
+   "unmet": []
+  },
+  "refusal_class": null,
+  "subjects": {
+   "holder_binding": {
+    "reasons": [
+     "not_present"
+    ],
+    "state": "not_evaluated"
+   },
+   "issuer_identity": {
+    "reasons": [
+     "not_present"
+    ],
+    "state": "not_evaluated"
+   },
+   "producer_signature": {
+    "reasons": [
+     "not_present"
+    ],
+    "state": "not_evaluated"
+   },
+   "sealed_content": {
+    "reasons": [
+     "artifact_invalid"
+    ],
+    "state": "contradicted"
+   },
+   "time_anchor": {
+    "reasons": [
+     "not_present"
+    ],
+    "state": "not_evaluated"
+   }
+  }
+ },
+ "vector": "sd_jwt_empty_component"
+}

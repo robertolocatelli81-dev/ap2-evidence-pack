@@ -95,11 +95,17 @@ function jsonOf(buf) { const t = UTF8.decode(buf); return parseStrict(t, true); 
 // ---- SD-JWT ----
 function parseSdJwt(compact) {
   if (typeof compact !== "string") throw new Refused("sd_jwt_compact not a string");
-  compact = compact.trim(); let jwt, middle, kb;
-  if (compact.includes("~")) { const parts = compact.split("~"); jwt = parts[0]; middle = parts.slice(1, -1); kb = parts[parts.length - 1] || null; } else { jwt = compact; middle = []; kb = null; }
+  compact = compact.trim();
+  // 1.8.1 (SPEC §6 step 2, RFC 9901 §4): the grammar is closed, as the reference — no '~', an empty component before the last, or a last
+  // component that is neither empty nor a KB-JWT (three dot-separated segments) is refused by name (up to 1.8.0: read as a plain JWT,
+  // dropped in silence, taken as the KB-JWT)
+  if (!compact.includes("~")) throw new Refused("sd_jwt_no_separator: an SD-JWT has at least one '~' after the issuer JWT (RFC 9901 §4: <Issuer-signed JWT>~<D.1>~...~<D.N>~[<KB-JWT>])");
+  const parts = compact.split("~"); const jwt = parts[0]; const middle = parts.slice(1, -1); const kb = parts[parts.length - 1] || null;
+  if (middle.some((d) => d === "")) throw new Refused("sd_jwt_empty_component: an empty component between two '~' (RFC 9901 §4: DISCLOSURE = 1*base64url; only the last component may be empty)");
+  if (kb !== null && kb.split(".").length !== 3) throw new Refused("sd_jwt_final_component_not_kb_jwt: the last '~'-separated component is neither empty nor a KB-JWT of three dot-separated segments (RFC 9901 §4: an SD-JWT ends with '~')");
   const seg = jwt.split("."); if (seg.length !== 3) throw new Refused("issuer JWT must have 3 dot-separated segments");
   let header, payload; try { header = jsonOf(b64uDecode(seg[0])); payload = jsonOf(b64uDecode(seg[1])); } catch (e) { throw new Refused("JWT header/payload not valid JSON/base64url: " + e.message); }
-  return { compact, jwt, header, payload, signature: b64uDecode(seg[2]), signingInput: Buffer.from(seg[0] + "." + seg[1], "ascii"), disclosures: middle.filter((d) => d), kbJwt: kb };
+  return { compact, jwt, header, payload, signature: b64uDecode(seg[2]), signingInput: Buffer.from(seg[0] + "." + seg[1], "ascii"), disclosures: middle, kbJwt: kb };
 }
 function resolveDisclosures(payload, disclosures) {
   // r2: SHAPES imposed, present-with-null is not absent (`??` said it was; the reference's dict.get did not): _sd_alg absent or "sha-256",
@@ -227,13 +233,14 @@ function verifyKbJwt(parsed, resolved) {
   ignored.cnf = unknownMembers(cnf, CNF_REGISTERED);   // RFC 7800 §3.1: not understood -> ignored, here reported
   b64uDecode(seg[2]);   // §3.1 applies to all three segments even when the holder key is unknown (see the reference)
   const recorded = {}; for (const k of ["aud", "nonce", "iat"]) if (k in payload) recorded[k] = payload[k];   // the sealed scope says these are RECORDED whenever a KB-JWT is present
+  const presentation = parsed.compact.slice(0, parsed.compact.lastIndexOf("~")) + "~";
+  const sdHashOk = payload.sd_hash === b64u(sha256(Buffer.from(presentation, "ascii")));   // RFC 9901 §4.3.1: no key needed
   const jwk = cnf !== undefined && "jwk" in cnf ? cnf.jwk : undefined;
-  if (jwk === undefined) return { present: true, verified: null, claims_recorded_not_validated: recorded, note: "no cnf.jwk in issuer payload — holder key unknown (declared)", _ignored: ignored };
+  // 1.8.1 (SPEC §9.2): sd_hash checked without the holder key too; `verified` stays null, as the reference
+  if (jwk === undefined) return { present: true, verified: null, sd_hash_ok: sdHashOk, claims_recorded_not_validated: recorded, note: "no cnf.jwk in issuer payload — holder key unknown (declared)", _ignored: ignored };
   if (jwk === null || typeof jwk !== "object" || Array.isArray(jwk)) throw new Refused("cnf.jwk must be an object");
   ignored.cnf_jwk = unknownMembers(jwk, JWK_REGISTERED);   // RFC 7517 §4
   const sigOk = es256Verify(Buffer.from(seg[0] + "." + seg[1], "ascii"), b64uDecode(seg[2]), jwk);
-  const presentation = parsed.compact.slice(0, parsed.compact.lastIndexOf("~")) + "~";
-  const sdHashOk = payload.sd_hash === b64u(sha256(Buffer.from(presentation, "ascii")));
   return { present: true, verified: Boolean(sigOk && sdHashOk), signature_ok: sigOk, sd_hash_ok: sdHashOk, note: null, claims_recorded_not_validated: recorded, _ignored: ignored };   // final check: the sealed scope says these are RECORDED — the reference did it, this verifier did not
 }
 const PROVENANCE_CLASSES = new Set(["supplied", "x5c_header", "jwk_header", "jwks_fetched"]);

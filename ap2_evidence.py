@@ -362,13 +362,23 @@ def _utcnow() -> str:
 
 def parse_sd_jwt(compact: str) -> Dict:
     """Split an SD-JWT compact serialization: <jwt>~<disclosure>*~[<kb-jwt>].
-    A trailing '~' means no key-binding JWT. Returns raw parts, decoded header/payload."""
+    A trailing '~' means no key-binding JWT. Returns raw parts, decoded header/payload.
+    1.8.1 (SPEC §6 step 2, RFC 9901 §4): the grammar is closed. No '~' at all (`sd_jwt_no_separator`), an empty component
+    before the last (`sd_jwt_empty_component`), or a last component that is neither empty nor a KB-JWT (three
+    dot-separated segments; `sd_jwt_final_component_not_kb_jwt`, e.g. a missing trailing '~') is refused with that name.
+    Up to 1.8.0 they were read as a JWT with no disclosures, dropped in silence, and taken as the KB-JWT."""
     compact = compact.strip()
-    if "~" in compact:
-        parts = compact.split("~")
-        jwt, middle, kb = parts[0], parts[1:-1], parts[-1] or None
-    else:
-        jwt, middle, kb = compact, [], None
+    if "~" not in compact:
+        raise Ap2EvidenceError("sd_jwt_no_separator: an SD-JWT has at least one '~' after the issuer JWT "
+                               "(RFC 9901 §4: <Issuer-signed JWT>~<D.1>~...~<D.N>~[<KB-JWT>])")
+    parts = compact.split("~")
+    jwt, middle, kb = parts[0], parts[1:-1], parts[-1] or None
+    if any(d == "" for d in middle):
+        raise Ap2EvidenceError("sd_jwt_empty_component: an empty component between two '~' "
+                               "(RFC 9901 §4: DISCLOSURE = 1*base64url; only the last component may be empty)")
+    if kb is not None and kb.count(".") != 2:
+        raise Ap2EvidenceError("sd_jwt_final_component_not_kb_jwt: the last '~'-separated component is neither empty nor "
+                               "a KB-JWT of three dot-separated segments (RFC 9901 §4: an SD-JWT ends with '~')")
     seg = jwt.split(".")
     if len(seg) != 3:   # 1.8.0 (SPEC §13): the dots found are named
         raise Ap2EvidenceError(f"issuer JWT must have 3 dot-separated segments (found {len(seg) - 1} dot(s))")
@@ -380,7 +390,7 @@ def parse_sd_jwt(compact: str) -> Dict:
     return {"compact": compact, "jwt": jwt, "header": header, "payload": payload,
             "signature": _b64url_decode(seg[2]),
             "signing_input": f"{seg[0]}.{seg[1]}".encode("ascii"),
-            "disclosures": [d for d in middle if d], "kb_jwt": kb}
+            "disclosures": list(middle), "kb_jwt": kb}
 
 
 # ---- SPEC §13: the JOSE header profile (1.8.0) ----------------------------------------------------------------------
@@ -1091,8 +1101,10 @@ def verify_kb_jwt(parsed: Dict, resolved_claims: Dict) -> Dict:
     # returns before the signature is ever decoded (found by probing the six uncovered KB-JWT branches)
     recorded = {k: payload.get(k) for k in ("aud", "nonce", "iat") if k in payload}   # final check: the sealed scope says
     # these are RECORDED whenever a KB-JWT is present — this branch returned before recording them, in both verifiers
-    if "jwk" not in cnf:
-        return {"present": True, "verified": None, "claims_recorded_not_validated": recorded,
+    presentation = parsed["compact"].rsplit("~", 1)[0] + "~"
+    sd_hash_ok = payload.get("sd_hash") == _sha256_b64url(presentation.encode("ascii"))   # RFC 9901 §4.3.1: no key needed
+    if "jwk" not in cnf:   # 1.8.1 (SPEC §9.2): sd_hash checked here too; `verified` stays null, the signature is not checked
+        return {"present": True, "verified": None, "sd_hash_ok": sd_hash_ok, "claims_recorded_not_validated": recorded,
                 "note": "no cnf.jwk in issuer payload — holder key unknown (declared)", "_ignored": ignored}
     jwk = cnf["jwk"]
     if not isinstance(jwk, dict):
@@ -1100,8 +1112,6 @@ def verify_kb_jwt(parsed: Dict, resolved_claims: Dict) -> Dict:
     ignored["cnf_jwk"] = _unknown_members(jwk, _JWK_REGISTERED)   # RFC 7517 §4
     sig_ok = verify_es256(f"{seg[0]}.{seg[1]}".encode("ascii"),
                           _b64url_decode(seg[2]), jwk)
-    presentation = parsed["compact"].rsplit("~", 1)[0] + "~"
-    sd_hash_ok = payload.get("sd_hash") == _sha256_b64url(presentation.encode("ascii"))
     return {"present": True, "verified": bool(sig_ok and sd_hash_ok),
             "signature_ok": sig_ok, "sd_hash_ok": sd_hash_ok, "note": None,
             "claims_recorded_not_validated": recorded, "_ignored": ignored}
@@ -1753,6 +1763,8 @@ def _build_evidence(artifacts: List[Dict], out_path: str,
         if _key_material_not_used(parsed["header"], key["provenance_class"]):
             not_used[a["name"]] = _key_material_not_used(parsed["header"], key["provenance_class"])
         kb = verify_kb_jwt(parsed, v["resolved_claims"]); kb.pop("_ignored", None)   # the receipt's report, not part of the sealed copy
+        if kb.get("verified") is None:   # 1.8.1 (SPEC §9.2): sd_hash_ok of the holder-key-unknown branch is the receipt's,
+            kb.pop("sd_hash_ok", None)   # not sealed: a 1.8.0 verifier, which does not recompute it there, refuses a copy with it
         if kb.get("verified") is False:
             raise Ap2EvidenceError(f"artifact {a['name']!r}: KB-JWT holder binding "
                                    "INVALID (build refused — no evidence file for a red light)")

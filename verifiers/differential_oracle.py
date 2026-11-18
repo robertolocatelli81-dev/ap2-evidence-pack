@@ -63,7 +63,7 @@ def _forged_tsr(digest, extra_tst=b""):
 # NB: the gen_time below is the probe TSA token's own genTime — regenerating the anchor vectors changes it and this
 # declaration must be updated with them (the run then reports the mismatch instead of silently passing).
 # the cases that must PASS: they prove the bench can tell green from red (never hostile files)
-POSITIVE_CONTROLS = frozenset({"non-ascii-subject-rehashed", "fresh-pack-control-valid", "must-created_utc-ok", "file-exactly-at-the-bound",
+POSITIVE_CONTROLS = frozenset({"non-ascii-subject-rehashed", "kb-no-cnf-sd-hash-right", "fresh-pack-control-valid", "must-created_utc-ok", "file-exactly-at-the-bound",
                                "nb-valid"})   # 1.8.0: the not_before pack built by the reference
 MAX_EVIDENCE_BYTES = 64 << 20
 # 25/09/2026 — what a verifier must refuse BEFORE reading it, with a DECLARED reason that both must give: agreement alone is
@@ -209,6 +209,13 @@ def _refused_key(text):
     return text if ("(SPEC §9.1)" in text or "(SPEC §3.3)" in text) else "<refused>"
 
 
+def _sdjwt_error(text):
+    """1.8.1: the name an SD-JWT grammar refusal carries first (SPEC §6 step 2), the same in both verifiers; "error" otherwise"""
+    import re
+    m = re.match(r"(?:Ap2EvidenceError: )?(sd_jwt_[a-z_]+):", str(text))
+    return m.group(1) if m else "error"
+
+
 def run(cmd, path, flags):
     out = None
     try:
@@ -225,7 +232,11 @@ def run(cmd, path, flags):
                # 1.7.3 — SPEC §9.2: each artifact's ignored names (key_material included), or that it is an error
                tuple("error" if "error" in a else json.dumps(a.get("ignored"), sort_keys=True) for a in (r.get("artifacts") or [])),
                # 1.8.0 — SPEC §12.3: the whole not_before receipt (checks, window, covers, payee, state), or None
-               json.dumps(r.get("not_before"), sort_keys=True))
+               json.dumps(r.get("not_before"), sort_keys=True),
+               # 1.8.1 — SPEC §6 step 2, §9.2: each artifact's KB-JWT receipt (sd_hash_ok without cnf.jwk included), or the
+               # name of its SD-JWT grammar error (RFC 9901 §4), or that it is another error
+               tuple(_sdjwt_error(a["error"]) if "error" in a else json.dumps(a.get("kb_jwt"), sort_keys=True)
+                     for a in (r.get("artifacts") or [])))
         return (r.get("valid"), r.get("digest_ok"), r.get("bindings_ok"), prod.get("present"), prod.get("ok"), prod.get("trusted"),
                 r.get("pq_protected"), ts.get("claimed"), ts.get("verified"), ts.get("granted"), ts.get("imprint_ok"), ts.get("gen_time"),
                 r.get("policy_ok"), r.get("self_asserted_only"), r.get("chain_verified"), tuple(r.get("provenance_classes") or ()),
@@ -296,6 +307,21 @@ def build_cases(d):
     c = base["artifacts"][binder]["sd_jwt_compact"]; parts = c.split("~"); h, p_, s_ = parts[0].split(".")
     for nm, sig in (("sig-b64url-space", s_[:10] + " " + s_[10:]), ("sig-b64url-padded", s_ + "=="), ("sig-b64url-plus", s_.replace("-", "+", 1) if "-" in s_ else s_[:-1] + "+")):
         e = copy.deepcopy(base); pp = parts[:]; pp[0] = ".".join([h, p_, sig]); e["artifacts"][binder]["sd_jwt_compact"] = "~".join(pp); cases[nm] = (w(nm, json.dumps(rehash(e))), [])
+    # 1.8.1 — SPEC §6 step 2 (RFC 9901 §4): the grammar of the binder's compact serialization, digest recomputed
+    for nm, cc in (("sdjwt-no-trailing-tilde", c[:-1] if c.endswith("~") else c), ("sdjwt-no-separator", parts[0]),
+                   ("sdjwt-empty-component", parts[0] + "~~" + "~".join(parts[1:])),
+                   ("sdjwt-final-two-segments", c + "a.b"), ("sdjwt-final-four-segments", c + "a.b.c.d")):
+        e = copy.deepcopy(base); e["artifacts"][binder]["sd_jwt_compact"] = cc; cases[nm] = (w(nm, json.dumps(rehash(e))), [])
+    # 1.8.1 — SPEC §9.2: a KB-JWT without cnf.jwk whose sd_hash commits to another presentation (its signature is not
+    # checked without the key, so the payload is changed in place); both verifiers must report sd_hash_ok false, valid
+    hk = _load(os.path.join(vdir, "holder_key_unknown.json")); hc = hk["artifacts"][0]["sd_jwt_compact"]
+    pres, kbj = hc.rsplit("~", 1); kh, kp, ks = kbj.split(".")
+    kpay = json.loads(base64.urlsafe_b64decode(kp + "=" * (-len(kp) % 4)))
+    for nm, sh in (("kb-no-cnf-sd-hash-right", kpay["sd_hash"]),
+                   ("kb-no-cnf-sd-hash-wrong", base64.urlsafe_b64encode(hashlib.sha256(b"another~").digest()).decode().rstrip("="))):
+        np_ = base64.urlsafe_b64encode(json.dumps(dict(kpay, sd_hash=sh), separators=(",", ":")).encode()).decode().rstrip("=")
+        e = copy.deepcopy(hk); e["artifacts"][0]["sd_jwt_compact"] = pres + "~" + ".".join([kh, np_, ks])
+        cases[nm] = (w(nm, json.dumps(rehash(e))), [])
     # review r1: top-level field SHAPES (Python raised TypeError/AttributeError; JS answered), empty producer block, lenient
     # tsr_b64 / JWK coordinates, deep JWT header, non-object payload, trailing NBSP on the compact serialization
     for nm, mut in (("artifacts-null", lambda e: e.__setitem__("artifacts", None)), ("artifacts-string", lambda e: e.__setitem__("artifacts", "x")),

@@ -1,5 +1,37 @@
 # Changelog
 
+## Unreleased (1.8.1) — the SD-JWT grammar closed; sd_hash checked without the holder key
+
+SPEC 1.8.1 (§6 step 2, §7, §9.2; written before the code). Measured on 2026-11-18 on the PyPI wheel 1.7.3 (sha256
+109227df…203b5c00) and on the tag v1.8.0 (d5601e4), identical in both:
+
+- **The grammar of `sd_jwt_compact` (RFC 9901 §4, Proposed Standard, November 2025).** `parse_sd_jwt` split on `~` and
+  took the last component as the KB-JWT whatever it was, dropped empty components, and read a JWT without `~` as an
+  SD-JWT with no disclosures. `<jwt>~<d1>~<d2>` (the trailing `~` omitted) gave one disclosure and `<d2>` as the KB-JWT:
+  `resolve_disclosures` answered without `d2`, and only `verify_kb_jwt` refused, as "kb-jwt must have 3 dot-separated
+  segments" (build refused, verify an artifact error with that text, both verifiers). `<jwt>` and `<jwt>~~<d1>~<d2>~`
+  (and `<jwt>~<d1>~<d2>~~`) built and verified `valid: true` in both verifiers. Now each is that artifact's error, named
+  first in the text: `sd_jwt_no_separator`, `sd_jwt_empty_component`, `sd_jwt_final_component_not_kb_jwt` (a last
+  component that is not empty and not three dot-separated segments). Verdicts that change: a pack whose artifact is a
+  bare JWT, or has an empty component, was `valid` and is not; the 84 artifacts of the shipped vectors are none of these
+  (79 end with `~`, 5 with a KB-JWT). One test helper of this repository wrote `<jwt>~~` for a token without disclosures
+  (test_ap2_evidence.py), corrected.
+- **`sd_hash` without `cnf.jwk`.** `verify_kb_jwt` returned `verified: null` and did not compute `sd_hash`, so a KB-JWT
+  bound to another presentation gave the same receipt as a right one. `sd_hash` needs no key (RFC 9901 §4.3.1): both
+  verifiers now report `kb_jwt.sd_hash_ok` in that branch too; `verified` stays `null`, the state `not_evaluated /
+  holder_key_unknown`, `valid` unchanged. `build` does not seal the member in that branch, so a 1.8.0 verifier, which
+  would refuse a sealed `sd_hash_ok` it does not recompute (§9.1), reads a 1.8.1 pack; a copy that carries it must equal
+  the recomputation, as with a key.
+- Vectors: + `sd_jwt_no_separator`, `sd_jwt_empty_component` (both `valid` under 1.8.0 in both verifiers),
+  `sd_jwt_no_trailing_tilde` (an artifact error under 1.8.0 too, for the other reason); 56 vectors.
+  `verifiers/differential_oracle.py` compares each artifact's KB-JWT receipt and the name of a grammar error, with seven
+  new hostile files: 0 disagreements on 501 cases (12 declared); against the 1.8.0 JavaScript verifier the same oracle
+  gives 12 disagreements, all of them these cases. `test_ap2_sdjwt_grammar.py`: 1 500 generated serializations (0 to 4
+  disclosures, empty components anywhere, KB-JWT present or absent, last components of one, two and four segments, no
+  `~`), each expected from the RFC 9901 ABNF and the generator's labels, in both verifiers, and `sd_hash` right or wrong
+  with and without `cnf.jwk` over 0 to 3 disclosures; on v1.8.0, 6 of its 8 tests fail; each of the three grammar checks
+  and the new `sd_hash_ok`, removed alone, turns it red.
+
 ## 1.8.0 — 2026-11-18 — a "not before" bound: a NIST Beacon value sealed with the payment
 
 SPEC §12, the optional top-level block `not_before`, inside the §3 digest: one object with salted commitments to the

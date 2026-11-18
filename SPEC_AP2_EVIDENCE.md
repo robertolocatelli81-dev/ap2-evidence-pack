@@ -1,8 +1,20 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Copyright 2026 Roberto Locatelli -->
 
-# ap2-evidence-pack — normative format v1.0 (2026-09-05), specification revision 1.8.0 (2026-11-18)
+# ap2-evidence-pack — normative format v1.0 (2026-09-05), specification revision 1.8.1 (2026-11-18)
 
+> Revision 1.8.1 (2026-11-18): §6 step 2, the grammar of `sd_jwt_compact` is closed (RFC 9901 §4, Proposed Standard,
+> November 2025, no errata listed on 2026-11-18): no `~` at all (`sd_jwt_no_separator`), an empty component before the
+> last (`sd_jwt_empty_component`), or a last component that is neither empty nor a KB-JWT of three dot-separated segments
+> (`sd_jwt_final_component_not_kb_jwt`, a missing trailing `~`) is that artifact's error, named. Up to 1.8.0 the first was
+> read as a JWT with no disclosures (`valid: true`), the second dropped in silence (`valid: true`), and the third taken as
+> the KB-JWT, so the last disclosure vanished from `resolve_disclosures` and the artifact failed only later, as "kb-jwt
+> must have 3 dot-separated segments" (measured on 2026-11-18 on the PyPI wheel 1.7.3 and on the tag v1.8.0, both
+> verifiers). §6 step 2 and §9.2: without `cnf.jwk` the KB-JWT's `sd_hash` is checked too (RFC 9901 §4.3.1 needs no key)
+> and the receipt reports `sd_hash_ok`; `verified` stays `null` and the state `not_evaluated / holder_key_unknown`, the
+> verdict does not change (up to 1.8.0 a right and a wrong `sd_hash` gave the same receipt). Three vectors added (§7).
+> §1, §3–§5, §8 and §10–§13 are unchanged.
+>
 > Revision 1.8.0 (2026-11-18): §12, the `not_before` block — a NIST Beacon pulse inside the sealed
 > content, in one object with salted commitments to the payer's and payee's IBANs (and names and details), the amount,
 > the currency, a payment id and a record salt — no personal data in clear; a lower time bound to go with the RFC 3161
@@ -462,7 +474,13 @@ flags: `require_producer`, `require_pq`, `require_anchor`, and `min_anchors` (1.
    by SHA-256 (§1, §8), and unless `subject`, `created_utc`, `honest_scope` are strings
    (§1 MUSTs — 1.1.0 r5: a `…/2.0` pack used to be verified under the 1.0 rules, and a pack
    with no `honest_scope` produced a receipt with `honest_scope: null`). Recompute the digest (§3) → `digest_ok`.
-2. For EVERY artifact: parse `sd_jwt_compact` (its JSON under the §3.1 profile, numbers in the SD-JWT layer as its 1.7.2
+2. For EVERY artifact: parse `sd_jwt_compact` (1.8.1, its grammar closed as RFC 9901 §4 writes it: `SD-JWT = JWT "~"
+   *(DISCLOSURE "~")`, `SD-JWT-KB = SD-JWT KB-JWT`, `DISCLOSURE = BASE64URL` of at least one character; "In the case that
+   there is no Key Binding JWT, the last element MUST be an empty string and the last separating tilde character MUST NOT
+   be omitted". Split on `~`: no `~` → `sd_jwt_no_separator`; an empty component other than the last →
+   `sd_jwt_empty_component`; a last component that is not empty and not three dot-separated segments →
+   `sd_jwt_final_component_not_kb_jwt`; each that artifact's error, its name first in the error text; vectors
+   `sd_jwt_no_separator`, `sd_jwt_empty_component`, `sd_jwt_no_trailing_tilde`; its JSON under the §3.1 profile, numbers in the SD-JWT layer as its 1.7.2
    paragraph says, with or without `accept_integral_floats`); apply the JOSE rules of §9.2 to the
    protected header (`crit` → RFC 7515 §4.1.11, unknown parameters ignored and reported); 1.7.3, compare every key source
    of the header that is not the source of the snapshotted key (§2 (d)): a `jwk` or `x5c` naming another key, or not a
@@ -499,7 +517,9 @@ flags: `require_producer`, `require_pq`, `require_anchor`, and `min_anchors` (1.
    `resolved_claims`; re-verify the KB-JWT when the issuer payload carries
    `cnf.jwk` (its ES256 signature under `cnf.jwk`, AND its `sd_hash` equal to BASE64URL(SHA-256) of
    `issuer-JWT~disclosure*~` — RFC 9901 §7.3 step 5.c and 5.g; a KB-JWT that fails either verifies FALSE; without `cnf.jwk` a present
-   KB-JWT is recorded as unverifiable, never treated as verified-green, and
+   KB-JWT is recorded as unverifiable, never treated as verified-green (1.8.1: its `sd_hash` is still compared, RFC 9901
+   §4.3.1 needs no key, and the receipt's `kb_jwt.sd_hash_ok` says the outcome while `verified` stays `null`; a producer
+   does not seal that member, so a 1.8.0 verifier reads the pack), and
    never fails the pack by itself — but a KB-JWT that verifies FALSE does, and a §3.1 profile
    violation in any of its three segments is that artifact's failure whether or not the holder
    key is known: the strict segment rule does not depend on being able to check the signature;
@@ -671,7 +691,10 @@ openssl ABSENT is neither: as in 1.5.x the field is `null` (`tsa_verified`, `cha
 Run every `spec/vectors/ap2/<name>.json` under the policy in
 `<name>.expected.json` and reproduce the `normative` block exactly
 (`run_ap2_conformance.py` does this for the reference; exit 0 = conformant).
-The set contains fifty-three vectors (1.7.3: + 3, the key sources of the header of §2 (d) — `key_header_jwk_differs`, a
+The set contains fifty-six vectors (1.8.1: + 3, the grammar of §6 step 2 — `sd_jwt_no_separator` and
+`sd_jwt_empty_component`, both `valid` under 1.8.0 in both verifiers, and `sd_jwt_no_trailing_tilde`, an artifact error
+under 1.8.0 too, with another reason; each an artifact error, `sealed_content` `contradicted` `artifact_invalid`, no
+producer block; the error text is not part of the normative block; 1.7.3: + 3, the key sources of the header of §2 (d) — `key_header_jwk_differs`, a
 `supplied` key beside a header `jwk` naming another key, and `key_header_x5c_differs`, a `jwks_fetched` key beside an `x5c`
 whose leaf is another key, both an artifact error, `sealed_content` `contradicted` `artifact_invalid`; `key_material_not_used`,
 a `supplied` key beside a header `jwk` and `x5c` of the same key and a `jku`, valid, with `report.ignored` — no producer block,
@@ -809,7 +832,7 @@ or JWK member is ignored and reported — `header_param_ignored`, `key_jwk_membe
 | issuer JWT payload | RFC 7519 §4: "all claims that are not understood by implementations MUST be ignored" | every claim is RECORDED: the resolved payload is the pack's content and `resolved_claims` lists it in full, so nothing is reported twice; the SD-JWT shapes of RFC 9901 (`_sd`, `_sd_alg`, `...`) are imposed as in §3.1 |
 | `cnf` | RFC 7800 §3.1: "all confirmation members that are not understood by implementations MUST be ignored" | understood: `jwk`, `jwe`, `jku`, `kid` (the members RFC 7800 defines, §3.2–§3.5; other confirmation methods of the IANA registry, e.g. `x5t#S256` of RFC 8705 or `jkt` of RFC 9449, are not understood here). Others ignored and reported in `ignored.cnf` |
 | KB-JWT header | RFC 7515 as above; RFC 9901 §4.3: `typ` REQUIRED, MUST be `kb+jwt`; `alg` REQUIRED | `typ` missing, not a string, or not `kb+jwt` as RFC 7515 §4.1.9 compares media types (§13; since 1.8.0, byte for byte before) is that artifact's error (RFC 9901 §4.3; RFC 9901 §7.3 step 5.d asks a Verifier to check it when Key Binding is required — this format checks every KB-JWT it carries, whether or not the holder key is known); `alg` not `"ES256"` is that artifact's error by this format's profile (§6 step 2: `alg: "ES256"`; RFC 9901 §4.3 only forbids `none`); `crit` as above; other unregistered names ignored and reported in `ignored.kb_jwt_header` |
-| KB-JWT payload | RFC 7519 §4 (ignore); RFC 9901 §4.3: `iat`, `aud`, `nonce`, `sd_hash` REQUIRED | the four REQUIRED claims must be present with their RFC 9901 types (`iat` integer, the others strings) — absence or wrong type is that artifact's error; their VALUES are recorded, not validated (sealed scope). Registered names: `iss`, `sub`, `aud`, `exp`, `nbf`, `iat`, `jti` (RFC 7519 §4.1), `nonce`, `sd_hash` (RFC 9901). Others ignored and reported in `ignored.kb_jwt_claims` |
+| KB-JWT payload | RFC 7519 §4 (ignore); RFC 9901 §4.3: `iat`, `aud`, `nonce`, `sd_hash` REQUIRED | the four REQUIRED claims must be present with their RFC 9901 types (`iat` integer, the others strings) — absence or wrong type is that artifact's error; the VALUES of `iat`, `aud`, `nonce` are recorded, not validated (sealed scope); `sd_hash` is compared with the presentation (§6 step 2), with or without `cnf.jwk` since 1.8.1 (`sd_hash_ok` in the receipt). Registered names: `iss`, `sub`, `aud`, `exp`, `nbf`, `iat`, `jti` (RFC 7519 §4.1), `nonce`, `sd_hash` (RFC 9901). Others ignored and reported in `ignored.kb_jwt_claims` |
 
 `artifacts[i].ignored` is an object present on every artifact that verified; each slot above is
 a list of the ignored names sorted by code point and appears only when non-empty, so an

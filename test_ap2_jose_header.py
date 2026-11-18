@@ -60,7 +60,7 @@ class Real(unittest.TestCase):
     def test_dots_are_named(self):
         for text, dots in (("abc", 0), ("a.b", 1), ("a.b.c.d", 3), ("a.b.c.d.e", 4)):
             with self.assertRaises(A.Ap2EvidenceError) as c:
-                A.parse_sd_jwt(text)
+                A.parse_sd_jwt(text + "~")   # 1.8.1: an SD-JWT has a '~' (sd_jwt_no_separator otherwise, SPEC §6 step 2)
             self.assertIn(f"(found {dots} dot(s))", str(c.exception))
 
 
