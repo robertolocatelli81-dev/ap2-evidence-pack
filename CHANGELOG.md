@@ -54,8 +54,9 @@ a pack built by 1.8.x is read as before, with the bindings over the issuer JWT i
   format does not read, declared). A chain mixing two mandates (the SDK refuses it) is refused at build (§2.1).
 - **A plain JWS** (an AP2 receipt) enters as `<jwt>~`; `sd_jwt_no_separator` now says so.
 - **Benches.** `test_ap2_chains.py` (14 tests; on an archive of 6728413, with the vectors copied, the first 12 fail;
-  the two of the all-or-none rule fail on 5a09a53). The differential oracle gains the chain cases — packs built from the SDK and goodmeta vectors, the policy met
-  and unmet, the three new members given wrong values, removed and moved, ten CLI forms of `--require-binding` — and
+  the two of the all-or-none rule fail on 5a09a53). The differential oracle gains the chain cases — packs built from
+  the SDK and goodmeta vectors, the policy met and unmet, the three new members given wrong values, removed and moved,
+  ten CLI forms of `--require-binding` — and
   compares each artifact's `chain_hop`, the policy's missing pairs and `bindings_not_recorded`: 574 cases, 0
   disagreements, 12 declared (Node 24.19.0); with the JavaScript check of `chain_from` switched off it reported 1 (run
   when the cases were 569).
@@ -66,8 +67,8 @@ a pack built by 1.8.x is read as before, with the bindings over the issuer JWT i
   limit the token certificates the path may use (closed shapes: known algorithm, certHash of its length, no certificate
   twice, a later issuerSerial naming the certificate it hashes). Up to 1.8.x the key-identifier step refused any list
   longer than one, so a TSA that lists its chain was `tsa_verified: false` there (the same class as cryptovalid-opencore
-  SPEC v0.11 §11 step 7, Sectigo). `test_ap2_tsa_ess_ids.py`: 3 of 4 tests fail on the previous commit (the fourth, one
-  ESSCertID, is the control).
+  SPEC v0.11 §11 step 7, Sectigo). `test_ap2_tsa_ess_ids.py`: 3 of 4 tests fail on 6728413 and on v1.8.0 (the fourth,
+  one ESSCertID, is the control).
 
 ### Messages and help (measured on 1.8.0, 2026-11-18)
 
