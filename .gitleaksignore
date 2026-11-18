@@ -8,3 +8,9 @@ spec/vectors/ap2/kb_jwt_typ_missing.json:jwt:43
 spec/vectors/ap2/holder_kb_signature_invalid.json:jwt:43
 spec/vectors/ap2/holder_key_unknown.json:jwt:35
 spec/vectors/ap2/holder_sd_hash_mismatch.json:jwt:43
+# 1.8.1: sd_jwt_no_separator (the issuer JWT alone, no '~') and holder_sd_hash_mismatch_no_key (its KB-JWT) carry a
+# complete JWT signed by keys generated for the vector; test_ap2_jose_header.py:25 is the truncated, public AgID ModI
+# token prefix (rule generic-api-key), already reported by `gitleaks dir` on v1.8.0.
+spec/vectors/ap2/sd_jwt_no_separator.json:jwt:32
+spec/vectors/ap2/holder_sd_hash_mismatch_no_key.json:jwt:33
+test_ap2_jose_header.py:generic-api-key:25

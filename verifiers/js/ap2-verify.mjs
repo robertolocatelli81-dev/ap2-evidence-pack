@@ -282,7 +282,7 @@ function verifyKbJwt(parsed, resolved) {
   const sdHashOk = payload.sd_hash === b64u(sha256(Buffer.from(presentation, "ascii")));   // RFC 9901 §4.3.1: no key needed
   const jwk = cnf !== undefined && "jwk" in cnf ? cnf.jwk : undefined;
   // 1.8.1 (SPEC §9.2): sd_hash checked without the holder key too; `verified` stays null, as the reference
-  if (jwk === undefined && !sdHashOk) throw new Refused("sd_hash_mismatch: the KB-JWT sd_hash is not the hash of this presentation (RFC 9901 §4.3.1, §7.3 step 5.g; checked without cnf.jwk, SPEC §9.2)");   // 1.8.1, as the reference
+  if (jwk === undefined && !sdHashOk) throw new Refused("sd_hash_mismatch: the KB-JWT sd_hash is not the hash of this presentation (RFC 9901 §4.3.1; checked without cnf.jwk, SPEC §9.2)");   // 1.8.1, as the reference
   if (jwk === undefined) return { present: true, verified: null, sd_hash_ok: sdHashOk, claims_recorded_not_validated: recorded, note: "no cnf.jwk in issuer payload — holder key unknown (declared)", _ignored: ignored };
   if (jwk === null || typeof jwk !== "object" || Array.isArray(jwk)) throw new Refused("cnf.jwk must be an object");
   ignored.cnf_jwk = unknownMembers(jwk, JWK_REGISTERED);   // RFC 7517 §4

@@ -13,10 +13,13 @@ wheel 1.7.3 (sha256 109227df…203b5c00) and on the tag v1.8.0 (d5601e4); the tw
   `build` wrote the pack and both verifiers said `valid: true`. RFC 9901 §4: a Disclosure is at least one base64url
   character; only the last component may be empty.
 - **A KB-JWT without `cnf.jwk` whose `sd_hash` is the hash of another presentation**: `valid: true`, `holder_binding`
-  `not_evaluated / holder_key_unknown`, the same receipt as with the right `sd_hash`. RFC 9901 §7.3 step 5.g asks the
-  Verifier to check `sd_hash`, which needs no key (§4.3.1).
+  `not_evaluated / holder_key_unknown`, the same receipt as with the right `sd_hash`. RFC 9901 §4.3.1: the Holder MUST compute
+  `sd_hash` over this presentation, and checking it needs no key. RFC 9901 §7.3 step 5.g asks a Verifier to check it
+  only when Key Binding is required (and step 5.a then needs the holder key); this format checks it on every KB-JWT it
+  carries (SPEC §9.2, this format's rule, as it already did for the KB-JWT `typ`).
 
-Each is now that artifact's error, its name first in the error text: `sd_jwt_no_separator`, `sd_jwt_empty_component`,
+Each is now that artifact's error, its name first in the message (the Python receipt writes the exception class
+before it, `Ap2EvidenceError: sd_jwt_no_separator: …`): `sd_jwt_no_separator`, `sd_jwt_empty_component`,
 `sd_hash_mismatch` (in `verify` and in `build`). Not a green, but the same class:
 
 - **The trailing `~` omitted** (`<jwt>~<d1>~<d2>`): `<d2>` was taken as the KB-JWT, so `resolve_disclosures` answered
@@ -41,14 +44,18 @@ repository wrote `<jwt>~~` for a token without disclosures (test_ap2_evidence.py
   "signer_certificate_absent"`, `time_anchor` `not_evaluated / signer_certificate_absent` (ETSI EN 319 102-1 V1.4.1
   §5.2.3.3: INDETERMINATE / NO_SIGNING_CERTIFICATE_FOUND). Time bounds as with `tsa_invalid`: the token is not counted,
   gives no proven upper bound, `--require-anchor` is unmet if it was the one needed; the binding and `valid` otherwise
-  unchanged. Reference only (the JavaScript verifier checks no TSA). test_ap2_tsa_key_id.py: a key identifier that names
+  unchanged. A `--tsa-cert` file that cannot be read (a library call; the CLI refuses it as a usage error) presumes
+  nothing: openssl reports it, `tsa_verified: false`, as before. Reference only (the JavaScript verifier checks no TSA). test_ap2_tsa_key_id.py: a key identifier that names
   no certificate given is now `null` (was `false`).
 - **`typ` with parameters (§13).** `_media_type` folded the whole value, so `check_jose_header` found `x+jwt;p=A` equal
   to `x+jwt;p=a` (parameter values are case-sensitive, RFC 7515 §4.1.9) and `kb+jwt; p=a`, `kb+jwt;p="a"`,
   `KB+JWT;P=a` different from `kb+jwt;p=a` (measured on v1.8.0). Now the value is read as an RFC 9110 media type (type,
   subtype and parameter names folded A–Z, values as written, quoted-string equivalent to token, parameters in any order,
   a name twice or anything outside the grammar is no media type), in the reference and in the JavaScript verifier. A
-  KB-JWT `typ` with a parameter stays refused; an `expected_typ` that is no media type is a ValueError.
+  KB-JWT `typ` with a parameter stays refused; an `expected_typ` that is no media type is a ValueError. An empty
+  parameter is allowed by RFC 9110 §5.6.6, so `kb+jwt;`, `kb+jwt ;` and `KB+JWT;;` are now `kb+jwt` (an artifact error
+  under 1.8.0, valid now when the rest verifies), and `check_jose_header` likewise answers `ok` for `x+jwt;` against
+  `x+jwt` where 1.8.0 answered `typ_mismatch`.
 
 ### Tests and benches
 
@@ -56,7 +63,9 @@ repository wrote `<jwt>~~` for a token without disclosures (test_ap2_evidence.py
   1.8.0 in both verifiers), `sd_jwt_no_trailing_tilde` (an artifact error under 1.8.0 too, for the other reason); 57.
 - `verifiers/differential_oracle.py` compares each artifact's KB-JWT receipt and the name of a grammar or `sd_hash`
   error, with seven new hostile files: 0 disagreements on 502 cases (12 declared), measured on 2026-11-18 with Node
-  24.19.0; with the 1.8.0 JavaScript verifier in its place the same oracle gives 13 disagreements, all on these cases.
+  24.19.0; with the 1.8.0 JavaScript verifier in its place the same oracle gives 13 disagreements: the four new vectors, the seven new
+  hostile files, the vector `holder_key_unknown` (its receipt now carries `sd_hash_ok`) and the older hostile file
+  `kb-two-segments` (its last component is now named by the grammar).
 - `test_ap2_sdjwt_grammar.py`: 1 500 generated serializations (0 to 4 disclosures, empty components anywhere, KB-JWT
   present or absent, last components of one, two and four segments, no `~`), each expected from the RFC 9901 ABNF and the
   generator's labels, in both verifiers; `sd_hash` right or wrong with and without `cnf.jwk` over 0 to 3 disclosures; 7

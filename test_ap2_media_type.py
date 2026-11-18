@@ -101,7 +101,9 @@ NAMED = [("x+jwt;p=A", "x+jwt;p=a", False), ("kb+jwt;p=a", "kb+jwt; p=a", True),
          ("kb+jwt;a=1;b=2", "kb+jwt;b=2;a=1", True), ("kb+jwt;p=a;p=a", "kb+jwt;p=a", False),
          ("kb+jwt;p = a", "kb+jwt;p=a", False), ('kb+jwt;p="a\\"b"', 'kb+jwt;p="a\\"b"', True),
          ("kb+jwt;K=a", "kb+jwt;k=a", False), ("kb+jwt;p=K", "kb+jwt;p=k", False),
-         ("kb+jwt;", "kb+jwt", True), ("kb+jwt ", "kb+jwt", False), ("kb+jwt", "application/kb+jwt", True)]
+         ("kb+jwt;", "kb+jwt", True), ("kb+jwt ", "kb+jwt", False), ("kb+jwt", "application/kb+jwt", True),
+         ('kb+jwt;p="\\a"', "kb+jwt;p=a", True),
+         ('x+jwt;p="a/b"', 'application/x+jwt;p="a/b"', False)]   # RFC 7515 §4.1.9: a '/' anywhere, nothing prepended   # a quoted-pair is the character after the backslash (RFC 9110 §5.6.4)
 
 
 class MediaType(unittest.TestCase):

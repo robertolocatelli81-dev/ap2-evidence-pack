@@ -10,15 +10,15 @@
 > read as a JWT with no disclosures (`valid: true`), the second dropped in silence (`valid: true`), and the third taken as
 > the KB-JWT, so the last disclosure vanished from `resolve_disclosures` and the artifact failed only later, as "kb-jwt
 > must have 3 dot-separated segments" (measured on 2026-11-18 on the PyPI wheel 1.7.3 and on the tag v1.8.0, both
-> verifiers). §6 step 2 and §9.2: without `cnf.jwk` the KB-JWT's `sd_hash` is checked too (RFC 9901 §4.3.1 needs no key;
-> §7.3 step 5.g): a wrong one is that artifact's error, `sd_hash_mismatch` (up to 1.8.0 `valid: true`, the same receipt as
+> verifiers). §6 step 2 and §9.2: without `cnf.jwk` the KB-JWT's `sd_hash` is checked too (this format's rule: RFC 9901
+> §4.3.1 needs no key, and §7.3 step 5.g asks the check only when Key Binding is required): a wrong one is that artifact's error, `sd_hash_mismatch` (up to 1.8.0 `valid: true`, the same receipt as
 > a right one); a right one keeps `verified: null`, `sd_hash_ok: true`, `not_evaluated / holder_key_unknown`. §3.2: a
 > token whose signer certificate is not found is `tsa_verified: null`, `tsa_reason: "signer_certificate_absent"`,
 > `time_anchor` `not_evaluated / signer_certificate_absent` (up to 1.8.0 `false`, `tsa_invalid`). Four vectors added (§7).
 > §13: `typ` compared as a media type with the parameter values case-sensitive (RFC 7515 §4.1.9) and the grammar of
 > RFC 9110; up to 1.8.0 the whole value was folded, so `x+jwt;p=A` equalled `x+jwt;p=a` (measured on 2026-11-18 on
 > v1.8.0), against the 1.8.0 text of this section, which said parameters were "compared as written".
-> §1, §3–§5, §8 and §10–§12 are unchanged.
+> §1, §3.1, §3.3, §4, §5, §8 and §10–§12 are unchanged.
 >
 > Revision 1.8.0 (2026-11-18): §12, the `not_before` block — a NIST Beacon pulse inside the sealed
 > content, in one object with salted commitments to the payer's and payee's IBANs (and names and details), the amount,
@@ -503,7 +503,8 @@ flags: `require_producer`, `require_pq`, `require_anchor`, and `min_anchors` (1.
    there is no Key Binding JWT, the last element MUST be an empty string and the last separating tilde character MUST NOT
    be omitted". Split on `~`: no `~` → `sd_jwt_no_separator`; an empty component other than the last →
    `sd_jwt_empty_component`; a last component that is not empty and not three dot-separated segments →
-   `sd_jwt_final_component_not_kb_jwt`; each that artifact's error, its name first in the error text; vectors
+   `sd_jwt_final_component_not_kb_jwt`; each that artifact's error, its name first in the message (the reference's receipt writes `Ap2EvidenceError: ` before
+   it); vectors
    `sd_jwt_no_separator`, `sd_jwt_empty_component`, `sd_jwt_no_trailing_tilde`; its JSON under the §3.1 profile, numbers in the SD-JWT layer as its 1.7.2
    paragraph says, with or without `accept_integral_floats`); apply the JOSE rules of §9.2 to the
    protected header (`crit` → RFC 7515 §4.1.11, unknown parameters ignored and reported); 1.7.3, compare every key source
@@ -541,8 +542,8 @@ flags: `require_producer`, `require_pq`, `require_anchor`, and `min_anchors` (1.
    `resolved_claims`; re-verify the KB-JWT when the issuer payload carries
    `cnf.jwk` (its ES256 signature under `cnf.jwk`, AND its `sd_hash` equal to BASE64URL(SHA-256) of
    `issuer-JWT~disclosure*~` — RFC 9901 §7.3 step 5.c and 5.g; a KB-JWT that fails either verifies FALSE; without `cnf.jwk` a present
-   KB-JWT is recorded as unverifiable, never treated as verified-green (1.8.1: its `sd_hash` is still compared — RFC 9901
-   §7.3 step 5.g asks it and §4.3.1 needs no key — and a wrong one is that artifact's error, `sd_hash_mismatch`, in
+   KB-JWT is recorded as unverifiable, never treated as verified-green (1.8.1: its `sd_hash` is still compared — this
+   format's rule: §4.3.1 needs no key, and RFC 9901 §7.3 step 5.g asks it only when Key Binding is required — and a wrong one is that artifact's error, `sd_hash_mismatch`, in
    `verify` and in `build`: the KB-JWT is not bound to this presentation, whatever the key; a right one gives
    `kb_jwt.sd_hash_ok: true` with `verified: null`; a producer does not seal that member, so a 1.8.0 verifier reads the
    pack; up to 1.8.0 a wrong `sd_hash` without `cnf.jwk` was `valid: true`, vector `holder_sd_hash_mismatch_no_key`), and
@@ -1503,7 +1504,8 @@ draft-ietf-oauth-rfc8725bis is at -10, a draft, not in force) recommends explici
   is `kb+jwt;p=a`. Up to 1.8.0 the whole value was folded and the parameters compared byte for byte after that: the
   first pair was equal and the second not, against the sentence of 1.8.0 here that parameters were compared as written
   (measured on 2026-11-18, `test_ap2_media_type.py`). None of the profiles below has a parameter; a KB-JWT `typ` with one
-  is not `kb+jwt`, as before.
+  is not `kb+jwt`, as before. An empty parameter is no parameter (RFC 9110 §5.6.6): `kb+jwt;` and `kb+jwt ;` are
+  `kb+jwt`, which 1.8.0 refused.
 - **Profiles** (`check_jose_profile(header, profile, allowed_algs)`; an unknown profile is `profile_unknown`), each with
   its source and version, read on 2026-11-17:
 

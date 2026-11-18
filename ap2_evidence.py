@@ -1177,9 +1177,9 @@ def verify_kb_jwt(parsed: Dict, resolved_claims: Dict) -> Dict:
     presentation = parsed["compact"].rsplit("~", 1)[0] + "~"
     sd_hash_ok = payload.get("sd_hash") == _sha256_b64url(presentation.encode("ascii"))   # RFC 9901 §4.3.1: no key needed
     if "jwk" not in cnf:   # 1.8.1 (SPEC §9.2): sd_hash checked here too; `verified` stays null, the signature is not checked
-        if not sd_hash_ok:   # RFC 9901 §7.3 step 5.g: the KB-JWT is not bound to this presentation, whatever the key
+        if not sd_hash_ok:   # SPEC §9.2 (this format's rule; RFC 9901 §7.3 step 5.g asks it only when Key Binding is required)
             raise Ap2EvidenceError("sd_hash_mismatch: the KB-JWT sd_hash is not the hash of this presentation "
-                                   "(RFC 9901 §4.3.1, §7.3 step 5.g; checked without cnf.jwk, SPEC §9.2)")
+                                   "(RFC 9901 §4.3.1; checked without cnf.jwk, SPEC §9.2)")
         return {"present": True, "verified": None, "sd_hash_ok": sd_hash_ok, "claims_recorded_not_validated": recorded,
                 "note": "no cnf.jwk in issuer payload — holder key unknown (declared)", "_ignored": ignored}
     jwk = cnf["jwk"]
@@ -1719,8 +1719,8 @@ def _verify_rfc3161(tsr_b64: str, expected_digest_hex: str, timeout: int = 15, t
             with open(tsa_cert, "rb") as fh:
                 pinned = fh.read()
         except OSError:
-            pinned = None   # read by openssl below, which reports it, as before
-        if tsa_signer_certificate_absent(tsr, pinned):   # 1.8.1 (SPEC §3.2): the signature cannot be evaluated here
+            pinned = None   # read by openssl below, which reports it, as before: nothing is presumed absent then
+        if pinned is not None and tsa_signer_certificate_absent(tsr, pinned):   # 1.8.1 (SPEC §3.2): the signature cannot be evaluated here
             out["tsa_verified"] = None
             out["tsa_reason"] = "signer_certificate_absent"
             out["tsa_note"] = ("signature not evaluated: the signer certificate the SignerInfo names is not in the token"

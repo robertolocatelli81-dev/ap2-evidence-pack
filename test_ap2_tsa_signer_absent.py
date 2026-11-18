@@ -98,6 +98,38 @@ class SignerAbsent(unittest.TestCase):
         self.assertFalse(A.tsa_signer_certificate_absent(tok, good + b"-----BEGIN CERTIFICATE-----\nAAAA\n"))
         self.assertFalse(A.tsa_signer_certificate_absent(b"\x30\x00"))
 
+    def test_issuer_compared_as_openssl_compares_names(self):
+        """the sid's issuer is compared as X509_NAME_cmp (canonical: case and spaces folded), not byte for byte: the same
+        token with the issuer of its sid written in upper case still names the certificate it carries, and openssl
+        verifies it — it must not become `signer_certificate_absent`"""
+        from cryptography import x509
+        base = self.tokens["ias"]
+        ca_cn = x509.load_pem_x509_certificate(open(self.a.j("ca.crt"), "rb").read()).subject.rfc4514_string().encode()
+        ci = A._ski_items(A._ski_one(base, "c", 0x30), "c")
+        sd = A._ski_items(A._ski_one(ci[1][1], "s", 0x30), "s")
+        sid = A._ski_items(A._ski_items(sd[-1][1], "sis")[0][1], "si")[1]
+        sid_tlv = A._ski_tlv(*sid)
+        at = base.rfind(sid_tlv)
+        self.assertGreater(at, 0)
+        cn = ca_cn.split(b"=", 1)[1].split(b",")[0]
+        j = base.index(cn, at)
+        self.assertLess(j, at + len(sid_tlv))
+        self.assertNotEqual(cn.upper(), cn)
+        tok = base[:j] + cn.upper() + base[j + len(cn):]
+        self.assertFalse(A.tsa_signer_certificate_absent(tok, open(self.a.j("ca.crt"), "rb").read()))
+        r = A._verify_rfc3161(base64.b64encode(K.reply(tok)).decode(), K.DIGEST.hex(), tsa_cert=self.pins["own"])
+        self.assertEqual((r["tsa_verified"], r.get("tsa_reason")), (True, None), r.get("tsa_note"))
+
+    def test_unreadable_pin_presumes_nothing(self):
+        """a --tsa-cert file that cannot be read (library call; the CLI makes it a usage error) is reported by openssl as
+        before (`tsa_verified: false`), never turned into `signer_certificate_absent`: the absence is never presumed"""
+        missing = os.path.join(self.td, "no-such-pin.pem")
+        for form, base in self.tokens.items():
+            r = A._verify_rfc3161(base64.b64encode(K.reply(strip_certs(base))).decode(), K.DIGEST.hex(), tsa_cert=missing)
+            with self.subTest(form=form):
+                self.assertIs(r["tsa_verified"], False, r.get("tsa_note"))
+                self.assertNotIn("tsa_reason", r)
+
     def test_pack_time_bounds(self):
         """a pack anchored by such a token, verified under --tsa-cert: no proven upper bound — not counted, no
         existed-by time, --require-anchor unmet; the binding and `valid` unchanged"""
