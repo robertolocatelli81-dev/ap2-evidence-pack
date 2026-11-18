@@ -2,7 +2,7 @@
 
 ## Unreleased (1.9.0) — AP2 chains in their native form; receipts bound to the closed mandate; a binding policy; false greens closed
 
-SPEC 1.9.0 (§1, §2.1, §3.1, §3.2, §4, §6 step 2, §6.9, §7, §9.2, §10, §13; each rule written before the code). Measured on
+SPEC 1.9.0 (§1, §2.1, §3.1, §3.2, §4, §6 step 2, §6.9, §7, §9.1, §9.2, §10, §11, §13; each rule written before the code). Measured on
 2026-11-18 on the PyPI wheel 1.7.3 (sha256 109227df…203b5c00), on the tag v1.8.0 (d5601e4) and on the PyPI wheel 1.8.0, on
 662 SD-JWTs found in public repositories and on the goodmeta/ap2-conformance vectors. A minor version: the pack gains a
 provenance class (`chain_cnf`), a key member (`chain_from`) and a binding member (`over`) that a 1.8.x verifier refuses;
@@ -74,6 +74,8 @@ a pack without them reads as before. The work started as 1.8.1; the entries belo
   accept_integral_floats", an option that refuses the same token.
 - `ap2_chain_malformed` names the two forms a chain cannot take: a last hop with no `~`, a KB-JWT on a hop before the last.
 - SPEC §10: the informative mapping follows draft-xg-payment-dispute-profile-02 (§8.2, §8.3, §4; it was -01 §4.2, §4.3, §3).
+- README: the section "Honest scope" is titled by what it holds, "What a pack proves, and what it does not" (the field
+  `honest_scope` keeps its name: it is the format's).
 
 ### False greens (`valid: true` where the input breaks RFC 9901), in 1.7.3 and 1.8.0, Python and JavaScript
 

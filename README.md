@@ -28,7 +28,7 @@ This tool turns a set of SD-JWT mandates into **one evidence file** that verifie
   `jwks_fetched` (TLS witness at capture) — declared rather than flattened; a key the caller names
   (`--key` or `--jwks-url`) always wins over header material, and the header key sources not used are
   named and must name the same key (1.7.3, below);
-- verifies **KB-JWT holder binding** against the issuer payload's `cnf.jwk` (three honest
+- verifies **KB-JWT holder binding** against the issuer payload's `cnf.jwk` (three
   states: verified / invalid → build refused / present-but-unverifiable, never painted green);
 - recomputes **cross-mandate hash bindings** from the exact compact serializations
   (hex and base64url SHA-256);
@@ -200,7 +200,7 @@ only it. Measured with the AP2 SDK at `e1ea56d`: where the SDK reads a typed man
 and still accepts the original; where it does not (`verify_chain`, `sd_jwt.verify`) the record passes like any token.
 `test_ap2_restriction.py` (88 tests) is built from the two open mandates of AP2's documentation, decoded verbatim.
 
-## Honest scope
+## What a pack proves, and what it does not
 
 This file proves *what verified against which key material at capture time* — nothing
 more. It does **not** prove issuer key authorization beyond what each provenance class
