@@ -423,7 +423,8 @@ def _media_type(typ):
     """SPEC §13 (1.8.1): a `typ` read as a media type, for comparison, or None when it is not one.
     RFC 7515 §4.1.9: "Per RFC 2045, all media type values, subtype values, and parameter names are case insensitive.
     However, parameter values are case sensitive unless otherwise specified"; 'application/' implied when the value has no
-    '/'. The grammar is RFC 9110 §8.3.1 and §5.6.6 (type "/" subtype *( OWS ";" OWS [ name "=" ( token / quoted-string ) ] )),
+    '/'. The grammar is RFC 9110 §8.3.1 and §5.6.6 with one rule of this format: every ';' is followed by a parameter (RFC 9110
+    writes *( OWS ";" OWS [ parameter ] ), an empty parameter allowed; here it is no media type, as under 1.8.0),
     ASCII only: the type, subtype and parameter names with A-Z folded (str.lower makes U+212A KELVIN SIGN a 'k'), each
     value as written, a quoted-string read without its quotes and quoted-pairs (RFC 9110 §5.6.4, §5.6.6: "The quoted and
     unquoted values are equivalent"); parameters in any order, a name twice is no media type. Up to 1.8.0 the whole value
@@ -459,8 +460,8 @@ def _media_type(typ):
         i += 1
         while i < n and typ[i] in " \t":
             i += 1
-        if i >= n or typ[i] == ";":   # an empty parameter, as RFC 9110 §5.6.6 allows
-            continue
+        if i >= n or typ[i] == ";":   # SPEC §13, this format's rule: a ';' with no parameter after it is no media
+            return None                # type (RFC 9110 §5.6.6 allows it; 1.8.0 refused it too, so nothing widens)
         name, i = token(i)
         if name is None or i >= n or typ[i] != "=":
             return None

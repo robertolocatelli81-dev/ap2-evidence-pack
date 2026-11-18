@@ -52,10 +52,12 @@ repository wrote `<jwt>~~` for a token without disclosures (test_ap2_evidence.py
   `KB+JWT;P=a` different from `kb+jwt;p=a` (measured on v1.8.0). Now the value is read as an RFC 9110 media type (type,
   subtype and parameter names folded A–Z, values as written, quoted-string equivalent to token, parameters in any order,
   a name twice or anything outside the grammar is no media type), in the reference and in the JavaScript verifier. A
-  KB-JWT `typ` with a parameter stays refused; an `expected_typ` that is no media type is a ValueError. An empty
-  parameter is allowed by RFC 9110 §5.6.6, so `kb+jwt;`, `kb+jwt ;` and `KB+JWT;;` are now `kb+jwt` (an artifact error
-  under 1.8.0, valid now when the rest verifies), and `check_jose_header` likewise answers `ok` for `x+jwt;` against
-  `x+jwt` where 1.8.0 answered `typ_mismatch`.
+  KB-JWT `typ` with a parameter stays refused; an `expected_typ` that is no media type is a ValueError. A `;` with no
+  parameter after it (`kb+jwt;`, `kb+jwt ;`, `KB+JWT;;`, `x+jwt;p=a;`) makes the value no media type: RFC 9110 §5.6.6
+  allows an empty parameter, this format does not (SPEC §13), so the KB-JWT `typ` `kb+jwt;` stays that artifact's error
+  and `check_jose_header` answers `typ_mismatch` for `x+jwt;` against `x+jwt`, as under 1.8.0. A first wording of this
+  release read an empty parameter as none and accepted those values (measured on 2026-11-18 by the release review);
+  `test_ap2_media_type.py` and `test_ap2_kb_typ.py` name them.
 
 ### Tests and benches
 

@@ -210,7 +210,8 @@ function deriveStates({ digestOk, artResults, bindingSetMatch, tsBlock, rfcBlock
   return { sealed_content: subject(sealed), holder_binding: subject(holder), time_anchor: subject(time), producer_signature: subject(prod), issuer_identity: subject(issuer) };
 }
 // SPEC §13 (1.8.1), as the reference's _media_type: RFC 7515 §4.1.9 (type, subtype and parameter names case-insensitive,
-// parameter values case-sensitive; "application/" implied without "/"), the grammar of RFC 9110 §8.3.1/§5.6.6, ASCII only,
+// parameter values case-sensitive; "application/" implied without "/"), the grammar of RFC 9110 §8.3.1/§5.6.6 with every
+// ";" followed by a parameter (this format's rule: RFC 9110 allows an empty parameter, here it is no media type), ASCII only,
 // A-Z only folded (toLowerCase makes U+212A KELVIN SIGN a "k"), a quoted-string read without quotes and quoted-pairs,
 // parameters in any order, a name twice is no media type. null when typ is not a media type; else a comparable string.
 const TCHAR = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]$/;
@@ -230,7 +231,7 @@ function mediaType(typ) {
     if (i >= n || typ[i] !== ";") return null;
     i++;
     while (i < n && (typ[i] === " " || typ[i] === "\t")) i++;
-    if (i >= n || typ[i] === ";") continue;
+    if (i >= n || typ[i] === ";") return null;   // SPEC §13: a ';' with no parameter after it is no media type here
     let name; [name, i] = token(i);
     if (name === null || i >= n || typ[i] !== "=") return null;
     i++;

@@ -32,7 +32,7 @@ JS = os.path.join(ROOT, "verifiers", "js", "ap2-verify.mjs")
 NODE = shutil.which("node")
 T = r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+"
 Q = r'"(?:[\t !#-\[\]-~]|\\[\t !-~])*"'
-PARAM = rf"[ \t]*;[ \t]*(?:({T})=({T}|{Q}))?"
+PARAM = rf"[ \t]*;[ \t]*({T})=({T}|{Q})"   # 1.8.1 (SPEC §13): this format's rule, a ';' needs a parameter
 FULL = re.compile(rf"({T})(?:/({T}))?((?:{PARAM})*)")
 
 
@@ -50,8 +50,6 @@ def oracle(typ):
     full = m.group(1) + "/" + m.group(2) if m.group(2) is not None else "application/" + m.group(1)
     params = {}
     for pm in re.finditer(PARAM, m.group(3)):
-        if pm.group(1) is None:
-            continue
         v = pm.group(2)
         if v.startswith('"'):
             v = re.sub(r"\\(.)", r"\1", v[1:-1], flags=re.S)
@@ -101,9 +99,16 @@ NAMED = [("x+jwt;p=A", "x+jwt;p=a", False), ("kb+jwt;p=a", "kb+jwt; p=a", True),
          ("kb+jwt;a=1;b=2", "kb+jwt;b=2;a=1", True), ("kb+jwt;p=a;p=a", "kb+jwt;p=a", False),
          ("kb+jwt;p = a", "kb+jwt;p=a", False), ('kb+jwt;p="a\\"b"', 'kb+jwt;p="a\\"b"', True),
          ("kb+jwt;K=a", "kb+jwt;k=a", False), ("kb+jwt;p=K", "kb+jwt;p=k", False),
-         ("kb+jwt;", "kb+jwt", True), ("kb+jwt ", "kb+jwt", False), ("kb+jwt", "application/kb+jwt", True),
+         ("kb+jwt;", "kb+jwt", False), ("kb+jwt ", "kb+jwt", False), ("kb+jwt", "application/kb+jwt", True),
          ('kb+jwt;p="\\a"', "kb+jwt;p=a", True),
-         ('x+jwt;p="a/b"', 'application/x+jwt;p="a/b"', False)]   # RFC 7515 §4.1.9: a '/' anywhere, nothing prepended   # a quoted-pair is the character after the backslash (RFC 9110 §5.6.4)
+         ('x+jwt;p="a/b"', 'application/x+jwt;p="a/b"', False),
+         # 1.8.1, SPEC §13: a ';' not followed by a parameter is no media type in this format (RFC 9110 §5.6.6 allows an
+         # empty parameter; this format refuses it, as 1.8.0 did, so the patch release widens nothing)
+         ("kb+jwt ;", "kb+jwt", False), ("kb+jwt;;", "kb+jwt", False), ("kb+jwt; ;", "kb+jwt", False),
+         ("kb+jwt;\t", "kb+jwt", False), ("application/kb+jwt;", "kb+jwt", False), ("x+jwt;", "x+jwt", False),
+         ("kb+jwt;p=a;", "kb+jwt;p=a", False), ("kb+jwt;;p=a", "kb+jwt;p=a", False), ("kb+jwt\t;", "kb+jwt", False)]
+EMPTY_PARAMETER = ["kb+jwt;", "kb+jwt ;", "kb+jwt;\t", "kb+jwt;;;", "kb+jwt; ;", "Application/KB+JWT;", "kb+jwt\t;",
+                   "application/kb+jwt;", "x+jwt;", "kb+jwt;p=a;", "kb+jwt;;p=a", "kb+jwt;p=a; ;q=b"]   # RFC 7515 §4.1.9: a '/' anywhere, nothing prepended   # a quoted-pair is the character after the backslash (RFC 9110 §5.6.4)
 
 
 class MediaType(unittest.TestCase):
@@ -111,6 +116,15 @@ class MediaType(unittest.TestCase):
         for a, b, want in NAMED:
             self.assertEqual(same(oracle, a, b), want, (a, b))   # the oracle itself, on the cases the SPEC names
             self.assertEqual(A.check_jose_header({"alg": "ES256", "typ": a}, b, ["ES256"])["ok"], want, (a, b))
+
+    def test_empty_parameter_is_no_media_type(self):
+        # 1.8.1, SPEC §13: the cases measured as new greens on the branch before this rule (NEMESIS R7, 2026-11-18)
+        for typ in EMPTY_PARAMETER:
+            self.assertIsNone(oracle(typ), typ)
+            self.assertIsNone(A._media_type(typ), typ)
+            self.assertFalse(A.check_jose_header({"alg": "ES256", "typ": typ}, "kb+jwt", ["ES256"])["ok"], typ)
+            with self.assertRaises(ValueError, msg=typ):
+                A.check_jose_header({"alg": "ES256", "typ": "kb+jwt"}, typ, ["ES256"])
 
     def test_generator_reaches_both_answers(self):
         got = {same(oracle, a, b) for a, b in PAIRS}

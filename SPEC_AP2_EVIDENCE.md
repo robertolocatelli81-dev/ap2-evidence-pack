@@ -1493,8 +1493,9 @@ draft-ietf-oauth-rfc8725bis is at -10, a draft, not in force) recommends explici
   **Parameters (1.8.1).** RFC 7515 §4.1.9 (text read on rfc-editor.org on 2026-11-18): "Per RFC 2045, all media type
   values, subtype values, and parameter names are case insensitive. However, parameter values are case sensitive unless
   otherwise specified for the specific parameter." Both values are read with the grammar of RFC 9110 (Internet Standard,
-  June 2022, not obsoleted or updated on 2026-11-18) §8.3.1 and §5.6.6: `type "/" subtype *( OWS ";" OWS [ name "="
-  ( token / quoted-string ) ] )`, ASCII only (no obs-text), no whitespace around `=` and none after the last parameter
+  June 2022, not obsoleted or updated on 2026-11-18) §8.3.1 and §5.6.6 — `type "/" subtype *( OWS ";" OWS [ parameter ] )`,
+  `parameter = name "=" ( token / quoted-string )` — with one rule of this format, stricter than RFC 9110: every `;` is
+  followed by a parameter (see the end of this paragraph), ASCII only (no obs-text), no whitespace around `=` and none after the last parameter
   unless a `;` follows; a quoted-string is read without its quotes and with each quoted-pair replaced by the character
   after the backslash (§5.6.4), equal to the token of the same value (§5.6.6: "The quoted and unquoted values are
   equivalent"); `application/` is prepended only when the whole value has no `/`. The type, subtype and parameter names
@@ -1504,8 +1505,11 @@ draft-ietf-oauth-rfc8725bis is at -10, a draft, not in force) recommends explici
   is `kb+jwt;p=a`. Up to 1.8.0 the whole value was folded and the parameters compared byte for byte after that: the
   first pair was equal and the second not, against the sentence of 1.8.0 here that parameters were compared as written
   (measured on 2026-11-18, `test_ap2_media_type.py`). None of the profiles below has a parameter; a KB-JWT `typ` with one
-  is not `kb+jwt`, as before. An empty parameter is no parameter (RFC 9110 §5.6.6): `kb+jwt;` and `kb+jwt ;` are
-  `kb+jwt`, which 1.8.0 refused.
+  is not `kb+jwt`, as before. **A `;` with no parameter after it** (`kb+jwt;`, `kb+jwt ;`, `kb+jwt;;`, `x+jwt;p=a;`)
+  makes the value no media type here, though RFC 9110 §5.6.6 allows an empty parameter (`[ parameter ]`): this format's
+  rule, so that the patch release accepts nothing 1.8.0 refused (1.8.0 compared those values byte for byte after folding
+  and refused them; the openwallet-foundation-labs sd-jwt-python verifier, commit c5fda01 of 2026-08-17, compares the
+  KB-JWT `typ` byte for byte too). A KB-JWT whose `typ` is `kb+jwt;` is that artifact's error, as under 1.8.0.
 - **Profiles** (`check_jose_profile(header, profile, allowed_algs)`; an unknown profile is `profile_unknown`), each with
   its source and version, read on 2026-11-17:
 

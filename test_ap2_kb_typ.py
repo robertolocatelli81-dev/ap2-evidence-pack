@@ -31,7 +31,9 @@ HAVE_NODE = shutil.which("node") is not None
 ACCEPTED = ["kb+jwt", "KB+JWT", "Kb+Jwt", "kB+jWT", "application/kb+jwt", "APPLICATION/KB+JWT", "Application/Kb+Jwt"]
 REFUSED = ["jwt", "JWT", "kb+jwt ", " kb+jwt", "kb+jwt\n", "KB+JWT", "kb+jwt; v=1", "text/kb+jwt", "application//kb+jwt",
            "application/", "", "kb-jwt", "kb+sd-jwt", "dc+sd-jwt", "application/jwt", "KB+JWTİ", "kıb+jwt",
-           "ＫＢ+JWT", "kb​+jwt"]
+           "ＫＢ+JWT", "kb​+jwt",
+           # 1.8.1, SPEC §13: a ';' with no parameter after it is no media type in this format
+           "kb+jwt;", "kb+jwt ;", "KB+JWT;;", "kb+jwt; ;", "application/kb+jwt;", "kb+jwt\t;"]
 NOT_STRING = [None, 5, True, ["kb+jwt"], {"t": "kb+jwt"}]
 MISSING = object()
 
@@ -93,8 +95,9 @@ def oracle(typ) -> bool:
         folded = "application/" + folded
     if folded == "application/kb+jwt":
         return True
-    # 1.8.1 (SPEC §13): RFC 9110 §5.6.6 allows empty parameters, so `kb+jwt;` and `kb+jwt; ;` are kb+jwt too; the media
-    # type oracle of test_ap2_media_type.py (written apart from the code) decides those
+    # 1.8.1 (SPEC §13): RFC 9110 §5.6.6 allows empty parameters, but this format refuses a ';' with no parameter after
+    # it, so `kb+jwt;` and `kb+jwt; ;` are not kb+jwt; the media type oracle of test_ap2_media_type.py (written apart
+    # from the code) decides those
     from test_ap2_media_type import oracle as media_type_oracle
     return media_type_oracle(typ) == media_type_oracle("kb+jwt")
 
