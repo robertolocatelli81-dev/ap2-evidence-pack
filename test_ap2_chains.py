@@ -587,6 +587,21 @@ class Chains(unittest.TestCase):
         self.assertEqual((js["good"]["valid"], js["good"]["artifacts"][1]["kb_jwt"]["verified"]), (True, True))
         self.assertEqual((js["swapped"]["valid"], js["swapped"]["artifacts"][1]["kb_jwt"]["verified"]), (False, False))
 
+    def test_outside_a_chain_a_delegate_cnf_is_not_the_holder_key(self):
+        """SPEC §2.1, declared: a mandate presented alone whose only cnf is inside delegate_payload, followed by a KB-JWT —
+        the holder key is unknown (verified null, not_evaluated), whoever signed the KB-JWT; in both verifiers."""
+        sk, jwk = _make_signer()
+        d = _disclosure(_b64u(os.urandom(8)), None, {"cnf": {"jwk": _make_signer()[1]}, "a": 1})
+        tok = _sign_jwt(sk, {"alg": "ES256", "typ": "example+sd-jwt"},
+                        {"iss": "i", "delegate_payload": [{"...": ap2._disclosure_digest(d)}], "_sd_alg": "sha-256"}) + "~" + d + "~"
+        kb = _sign_jwt(_make_signer()[0], {"alg": "ES256", "typ": "kb+jwt"},
+                       {"iat": 1, "aud": "a", "nonce": "n", "sd_hash": ap2._sha256_b64url(tok.encode("ascii"))})
+        _, out = self._build([{"name": "m", "sd_jwt": tok + kb}], {"m": jwk}, "alone")
+        for r in (ap2.verify_evidence(out), _js_many(self, [("a", out, [])])["a"]):
+            self.assertTrue(r["valid"])
+            self.assertIsNone(r["artifacts"][0]["kb_jwt"]["verified"])
+            self.assertEqual(r["states"]["holder_binding"], {"state": "not_evaluated", "reasons": ["holder_key_unknown"]})
+
     def test_require_binding_reads_only_a_matching_set(self):
         """SPEC §6.9 (NEMESIS 2026-11-18, two live mutants on 98520d6): a pair is held only when bindings_ok — a recorded
         set that is not the recomputed one leaves every pair unmet, in both verifiers, even if the recomputation holds it;

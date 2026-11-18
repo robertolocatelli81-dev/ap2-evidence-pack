@@ -308,6 +308,12 @@ key that hop delegated to. In `issuer_identity` its key is `self_asserted`, as `
 the relying party's anchor, vouches for it), so `self_asserted_only` stays true for a chain unless the format changes that
 in a later revision. A 1.8.x verifier refuses a pack with a `chain_cnf` key (unknown class, unknown key `chain_from`).
 
+**Outside a chain (declared).** For an artifact that is not a `chain_cnf` hop — a mandate presented alone, a hop of a
+chain split by hand and given under a supplied key — a KB-JWT is evaluated as §6 step 2 says, under the `cnf.jwk` at the
+top level of the resolved claims only: a `cnf` inside `delegate_payload` is the key of a hop to come, and no rule of
+RFC 9901 or of the draft makes it the holder key of that artifact's own KB-JWT. Such a KB-JWT is `verified: null`,
+`holder_key_unknown` (never a pass, never a failure), as before 1.9.0.
+
 **A plain JWS.** An AP2 receipt is a JWS, not an SD-JWT; it enters as `<jwt>~`, an SD-JWT with no disclosures (RFC 9901 §4),
 which the signature does not cover and does not change. `sd_jwt_no_separator` says so.
 
