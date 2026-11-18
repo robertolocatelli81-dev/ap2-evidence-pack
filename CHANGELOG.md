@@ -12,7 +12,7 @@ a pack built by 1.8.x is read as before, with the bindings over the issuer JWT i
 ### AP2 (measured on 2026-11-18 on 1.8.0: what the format exists for did not work)
 
 - **AP2 delegation chains `<hop0>~~<hop1>...` are read as AP2 writes them (SPEC §2.1).** 1.8.0 refused every native chain
-  with `malformed disclosure: invalid base64url segment` (157 of 157 found in 9 public repositories; 0 of 23 goodmeta
+  with `malformed disclosure: invalid base64url segment` (the 143 distinct chains found in 14 public repositories, 156 occurrences; 0 of 23 goodmeta
   vectors, the 3 valid ones included). `build` now splits a chain given for `N` into the artifacts `N.0`, `N.1`, …; the
   root takes the key named for `N`, every later hop is verified with the previous hop's `cnf.jwk` (new provenance class
   `chain_cnf`, with `chain_from` naming that hop, reconciled offline by both verifiers) and must satisfy the AP2 SDK's hop
@@ -25,7 +25,7 @@ a pack built by 1.8.x is read as before, with the bindings over the issuer JWT i
   (declared, §2.1); the other 10 "reject" vectors were refused before and are now (signature or alg 5, x5c 5), and
   `valid_x5c`, which goodmeta expects valid, is refused: its certificates are base64url where RFC 7515 §4.1.6 says
   base64. A terminal hop without `iat` is refused as the SDK refuses it. On
-  145 tokens holding `~~`, re-read from 11 public repositories at the commits recorded (143 chains, and 2 SD-JWTs with
+  145 tokens holding `~~`, re-read from 15 public repositories at the commits recorded (143 chains, and 2 SD-JWTs with
   an empty component, refused as such): in 107 chains every hop after the root verifies under the previous hop's
   `cnf.jwk` and the hop rules (the root's signature is not part of this count: its key is not in those files); 36 are
   refused by name — a hop rule 16, a hop's signature 4, a number that is not an integer or needs the option 7, a
@@ -53,8 +53,9 @@ a pack built by 1.8.x is read as before, with the bindings over the issuer JWT i
   `missing_reference` are not valid; `missing_payment_id` and `error_without_error_code` stay valid (receipt contents this
   format does not read, declared). A chain mixing two mandates (the SDK refuses it) is refused at build (§2.1).
 - **A plain JWS** (an AP2 receipt) enters as `<jwt>~`; `sd_jwt_no_separator` now says so.
-- **Benches.** `test_ap2_chains.py` (14 tests; on an archive of 6728413, with the vectors copied, the first 12 fail;
-  the two of the all-or-none rule fail on 5a09a53). The differential oracle gains the chain cases — packs built from
+- **Benches.** `test_ap2_chains.py` (17 tests; on an archive of 6728413, with the vectors copied, the first 12 fail;
+  the two of the all-or-none rule fail on 5a09a53; of the three added on review, the delegate KB-JWT one fails on
+  98520d6, with two more for the cases added to them, and two hold rules whose mutants no test killed). The differential oracle gains the chain cases — packs built from
   the SDK and goodmeta vectors, the policy met and unmet, the three new members given wrong values, removed and moved,
   ten CLI forms of `--require-binding` — and
   compares each artifact's `chain_hop`, the policy's missing pairs and `bindings_not_recorded`: 574 cases, 0
@@ -82,6 +83,23 @@ a pack built by 1.8.x is read as before, with the bindings over the issuer JWT i
   (`float '0.1' in the SD-JWT: not an integer within +/-(2^53-1)`), in both verifiers; 1.8.0 answered "needs
   accept_integral_floats", an option that refuses the same token.
 - `ap2_chain_malformed` names the two forms a chain cannot take: a last hop with no `~`, a KB-JWT on a hop before the last.
+- The KB-JWT that ends a chain (a dSD-JWT+KB, draft-ietf-oauth-delegate-sd-jwt-00 §5.1.1) is verified with the `cnf.jwk`
+  the last hop delegates to, in both verifiers; before this, in the first 1.9.0 drafts, it was `verified: null` with the
+  holder key reported unknown, and one signed by a key foreign to the chain built and verified `valid: true`.
+  A public fixture of that form (eudi-dev/eudi-dev, `e2e/fixtures/delegate-sd-jwt-kb.txt`, read and not copied) has its
+  KB-JWT verified under that key. Two rules of that draft's §6 the AP2 SDK does not ask are hop rules too: exactly one
+  disclosed `delegate_payload` element (step 3.2, `chain_delegate_payload`) and a KB-SD-JWT+KB before a delegate KB-JWT
+  (step 4.2, `chain_kb_jwt_after_terminal_hop`); the 107 public chains that verified still do, token by token.
+- The third-stack bench (`verifiers/sdk_crosscheck.py --hostile`, CI job `third-verifier`) was red on the 1.9.0 drafts
+  since 1.8.1 (14 undeclared differences, measured 2026-11-18 against the AP2 SDK at e1ea56d over `sd-jwt` 0.10.4; green on
+  v1.8.0): a refusal naming `chain_from` is a layer of the pack the third stack does not have; the missing trailing `~`
+  (RFC 9901 §4) is declared in the direction "we refuse, the third stack accepts", on its vector and on the oracle's copy;
+  the oracle's KB-JWT without `cnf.jwk` and with the right `sd_hash` is declared as `holder_key_unknown` is. Re-measured
+  2026-11-18: 491 packs seen, 245 refused before the mandate layer, 402 artifacts compared, 287 claim-sets compared,
+  0 undeclared disagreements; the seeded divergence is still reported (exit 1).
+- `--require-binding=-x->y` is a usage error (exit 2) in the Python CLI too, as for every other option with a value; the
+  first 1.9.0 drafts read `-x->y` as a pair there while the JavaScript verifier refused it. `test_ap2_cli_help.py` now
+  reads the options with a value from the parsers and asks each one the seven flag-like forms.
 - SPEC §10: the informative mapping follows draft-xg-payment-dispute-profile-02 (§8.2, §8.3, §4; it was -01 §4.2, §4.3, §3).
 - README: the section "Honest scope" is titled by what it holds, "What a pack proves, and what it does not" (the field
   `honest_scope` keeps its name: it is the format's).

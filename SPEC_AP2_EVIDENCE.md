@@ -241,8 +241,21 @@ KB-JWT is used in the AP2 flow"), `sdjwt/common.py` (`sd_hash` over the previous
 `issuer_jwt_hash` over its issuer JWT) and `mandate.py` (`token.split('~~')`; the trailing `~` of a hop is removed before
 `~~` is appended). The SDK is the description used here: "The core specification has been donated to FIDO" (AP2
 `CONTRIBUTING.md` at that commit), no public text of it defining `~~` was found that day, and in the AP2 repository
-`~~` appears in the SDK, its tests and the samples only (GitHub code search, 15 files, none under `docs/`). Up to 1.8.0 such a chain was refused as
-`malformed disclosure: invalid base64url segment` (157 of 157 chains found in public repositories, measured 2026-11-18),
+`~~` appears in the SDK, its tests and the samples only (GitHub code search, 15 files, none under `docs/`). The
+serialization itself is the Delegate SD-JWT draft's: the SDK cites draft-gco-oauth-delegate-sd-jwt-00 (an individual
+draft of 21 April 2026 whose text expires on 23 October 2026; datatracker state "Replaced"), replaced by the OAuth
+working group draft draft-ietf-oauth-delegate-sd-jwt-00 (dated 26 October 2026, "Expires: 29 April 2027", Standards
+Track intended; datatracker read on 2026-11-18: Active, WG Document of `oauth`; SHA-256 of the text `96fb5590…`; an
+Internet-Draft, not a standard). Its §5.1.1 writes `<SD-JWT>~~<KB-SD-JWT 1>~~...~~<KB-SD-JWT n>~`, a dSD-JWT, or the
+same ending in `~<delegate KB-JWT>`, a dSD-JWT+KB ("exactly one empty component between the last component of each
+SD-JWT or KB-SD-JWT and the following KB-SD-JWT"); its §5.1.4 names the types `kb+sd-jwt` and `kb-sd-jwt+kb`, and this
+format accepts the four the SDK accepts (below). Read against that draft's §6, this section follows it where it and
+the SDK agree, takes from it the two rules the SDK does not ask (one disclosed `delegate_payload` element, the type
+before a delegate KB-JWT: **Hop rules**), and differs where stated: the delegate KB-JWT is verified whenever it is
+present (§6 step 5 asks it "If Key Binding is required"), and `aud`, `nonce` and the times are recorded, not checked.
+Up to 1.8.0 such a chain was refused as
+`malformed disclosure: invalid base64url segment` (the 143 distinct chains found in 14 public repositories, 156
+occurrences, measured 2026-11-18),
 and a chain split by hand gave `holder_binding: not_evaluated` on every hop.
 
 **Input (the reference `build`).** A token given for name `N` is a chain when, split on `~~`, it has at least two parts
@@ -251,8 +264,10 @@ and every part after the first begins with an issuer JWT (three dot-separated se
 (refused, never read another way): a first part that is empty; a last part with no `~` at all (`<open>~~<jwt>`: an AP2
 chain whose last hop lost its `~`, or, read as one SD-JWT, an empty component before a KB-JWT — the refusal names both);
 a part before the last that ends with a KB-JWT (in a chain the next hop is the key binding; only the last hop may carry
-a KB-JWT, which is then evaluated as §6 step 2 says). The parts become the artifacts `N.0`, `N.1`, … in order, every
-part but the last with its `~` put back; the build result lists them (`ap2_chains`). A name taken twice once the chains are split is refused.
+a KB-JWT — the delegate KB-JWT of a dSD-JWT+KB — which is then evaluated as §6 step 2 says, with the key that hop
+delegates to: the `cnf.jwk` found by the rule of **Keys** below in that hop's resolved claims; that hop must be a
+KB-SD-JWT+KB, **Hop rules**). The parts become the artifacts `N.0`, `N.1`, … in order, every part but the last with its
+`~` put back; the build result lists them (`ap2_chains`). A name taken twice once the chains are split is refused.
 
 **Keys.** `N.0` takes the key named for `N` (`--key N=…`, `--jwks-url N=…`) or its header, as any artifact (§2). Every
 later hop `N.i` is verified with the `cnf.jwk` of `N.(i-1)`, found where the SDK looks (`ParsedToken._find_cnf`): `cnf`
@@ -269,7 +284,13 @@ recorded as `{"jwk": {kty, crv, x, y}, "provenance_class": "chain_cnf", "chain_f
 `<jwt>~<d>*~` (its compact form without a KB-JWT) or of its issuer JWT (`chain_binding_mismatch`); a terminal hop with a
 `cnf` in `delegate_payload` (`chain_terminal_with_cnf`), an intermediate one without (`chain_intermediate_without_cnf`);
 a terminal hop without `iat` (`chain_terminal_without_iat`: the SDK's `verify_expected_claims`, `common.py`, which
-`kb_sd_jwt.verify` runs on terminal types only — presence, which needs no context).
+`kb_sd_jwt.verify` runs on terminal types only — presence, which needs no context). Two rules are the working group
+draft's, which the SDK does not ask: the hop's resolved `delegate_payload` is an array of exactly one element
+(`chain_delegate_payload`; draft-ietf-oauth-delegate-sd-jwt-00 §6 step 3.2, "exactly one disclosed element in the
+delegate_payload array"; every hop of the 107 public chains that verify and of the vectors has one, measured
+2026-11-18), and a hop followed by a delegate KB-JWT is not a terminal type (`chain_kb_jwt_after_terminal_hop`; §6 step
+4.2, "If the credential is a dSD-JWT+KB then the typ MUST be kb-sd-jwt+kb"). A hop of an intermediate type may be the
+last (that draft's §4.2 and §6 step 4.2: Key Binding is optional for the final KB-SD-JWT).
 Not checked, as for a KB-JWT (§6 step 2): `aud`, `nonce`, the values of `iat` and `exp` — transaction context and time an
 offline verifier cannot know (goodmeta/ap2-conformance vectors `aud_mismatch`, `nonce_mismatch`, `expired` stay valid
 here, declared).
@@ -295,7 +316,7 @@ goodmeta/ap2-conformance @41dff653 — the 3 valid ones and `aud_mismatch`, `non
 with `holder_binding` verified, the 17 others refused at `build` (6 of them for the vector's own reason that this format
 did not check before: sd_hash mismatch, both binding claims, neither, wrong `typ`, terminal with `cnf`, intermediate
 without; 5 `x5c` vectors, `valid_x5c` among them, for the base64url encoding of their certificates, RFC 7515 §4.1.6,
-and the sixth for its `alg`, ES384); 145 tokens holding `~~` re-read from 11 public repositories (143 chains: in 107
+and the sixth for its `alg`, ES384); 145 tokens holding `~~` re-read from 15 public repositories (143 chains: in 107
 every hop after the root verifies under the previous hop's `cnf.jwk` and these rules, 36 are refused by name; 1.8.0
 read none); three chains emitted by the AP2 SDK (two built and valid, the mixed one refused as the SDK refuses it).
 

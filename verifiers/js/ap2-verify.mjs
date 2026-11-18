@@ -264,7 +264,7 @@ function mediaType(typ) {
   const sorted = [...params.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
   return JSON.stringify([foldAZ(full), sorted]);
 }
-function verifyKbJwt(parsed, resolved) {
+function verifyKbJwt(parsed, resolved, chainHop = false) {
   const kb = parsed.kbJwt; if (!kb) return { present: false };
   const seg = kb.split("."); if (seg.length !== 3) throw new Refused("kb-jwt must have 3 dot-separated segments");
   let header, payload; try { header = jsonOf(b64uDecode(seg[0])); payload = jsonOf(b64uDecode(seg[1])); } catch (e) { throw new Refused("kb-jwt header/payload invalid: " + e.message); }   // 1.4.0: the inner reason, as the reference
@@ -286,7 +286,9 @@ function verifyKbJwt(parsed, resolved) {
   const recorded = {}; for (const k of ["aud", "nonce", "iat"]) if (k in payload) recorded[k] = payload[k];   // the sealed scope says these are RECORDED whenever a KB-JWT is present
   const presentation = parsed.compact.slice(0, parsed.compact.lastIndexOf("~")) + "~";
   const sdHashOk = payload.sd_hash === b64u(sha256(Buffer.from(presentation, "ascii")));   // RFC 9901 §4.3.1: no key needed
-  const jwk = cnf !== undefined && "jwk" in cnf ? cnf.jwk : undefined;
+  let cnfKey = cnf;   // 1.9.0 (SPEC §2.1): the delegate KB-JWT of a dSD-JWT+KB, under the key this hop delegates to (the reference's chain_hop)
+  if (chainHop) { try { cnfKey = { jwk: chainCnfJwk(resolved) }; } catch (e) { if (!String(e.message).startsWith("chain_cnf_missing")) throw e; cnfKey = undefined; } }
+  const jwk = cnfKey !== undefined && "jwk" in cnfKey ? cnfKey.jwk : undefined;
   // 1.8.1 (SPEC §9.2): sd_hash checked without the holder key too; `verified` stays null, as the reference
   if (jwk === undefined && !sdHashOk) throw new Refused("sd_hash_mismatch: the KB-JWT sd_hash is not the hash of this presentation (RFC 9901 §4.3.1; checked without cnf.jwk, SPEC §9.2)");   // 1.8.1, as the reference
   if (jwk === undefined) return { present: true, verified: null, sd_hash_ok: sdHashOk, claims_recorded_not_validated: recorded, note: "no cnf.jwk in issuer payload — holder key unknown (declared)", _ignored: ignored };
@@ -440,9 +442,12 @@ function checkChainHop(parsed, resolved, prevCompact) {   // the reference's che
   const prevSd = prevCompact.slice(0, prevCompact.lastIndexOf("~") + 1);
   const want = b64u(sha256(Buffer.from(has[0] === "sd_hash" ? prevSd : prevCompact.split("~")[0], "ascii")));
   if (resolved[has[0]] !== want) throw new Refused("chain_binding_mismatch: " + has[0] + " is not the hash of the previous hop (SPEC §2.1)");
-  const dp = resolved.delegate_payload; const hasCnf = Array.isArray(dp) && dp.some((x) => isObj(x) && isObj(x.cnf));
+  const dp = resolved.delegate_payload;
+  if (!Array.isArray(dp) || dp.length !== 1) throw new Refused("chain_delegate_payload: a hop discloses exactly one element of delegate_payload (draft-ietf-oauth-delegate-sd-jwt-00 §6 step 3.2, SPEC §2.1)");   // as the reference
+  const hasCnf = Array.isArray(dp) && dp.some((x) => isObj(x) && isObj(x.cnf));
   if (term && hasCnf) throw new Refused("chain_terminal_with_cnf: a terminal hop (kb+sd-jwt) must not carry cnf (SPEC §2.1)");
   if (inter && !hasCnf) throw new Refused("chain_intermediate_without_cnf: an intermediate hop (kb+sd-jwt+kb) must carry cnf (SPEC §2.1)");
+  if (term && parsed.kbJwt) throw new Refused("chain_kb_jwt_after_terminal_hop: a KB-JWT ends the chain, so its last hop must be a KB-SD-JWT+KB (typ kb-sd-jwt+kb), not a terminal kb+sd-jwt (draft-ietf-oauth-delegate-sd-jwt-00 §6 step 4.2, SPEC §2.1)");
   if (term && !Object.hasOwn(resolved, "iat")) throw new Refused("chain_terminal_without_iat: a terminal hop (kb+sd-jwt) must carry iat (SPEC §2.1)");
   return { binding: has[0], terminal: term };
 }
@@ -883,7 +888,7 @@ function verifyEvidenceInner(path, opts) {
       const sigOk = es256Verify(parsed.signingInput, parsed.signature, a.key.jwk); const resolved = resolveDisclosures(parsed.payload, parsed.disclosures);
       const claimsOk = canon(resolved) === canon(a.resolved_claims ?? null);
       const chainHop = (prevHop !== null && sigOk && claimsOk) ? { ...checkChainHop(parsed, resolved, prevHop.compact), from: a.key.chain_from } : null;   // 1.9.0 — SPEC §2.1
-      const kb = verifyKbJwt(parsed, resolved);
+      const kb = verifyKbJwt(parsed, resolved, prevHop !== null);
       for (const k of ["verified", "signature_ok", "sd_hash_ok", "claims_recorded_not_validated"]) if (Object.hasOwn(a.kb_jwt, k) && (!Object.hasOwn(kb, k) || canon(a.kb_jwt[k]) !== canon(kb[k]))) throw new Refused("artifact kb_jwt." + k + " contradicts the KB-JWT (SPEC §9.1)");   // SPEC §9.1 (NEMESIS 2026-10-11)
       Object.assign(ignored, kb._ignored ?? {}); delete kb._ignored; const ign = {}; for (const k of Object.keys(ignored).sort(cmp)) if (ignored[k].length) ign[k] = ignored[k];   // SPEC §9.2: only the non-empty slots
       artResults.push({ name: a.name, signature_ok: sigOk, claims_match: claimsOk, kb_jwt: kb, provenance_class: a.key?.provenance_class, self_asserted: selfAsserted, ignored: ign, ...(prov.ident ? { x5c_leaf: prov.ident } : {}), ...(chainHop ? { chain_hop: chainHop } : {}) });

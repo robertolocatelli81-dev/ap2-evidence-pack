@@ -54,6 +54,28 @@ class Help(unittest.TestCase):
         self.assertEqual(p.returncode, 0)
         self.assertIn(b"usage: ap2-evidence", p.stdout)
 
+    def test_every_option_with_a_value_refuses_a_flag_like_value(self):
+        """One CLI grammar (1.1.0): a value that is empty or starts with "-" is a usage error, in the `--opt value` and
+        the `--opt=value` form. The options with a value are read from the parsers themselves, so one added later is
+        asked the same (found on 2026-11-18: --require-binding was missing from the pre-check, and `--require-binding=-x->y`
+        was read as a pair, exit 1, where the JavaScript verifier said usage, exit 2)."""
+        import re
+        text = cli("--help").stdout
+        found = set()
+        for cmd in ("build", "stamp", "verify", "restriction"):
+            block = text.split("usage: ap2-evidence " + cmd, 1)[1].split("usage: ap2-evidence ", 1)[0]
+            usage = block.split("\n\n", 1)[0]
+            for opt in re.findall(r"(--[a-z-]+) [A-Za-z]", usage):   # in a usage line, an option followed by its metavar
+                found.add((cmd, opt))
+        self.assertEqual(sorted({o for _c, o in found}),
+                         ["--jwks-url", "--key", "--min-anchors", "--require-binding", "--subject", "--trust-anchor",
+                          "--trusted-producer-key", "--tsa", "--tsa-cert"], found)
+        for cmd, opt in sorted(found):
+            for args in ([opt, "-x"], [opt + "=-x"], [opt, ""], [opt + "="], [opt], [opt, "--require-pq"], [opt + "=-a->b"]):
+                with self.subTest(cmd=cmd, args=args):
+                    p = cli(cmd, "x.json", *args)
+                    self.assertEqual((p.returncode, p.stdout), (2, ""), p.stderr[-200:])
+
     def test_no_argument_names_the_commands(self):
         p = cli()
         self.assertEqual(p.returncode, 2)

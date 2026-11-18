@@ -1155,9 +1155,10 @@ def _snapshot_key(parsed: Dict, supplied_jwk: Optional[Dict] = None,
                            "supplied key or JWKS URL was given (fail-closed)")
 
 
-def verify_kb_jwt(parsed: Dict, resolved_claims: Dict) -> Dict:
+def verify_kb_jwt(parsed: Dict, resolved_claims: Dict, chain_hop: bool = False) -> Dict:
     """Holder binding (SD-JWT KB-JWT): verified against the holder key in the issuer
-    payload's cnf.jwk, plus the sd_hash commitment over the exact presentation
+    payload's cnf.jwk (for the last hop of an AP2 chain, the key that hop delegates to, found as §2.1 finds it: a dSD-JWT+KB,
+    draft-ietf-oauth-delegate-sd-jwt-00 §5.1.1), plus the sd_hash commitment over the exact presentation
     (<jwt>~<disclosures>*~). Three honest states: absent / verified true-false /
     present-but-unverifiable (no cnf.jwk — declared, never a fake green)."""
     kb = parsed.get("kb_jwt")
@@ -1196,6 +1197,13 @@ def verify_kb_jwt(parsed: Dict, resolved_claims: Dict) -> Dict:
         raise Ap2EvidenceError("cnf must be an object")
     cnf = rc.get("cnf", {})
     ignored["cnf"] = _unknown_members(cnf, _CNF_REGISTERED)   # RFC 7800 §3.1: not understood -> ignored, here reported
+    if chain_hop:   # 1.9.0 (SPEC §2.1): the delegate KB-JWT of a dSD-JWT+KB is the holder's of the key this hop delegates to —
+        try:        # cnf of a delegate_payload element (then the top level), as chain_cnf_jwk finds it for the next hop
+            cnf = {"jwk": chain_cnf_jwk(rc)}
+        except Ap2EvidenceError as e:
+            if not str(e).startswith("chain_cnf_missing"):
+                raise
+            cnf = {}   # a terminal hop delegates to no key: the holder key is unknown, as before
     _b64url_decode(seg[2])   # the §3.1 profile applies to all three segments even when the holder key is unknown: without
     # this, a KB-JWT whose signature segment is non-canonical base64url passed with valid: true, because the branch below
     # returns before the signature is ever decoded (found by probing the six uncovered KB-JWT branches)
@@ -1345,12 +1353,23 @@ def check_chain_hop(parsed: Dict, resolved: Dict, prev_compact: str) -> Dict:
     if resolved[has[0]] != want:
         raise Ap2EvidenceError(f"chain_binding_mismatch: {has[0]} is not the hash of the previous hop (SPEC §2.1)")
     dp = resolved.get("delegate_payload")
+    # draft-ietf-oauth-delegate-sd-jwt-00 §6 step 3.2 (and 4.1): "exactly one disclosed element in the delegate_payload
+    # array" of every KB-SD-JWT; the AP2 SDK does not ask it (measured 2026-11-18: every hop of the 107 public chains that
+    # verify, and of the vectors, discloses exactly one)
+    if not isinstance(dp, list) or len(dp) != 1:
+        raise Ap2EvidenceError("chain_delegate_payload: a hop discloses exactly one element of delegate_payload (found "
+                               f"{len(dp) if isinstance(dp, list) else 'no array'}; draft-ietf-oauth-delegate-sd-jwt-00 §6 "
+                               "step 3.2, SPEC §2.1)")
     has_cnf = isinstance(dp, list) and any(isinstance(x, dict) and isinstance(x.get("cnf"), dict) for x in dp)
     if term and has_cnf:
         raise Ap2EvidenceError("chain_terminal_with_cnf: a terminal hop (kb+sd-jwt) must not carry cnf (AP2 kb_sd_jwt.py, SPEC §2.1)")
     if inter and not has_cnf:
         raise Ap2EvidenceError("chain_intermediate_without_cnf: an intermediate hop (kb+sd-jwt+kb) must carry cnf "
                                "(AP2 kb_sd_jwt.py, SPEC §2.1)")
+    if term and parsed.get("kb_jwt"):   # that draft §6 step 4.2: "If the credential is a dSD-JWT+KB then the typ MUST be kb-sd-jwt+kb"
+        raise Ap2EvidenceError("chain_kb_jwt_after_terminal_hop: a KB-JWT ends the chain, so its last hop must be a "
+                               "KB-SD-JWT+KB (typ kb-sd-jwt+kb, with the cnf the KB-JWT is verified with), not a terminal "
+                               "kb+sd-jwt (draft-ietf-oauth-delegate-sd-jwt-00 §6 step 4.2, SPEC §2.1)")
     if term and "iat" not in resolved:   # the SDK's verify_expected_claims, run on terminal hops: presence needs no context
         raise Ap2EvidenceError("chain_terminal_without_iat: a terminal hop (kb+sd-jwt) must carry iat (AP2 common.py "
                                "verify_expected_claims, SPEC §2.1)")
@@ -2109,7 +2128,7 @@ def _build_evidence(artifacts: List[Dict], out_path: str,
             except Ap2EvidenceError as e:
                 raise Ap2EvidenceError(f"artifact {a['name']!r}: {e} (build refused)") from e
         done[a["name"]] = {"compact": parsed["compact"], "resolved_claims": v["resolved_claims"]}
-        kb = verify_kb_jwt(parsed, v["resolved_claims"]); kb.pop("_ignored", None)   # the receipt's report, not part of the sealed copy
+        kb = verify_kb_jwt(parsed, v["resolved_claims"], chain_hop=a["chain_from"] is not None); kb.pop("_ignored", None)   # the receipt's report, not part of the sealed copy
         if kb.get("verified") is None:   # 1.8.1 (SPEC §9.2): sd_hash_ok of the holder-key-unknown branch is the receipt's,
             kb.pop("sd_hash_ok", None)   # not sealed: a 1.8.0 verifier, which does not recompute it there, refuses a copy with it
         if kb.get("verified") is False:
@@ -3006,7 +3025,7 @@ def _verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = F
             chain_hop = None
             if prev_hop is not None and sig_ok and claims_ok:   # 1.9.0 (SPEC §2.1): the AP2 hop rules, each an artifact error
                 chain_hop = dict(check_chain_hop(parsed, resolved, prev_hop["compact"]), **{"from": key["chain_from"]})
-            kb = verify_kb_jwt(parsed, resolved)
+            kb = verify_kb_jwt(parsed, resolved, chain_hop=prev_hop is not None)
             for k in _KB_RECOMPUTED:   # SPEC §9.1 (NEMESIS 2026-10-11): a recorded KB value that says something else is that artifact's error
                 if k in a["kb_jwt"] and (k not in kb or _canon(a["kb_jwt"][k]) != _canon(kb[k])):
                     raise Ap2EvidenceError(f"artifact kb_jwt.{k} contradicts the KB-JWT (SPEC §9.1)")
@@ -3957,12 +3976,14 @@ def _main(argv: Optional[List[str]] = None) -> int:
     i = 0
     while i < len(raw):
         tok = raw[i]
-        if tok in ("--trusted-producer-key", "--key", "--jwks-url", "--tsa", "--subject", "--tsa-cert", "--trust-anchor", "--min-anchors"):
+        if tok in ("--trusted-producer-key", "--key", "--jwks-url", "--tsa", "--subject", "--tsa-cert", "--trust-anchor", "--min-anchors",
+                   "--require-binding"):
             val = raw[i + 1] if i + 1 < len(raw) else None
             if val is None or val == "" or val.startswith("-"):
                 p.error(f"{tok} needs a value (got {val!r})")
             i += 2; continue
-        if tok.split("=", 1)[0] in ("--trusted-producer-key", "--key", "--jwks-url", "--tsa", "--subject", "--tsa-cert", "--trust-anchor", "--min-anchors") and "=" in tok:
+        if tok.split("=", 1)[0] in ("--trusted-producer-key", "--key", "--jwks-url", "--tsa", "--subject", "--tsa-cert", "--trust-anchor", "--min-anchors",
+                                    "--require-binding") and "=" in tok:
             val = tok.split("=", 1)[1]
             if val == "" or val.startswith("-"):
                 p.error(f"{tok.split('=', 1)[0]} needs a value (got {val!r})")

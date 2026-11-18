@@ -65,7 +65,10 @@ def _sdk():
 # can stand in front of an RFC 9901 refusal the third stack disagrees with; `token_layer_view` looks underneath first.
 CLOSED_MARK = "(SPEC §9.1)"
 OURS_ONLY = ("provenance_class", "only EC/P-256",   # the pack's key block, no SD-JWT equivalent.
-             "(SPEC §2 (d)")   # 1.7.3: a header jwk/x5c naming another key than the snapshotted one — this format's choice
+             "(SPEC §2 (d)",
+             "chain_from")   # 1.9.0 (SPEC §2.1): which earlier artifact of the PACK a chain_cnf key comes from, and that it
+#   verified — the third stack is handed one token and the recorded key, it has no pack to reconcile against. The hop rules
+#   themselves (chain_hop_typ, chain_binding_mismatch, ...) do not carry this word and stay comparable.   # 1.7.3: a header jwk/x5c naming another key than the snapshotted one — this format's choice
 #   (RFC 7515 and draft-ietf-oauth-sd-jwt-vc-27 do not make it an error); the third stack is handed the snapshotted key only. "key.jwk must be
 #   an object" does not belong here: such an artifact never reaches this branch, it is counted in `nokey` above.
 # Exception types that are a crash inside the library rather than a refusal it meant to make.
@@ -106,6 +109,14 @@ DECLARED = {
         "through the AP2 SDK: its `_duplicate_hash_check` (verifier.py, `_unpack_disclosed_claims`) covers the `_sd` arrays "
         "of objects, not array elements, so it accepts the presentation and returns the mandate twice; the same digest in "
         "two `_sd` arrays (vector sd_digest_repeated_sd) it refuses, as this format does. This format refuses both (1.7.0).",
+    "sd_jwt_no_trailing_tilde.json:intent":
+        'RFC 9901 §4: "<Issuer-signed JWT>~<Disclosure 1>~...~<Disclosure N>~" — an SD-JWT without a KB-JWT ends with "~", '
+        "and the last component, when not empty, is a KB-JWT (three dot-separated segments). The vector drops the final "
+        "\"~\", so its last disclosure stands where the KB-JWT goes. Measured 2026-11-18 against sd-jwt 0.10.4 through the "
+        "AP2 SDK: it accepts the token. This format refuses it (sd_jwt_final_component_not_kb_jwt, 1.8.1).",
+    "sdjwt-no-trailing-tilde.json:cart":
+        "The same grammar rule (RFC 9901 §4) on the oracle's hostile copy of a shipped vector with its final \"~\" removed; "
+        "measured 2026-11-18 against sd-jwt 0.10.4 through the AP2 SDK: accepted there, refused here (1.8.1).",
     "sd_claim_name_reserved.json:intent":
         'RFC 9901 §7.1 step 3.c.ii.2: "If the claim name is _sd or ..., the SD-JWT MUST be rejected." Measured 2026-10-28 '
         "and 2026-10-29 against sd-jwt 0.10.4 through the AP2 SDK: it has no such check and inserts `_sd` as an ordinary "
@@ -118,6 +129,13 @@ DECLARED = {
 # `verified: null`, and the issuer payload carrying no `cnf.jwk`. Any other wrong-way divergence — another case, another
 # reason, or the same case once our verifier says something else — stays a [DIFF] and the bench red (control 8).
 DECLARED_WE_ACCEPT = {
+    "kb-no-cnf-sd-hash-right.json:cart": {   # the oracle's control of 1.8.1: a KB-JWT, no cnf.jwk, sd_hash right
+        "third_reason": "ValueError: No holder public key in SD-JWT",
+        "why": "the case of holder_key_unknown.json:cart (same clause, RFC 9901 §7.3 step 1, step 5 and §9.5), on the "
+               "differential oracle's hostile copy whose KB-JWT sd_hash is the hash of the presentation (SPEC §9.2, 1.8.1: "
+               "checked without the holder key; its twin with a wrong sd_hash is refused by both). Measured 2026-11-18, "
+               "against sd-jwt 0.10.4 through the AP2 SDK.",
+    },
     "holder_key_unknown.json:cart": {
         "third_reason": "ValueError: No holder public key in SD-JWT",
         "why": 'RFC 9901 §7.3 step 1: "Determine if Key Binding is to be checked according to the Verifier\'s policy for '

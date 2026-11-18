@@ -4,9 +4,10 @@
 """1.9.0, SPEC §2.1, §4, §6.9: AP2 delegation chains in their native form `<hop0>~~<hop1>...`, the binding over the issuer
 JWT (AP2's receipt `reference`), and the `require_binding` policy, in the library, the CLI and both verifiers.
 
-Measured on 2026-11-18 on 1.8.0 (gtm reports of that day): 0 of 157 native chains found in public repositories were
-accepted, with the message "malformed disclosure: invalid base64url segment"; the KB of a chain hop was never evaluated
-(0 of 109 split chains); 16 goodmeta/ap2-conformance vectors declared "reject" came out `valid: true`; a receipt issued
+Measured on 2026-11-18 on 1.8.0 (gtm reports of that day): 0 of the 143 distinct native chains found in 14 public
+repositories (156 occurrences) were accepted, with the message "malformed disclosure: invalid base64url segment"; the KB
+of a chain hop was never evaluated (0 of 109 split chains); 15 goodmeta/ap2-conformance vectors declared "reject" (9
+chains split by hand, 6 receipts) came out `valid: true`; a receipt issued
 by the AP2 SDK bound nothing. Data: spec/vectors/ap2_chains/ (README.md there: sources, licences, sha256). On the
 commit before this change (6728413) all twelve tests fail (measured with this file and the vectors copied onto an
 archive of that commit; the two tests of SPEC §4's all-or-none rule, added after, fail on 5a09a53); `test_not_a_chain` only for its message (the refusal of an empty component is 1.8.1's, the
@@ -313,7 +314,26 @@ class Chains(unittest.TestCase):
             "terminal_with_cnf": (2, lambda k, prev: mk.hop(k[2][0], "kb+sd-jwt", cl, _make_signer()[1], prev, "sd_hash"), "chain_terminal_with_cnf"),
             "terminal_without_iat": (2, lambda k, prev: mk.hop(k[2][0], "kb+sd-jwt", {"iss": "h"}, None, prev, "sd_hash"), "chain_terminal_without_iat"),
             "intermediate_as_terminal_typ": (1, lambda k, prev: mk.hop(k[1][0], "kb+sd-jwt", cl, k[2][1], prev, "sd_hash"), "chain_terminal_with_cnf"),
+            # draft-ietf-oauth-delegate-sd-jwt-00 §6 step 3.2: exactly one disclosed element of delegate_payload
+            "terminal_two_elements": (2, lambda k, prev: hop_items(k[2][0], "kb+sd-jwt", prev, [{"a": 1}, {"b": 2}]), "chain_delegate_payload"),
+            "terminal_no_element": (2, lambda k, prev: hop_items(k[2][0], "kb+sd-jwt", prev, []), "chain_delegate_payload"),
+            "terminal_no_delegate_payload": (2, lambda k, prev: hop_items(k[2][0], "kb+sd-jwt", prev, None), "chain_delegate_payload"),
+            "terminal_delegate_payload_object": (2, lambda k, prev: hop_items(k[2][0], "kb+sd-jwt", prev, {"a": 1}), "chain_delegate_payload"),
+            # ... §6 step 4.2: a chain that ends in a KB-JWT ends in a KB-SD-JWT+KB
+            "kb_jwt_after_terminal": (2, lambda k, prev: (lambda h: h + _sign_jwt(_make_signer()[0], {"alg": "ES256", "typ": "kb+jwt"},
+                                      {"iat": 1, "aud": "m", "nonce": "z", "sd_hash": ap2._sha256_b64url(h.encode("ascii"))}))(
+                                          mk.hop(k[2][0], "kb+sd-jwt", cl, None, prev, "sd_hash")), "chain_kb_jwt_after_terminal_hop"),
         }
+
+        def hop_items(sk, typ, prev, items):
+            payload = dict(cl, _sd_alg="sha-256", sd_hash=ap2._sha256_b64url(prev.encode("ascii")))
+            ds = []
+            if isinstance(items, list):
+                ds = [_disclosure(_b64u(os.urandom(8)), None, it) for it in items]
+                payload["delegate_payload"] = [{"...": ap2._disclosure_digest(d)} for d in ds]
+            elif items is not None:
+                payload["delegate_payload"] = items
+            return _sign_jwt(sk, {"alg": "ES256", "typ": typ}, payload) + "~" + "".join(d + "~" for d in ds)
         manifest, want = [], {}
         for name, (j, make, err) in cases.items():
             keys, hops = mk.chain(3)
@@ -532,6 +552,112 @@ class Chains(unittest.TestCase):
             with self.subTest(js=name):
                 self.assertEqual((r["valid"], r["bindings_ok"], r.get("bindings_not_recorded", [])), (want[name][0], want[name][0], want[name][1]))
 
+    def test_dsdjwt_kb_delegate_key(self):
+        """SPEC §2.1 (NEMESIS 2026-11-18): a dSD-JWT+KB (draft-ietf-oauth-delegate-sd-jwt-00 §5.1.1,
+        `<SD-JWT>~~<KB-SD-JWT+KB>~<delegate KB-JWT>`): the delegate KB-JWT is verified with the cnf.jwk the last hop
+        delegates to. On 98520d6 a KB-JWT signed by a key foreign to the chain built and verified `valid: true`, its
+        holder key reported unknown although the pack carries it."""
+        mk = ChainMaker(random.Random(7))
+        k = [_make_signer() for _ in range(3)]
+        h0 = mk.hop(k[0][0], "ap2-mandate+sd-jwt", {"iss": "h0", "iat": 1}, k[1][1], None, "sd_hash")
+        h1 = mk.hop(k[1][0], "kb+sd-jwt+kb", {"iss": "h1", "aud": "x", "nonce": "n", "iat": 1}, k[2][1], h0, "sd_hash")
+
+        def kbjwt(sk):
+            return _sign_jwt(sk, {"alg": "ES256", "typ": "kb+jwt"},
+                             {"iat": 1, "aud": "m", "nonce": "z", "sd_hash": ap2._sha256_b64url(h1.encode("ascii"))})
+        good, foreign = h0[:-1] + "~~" + h1 + kbjwt(k[2][0]), h0[:-1] + "~~" + h1 + kbjwt(_make_signer()[0])
+        _, out = self._build([{"name": "c", "sd_jwt": good}], {"c": k[0][1]}, "dkb")
+        r = ap2.verify_evidence(out)
+        self.assertTrue(r["valid"])
+        self.assertIs(r["artifacts"][1]["kb_jwt"]["verified"], True)
+        self.assertEqual(r["states"]["holder_binding"], {"state": "verified", "reasons": []})
+        with self.assertRaisesRegex(ap2.Ap2EvidenceError, "KB-JWT holder binding INVALID"):
+            self._build([{"name": "c", "sd_jwt": foreign}], {"c": k[0][1]}, "dkb_foreign")
+        with open(out, encoding="utf-8") as f:   # the same pack, its delegate KB-JWT swapped for the foreign one
+            ev = json.load(f)
+        ev["artifacts"][1]["sd_jwt_compact"] = foreign.split("~~", 1)[1]
+        ev["artifacts"][1]["kb_jwt"].pop("verified", None); ev["artifacts"][1]["kb_jwt"].pop("signature_ok", None)
+        p = os.path.join(self.d, "dkb_swapped.json")
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(_rehash(ev), f)
+        r = ap2.verify_evidence(p)
+        self.assertFalse(r["valid"])
+        self.assertIs(r["artifacts"][1]["kb_jwt"]["verified"], False)
+        js = _js_many(self, [("good", out, []), ("swapped", p, [])])
+        self.assertEqual((js["good"]["valid"], js["good"]["artifacts"][1]["kb_jwt"]["verified"]), (True, True))
+        self.assertEqual((js["swapped"]["valid"], js["swapped"]["artifacts"][1]["kb_jwt"]["verified"]), (False, False))
+
+    def test_require_binding_reads_only_a_matching_set(self):
+        """SPEC §6.9 (NEMESIS 2026-11-18, two live mutants on 98520d6): a pair is held only when bindings_ok — a recorded
+        set that is not the recomputed one leaves every pair unmet, in both verifiers, even if the recomputation holds it;
+        and require_bindings with an empty name is the caller's ValueError."""
+        _, out = self._build([{"name": "chain", "sd_jwt": _load("sdk_chainA.txt")},
+                              {"name": "receipt", "sd_jwt": _load("sdk_receiptA.jwt") + "~"}],
+                             {"chain": _load("sdk_issuer_pub.json"), "receipt": _load("sdk_mpp_pub.json")}, "rbset")
+        with open(out, encoding="utf-8") as f:
+            ev = json.load(f)
+        ev["bindings"] = [b for b in ev["bindings"] if "over" in b]   # the binding over the compact form removed: a mismatch
+        p = os.path.join(self.d, "rbset_mismatch.json")
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(_rehash(ev), f)
+        r = ap2.verify_evidence(p, require_bindings=[("receipt", "chain.1")])
+        self.assertEqual((r["valid"], r["bindings_ok"], r["policy"]["unmet"]), (False, False, ["require_binding"]))
+        js = _js_many(self, [("m", p, ["--require-binding", "receipt->chain.1"])])["m"]
+        self.assertEqual((js["valid"], js["bindings_ok"], js["policy"]["unmet"]), (False, False, ["require_binding"]))
+        for bad in ([("", "chain.1")], [("receipt", "")], [("receipt",)], "receipt->chain.1", [("receipt", 1)]):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                ap2.verify_evidence(out, require_bindings=bad)
+
+    def test_hop_needs_a_verified_previous_hop_and_its_key(self):
+        """SPEC §2.1, §4 (NEMESIS 2026-11-18, three live mutants on 98520d6): a hop whose previous hop did not verify is
+        that hop's error; a chain_cnf key that is not the previous hop's cnf.jwk is refused even when the hop verifies
+        under it, in both verifiers; a hex hash of an issuer JWT is a binding with "over" as the b64url one is."""
+        keys, hops = ChainMaker(random.Random(11)).chain(3)
+        _, out = self._build([{"name": "c", "sd_jwt": ChainMaker.join(hops)}], {"c": keys[0][1]}, "hv")
+        with open(out, encoding="utf-8") as f:
+            base = json.load(f)
+        ev = copy.deepcopy(base)   # (1) the root's signature broken: c.1 names no verified artifact
+        jwt, rest = ev["artifacts"][0]["sd_jwt_compact"].split("~", 1)
+        h, pl, sg = jwt.split(".")
+        sg = sg[:5] + ("A" if sg[5] != "A" else "B") + sg[6:]
+        ev["artifacts"][0]["sd_jwt_compact"] = f"{h}.{pl}.{sg}~{rest}"
+        p1 = os.path.join(self.d, "hv_root_broken.json")
+        with open(p1, "w", encoding="utf-8") as f:
+            json.dump(_rehash(ev), f)
+        ev = copy.deepcopy(base)   # (2) c.1 re-signed by a key of its own, recorded as its chain_cnf key
+        sk2, pub2 = _make_signer()
+        c1 = ev["artifacts"][1]["sd_jwt_compact"]
+        jwt, rest = c1.split("~", 1)
+        h, pl, _ = jwt.split(".")
+        resigned = _sign_jwt(sk2, json.loads(base64.urlsafe_b64decode(h + "=" * (-len(h) % 4))),
+                             json.loads(base64.urlsafe_b64decode(pl + "=" * (-len(pl) % 4))))
+        self.assertEqual(resigned.split(".")[:2], [h, pl])
+        ev["artifacts"][1]["sd_jwt_compact"] = resigned + "~" + rest
+        ev["artifacts"][1]["key"]["jwk"] = _pub(pub2)
+        ev["bindings"] = ap2.find_bindings([{"name": a["name"], "compact": a["sd_jwt_compact"], "resolved_claims": a["resolved_claims"]}
+                                            for a in ev["artifacts"]])
+        p2 = os.path.join(self.d, "hv_foreign_key.json")
+        with open(p2, "w", encoding="utf-8") as f:
+            json.dump(_rehash(ev), f)
+        py = {n: ap2.verify_evidence(p) for n, p in (("root_broken", p1), ("foreign_key", p2))}
+        js = _js_many(self, [("root_broken", p1, []), ("foreign_key", p2, [])])
+        for who, rr in (("python", py), ("js", js)):
+            with self.subTest(who=who):
+                self.assertFalse(rr["root_broken"]["valid"])
+                self.assertIn("names no artifact before this one that verified", rr["root_broken"]["artifacts"][1].get("error", ""))
+                self.assertFalse(rr["foreign_key"]["valid"])
+                self.assertIn("is not the cnf.jwk of the artifact named by chain_from", rr["foreign_key"]["artifacts"][1].get("error", ""))
+        sk_a, pub_a = _make_signer(); sk_b, pub_b = _make_signer()   # (3) hex over the issuer JWT
+        a_tok = _sign_jwt(sk_a, {"alg": "ES256", "typ": "example+sd-jwt"}, {"iss": "a", "x": 1}) + "~"
+        b_tok = _sign_jwt(sk_b, {"alg": "ES256", "typ": "example+sd-jwt"},
+                          {"iss": "b", "ref": hashlib.sha256(a_tok.split("~", 1)[0].encode("ascii")).hexdigest()}) + "~"
+        _, out3 = self._build([{"name": "a", "sd_jwt": a_tok}, {"name": "b", "sd_jwt": b_tok}], {"a": pub_a, "b": pub_b}, "hex")
+        with open(out3, encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["bindings"],
+                             [{"in": "b", "claim": "ref", "commits_to": "a", "encoding": "hex", "over": "issuer_jwt"}])
+        self.assertTrue(ap2.verify_evidence(out3)["bindings_ok"])
+        self.assertTrue(_js_many(self, [("h", out3, [])])["h"]["bindings_ok"])
+
     def test_legacy_1_0_pack_named(self):
         r = ap2.verify_evidence(_LEGACY)
         self.assertEqual((r["admission"], r["refusal_class"]), ("refused", "format_unsupported"))
@@ -551,6 +677,10 @@ class Chains(unittest.TestCase):
                 with self.subTest(verifier=base[-2] if base[0] == "node" else "python", flag=flag):
                     p = subprocess.run(base + ["--require-binding", flag], capture_output=True, text=True, env=env, timeout=120)
                     self.assertEqual(p.returncode, rc, p.stderr[-300:])
+            for flag in ("--require-binding=-x->y", "--require-binding=--a->b"):   # NEMESIS 2026-11-18: Python read it as a value
+                with self.subTest(verifier=base[-2] if base[0] == "node" else "python", flag=flag):
+                    p = subprocess.run(base + [flag], capture_output=True, text=True, env=env, timeout=120)
+                    self.assertEqual(p.returncode, 2, p.stderr[-300:])
 
 
 if __name__ == "__main__":
