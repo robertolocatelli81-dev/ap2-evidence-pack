@@ -7,9 +7,8 @@
 
 Measured against the AP2 specification as published in `google-agentic-commerce/AP2` on 2026-09-22, whose mandates are
 the **Checkout Mandate** and the **Payment Mandate** (the earlier Intent/Cart naming is gone from the spec; this README
-used it until today). A delegation chain from that spec — `delegate_payload` carrying an array disclosure — parses and
-resolves here unchanged: `python3 -c` on the encoded token in `docs/ap2/checkout_mandate.md` returns the delegate with
-its `vct`, `constraints` and `cnf`. What this package does NOT yet do is validate the `vct` against the mandate type,
+used it until today). One hop of a delegation chain — `delegate_payload` carrying an array disclosure — parses and resolves here unchanged;
+since 1.9.0 a whole chain in AP2's native form `<hop0>~~<hop1>...` is read too (below, "AP2 chains and receipts"). What this package does NOT yet do is validate the `vct` against the mandate type,
 which the reference SDK does.
 
 The [AP2 spec](https://ap2-protocol.org/ap2/specification/) tells implementers *what* to
@@ -153,6 +152,24 @@ Measured on Linux only; Windows and macOS are not measured (on Windows Python's 
 non-blocking pipe there would be 74).
 
 Or as a library: `build_evidence(...)` / `verify_evidence(...)`.
+
+## AP2 chains and receipts (1.9.0, SPEC §2.1, §4, §6.9)
+
+```bash
+ap2-evidence build pack.json chain=chain.txt receipt=receipt.sdjwt --key chain=issuer_pub.json --key receipt=psp_pub.json
+ap2-evidence verify pack.json --require-binding 'receipt->chain.1'
+```
+
+`chain.txt` is an AP2 presentation `<open>~~<closed>~` as the AP2 SDK writes it; `build` splits it into `chain.0`,
+`chain.1`, … and lists them (`ap2_chains`). The root takes the key you name; every later hop is verified with the previous
+hop's `cnf.jwk` (provenance class `chain_cnf`, reconciled again offline by both verifiers) and must be bound to it by
+`sd_hash` or `issuer_jwt_hash`, with the hop `typ` and `cnf` rules of the AP2 SDK; such a hop counts in `holder_binding`.
+An AP2 receipt is a plain JWS: give it as `<jwt>~`. Its `reference` binds the closed mandate whether it hashes the
+mandate's compact form or, as the AP2 SDK does, its issuer JWT alone (`"over": "issuer_jwt"`). `--require-binding IN->TO`
+makes a missing binding a policy failure (exit 1). Measured on the 23 chain and 12 receipt vectors of
+goodmeta/ap2-conformance and on chains emitted by the AP2 SDK (`spec/vectors/ap2_chains/`, `test_ap2_chains.py`): what
+remains valid among the "reject" vectors are checks of transaction context, time and receipt contents this format does
+not make (`aud`, `nonce`, `exp`, `payment_id`, `error_code`), listed in SPEC §2.1 and §6.9.
 
 ## Restriction record (1.7.0, SPEC §11)
 
@@ -564,6 +581,8 @@ python3 test_ap2_closed_schema_gaps.py # closed schema: the cases the generative
 python3 test_ap2_anchors.py            # 1.5.0: stamp / build --tsa repeated with a real local TSA, anchor identity, the earliest gen_time, --min-anchors in both verifiers
 python3 test_ap2_sd_rules.py           # 1.7.0: RFC 9901 §7.1 steps 4 and 3.c.ii.2 proved generatively — random payloads with digests in every position, planted repeats and reserved names, both verifiers (red on 1.6.0)
 python3 test_ap2_restriction.py        # 1.7.0: SPEC §11, the restriction record profile (the two open mandates of AP2's documentation, decoded verbatim)
+python3 test_ap2_chains.py             # 1.9.0: AP2 chains `~~`, receipts over the issuer JWT, --require-binding — goodmeta vectors, AP2 SDK chains, 400 generated chains, the hop rules in both verifiers, both verifiers (red on 1.8.x)
+python3 test_ap2_tsa_ess_ids.py        # 1.9.0: a TSA token whose ESS attribute lists more than one ESSCertID (RFC 2634 §5.4 / RFC 5035), with a local TSA (red on 1.8.x)
 python3 test_ap2_depth.py              # 1.7.1: generated chains of nested disclosures around 512 and 1000 levels, up to 20000 — library, build, both verifiers; the 64 MiB bound at the byte for build, and stamp and sign_evidence on a pack 200 bytes under it (red on 1.7.0)
 python3 verifiers/schema_mutants.py --full   # the release measurement (16 503 mutations in 1.5.0); --py-root/--js point it at an older checkout = positive control
 python3 verifiers/differential_oracle.py   # Python vs Node on every vector, hostile file and CLI case (needs node)
@@ -578,7 +597,9 @@ Other people's work this repository uses or learned from, each under its own lic
 
 - **Data**: NIST Randomness Beacon 2.0 pulses and certificates (U.S. government work, 17 U.S.C. §105) in
   `spec/vectors/beacon/`; 15 NIST ACVP ML-DSA-65 sigVer cases in `pqcrypto/vectors/` (generated from NIST's JSON); the ISO 4217 minor units
-  of five currencies (facts; no currency list is shipped).
+  of five currencies (facts; no currency list is shipped); the 23 chain and 12 receipt vectors of goodmeta/ap2-conformance
+  (Apache-2.0, minted from the AP2 SDK; copied verbatim with their NOTICE into `spec/vectors/ap2_chains/`) and chains
+  emitted with the AP2 SDK (Apache-2.0) in `spec/vectors/ap2_chains/`.
 - **Independent verifiers used as oracles**: the AP2 Python SDK of google-agentic-commerce/AP2 (Apache-2.0), run by
   `verifiers/sdk_crosscheck.py` from a checkout the user provides; OpenSSL (Apache-2.0) for `--tsa-cert` and
   `--trust-anchor`; pyca/cryptography (Apache-2.0 or BSD-3-Clause) for the signatures.

@@ -14,3 +14,19 @@ spec/vectors/ap2/holder_sd_hash_mismatch.json:jwt:43
 spec/vectors/ap2/sd_jwt_no_separator.json:jwt:32
 spec/vectors/ap2/holder_sd_hash_mismatch_no_key.json:jwt:33
 test_ap2_jose_header.py:generic-api-key:25
+# 1.9.0: the receipts of spec/vectors/ap2_chains are plain JWS (AP2 receipts): twelve of goodmeta/ap2-conformance
+# (public test vectors, Apache-2.0) and one emitted with the AP2 SDK under a key generated for the vector and discarded.
+# Each is the test object and holds no secret; the files carry public keys only.
+spec/vectors/ap2_chains/sdk_receiptA.jwt:jwt:1
+spec/vectors/ap2_chains/goodmeta_receipts.json:jwt:5
+spec/vectors/ap2_chains/goodmeta_receipts.json:jwt:22
+spec/vectors/ap2_chains/goodmeta_receipts.json:jwt:39
+spec/vectors/ap2_chains/goodmeta_receipts.json:jwt:56
+spec/vectors/ap2_chains/goodmeta_receipts.json:jwt:73
+spec/vectors/ap2_chains/goodmeta_receipts.json:jwt:90
+spec/vectors/ap2_chains/goodmeta_receipts.json:jwt:107
+spec/vectors/ap2_chains/goodmeta_receipts.json:jwt:124
+spec/vectors/ap2_chains/goodmeta_receipts.json:jwt:141
+spec/vectors/ap2_chains/goodmeta_receipts.json:jwt:158
+spec/vectors/ap2_chains/goodmeta_receipts.json:jwt:175
+spec/vectors/ap2_chains/goodmeta_receipts.json:jwt:192

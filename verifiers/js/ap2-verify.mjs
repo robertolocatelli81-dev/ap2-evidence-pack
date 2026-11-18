@@ -68,8 +68,8 @@ function parseStrict(text, inToken = false) {
     if (text.startsWith("true", i)) { i += 4; return true; } if (text.startsWith("false", i)) { i += 5; return false; } if (text.startsWith("null", i)) { i += 4; return null; }
     const m = /^-?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?/.exec(text.slice(i)); if (!m) err("value");
     if (m[2] || m[3]) { if (!inToken) err("float " + m[0]); const shown = m[0].length <= 30 ? m[0] : m[0].slice(0, 30) + "…";
-      if (INTEGRAL_READ === null) err("float " + shown + " in the SD-JWT needs accept_integral_floats");
-      const v = integralLiteral(m); if (v === null) err("float " + shown + " in the SD-JWT: not an integer within +/-(2^53-1)"); INTEGRAL_READ.push(shown); i += m[0].length; return v; }
+      const v = integralLiteral(m); if (v === null) err("float " + shown + " in the SD-JWT: not an integer within +/-(2^53-1)");   // 1.9.0: said first, also without the option (which does not read it)
+      if (INTEGRAL_READ === null) err("float " + shown + " in the SD-JWT needs accept_integral_floats"); INTEGRAL_READ.push(shown); i += m[0].length; return v; }
     const n = Number(m[0]); if (!Number.isSafeInteger(n) || Math.abs(n) > SAFE) err("integer out of range"); i += m[0].length; return n;
   }
   const v = value(); ws(); if (i !== text.length) err("trailing data"); return v;
@@ -87,6 +87,7 @@ const sha256 = (b) => createHash("sha256").update(b).digest();
 const b64u = (b) => Buffer.from(b).toString("base64url");
 const EVIDENCE_FORMAT = "ap2-evidence-pack/1.0";
 const HONEST_SCOPE_SHA256 = "a4b12a682847c23c4a136dd399c6aa0dfa69540a5c7200039d506e86ac31dfbf";   // SPEC §1: sha256 of the canonical honest scope of this format version
+const HONEST_SCOPE_SHA256_1_0 = "431877e44b759e99d306f79dd52739f08bd94bc05d70a6a03ee82f74fc0f15db";   // 1.9.0 (SPEC §1): the scope 1.0.0-1.0.2 sealed, named in the refusal
 const B64URL = /^[A-Za-z0-9_-]+$/;
 function b64uDecode(s) { if (typeof s !== "string" || !s || !B64URL.test(s) || s.length % 4 === 1) throw new Refused("invalid base64url segment"); const raw = Buffer.from(s, "base64url"); if (b64u(raw) !== s) throw new Refused("non-canonical base64url"); return raw; }
 const b64Strict = (s) => { if (typeof s !== "string" || !s || s.length % 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(s)) return null; const raw = Buffer.from(s, "base64"); return raw.toString("base64") === s ? raw : null; };
@@ -99,10 +100,10 @@ function parseSdJwt(compact) {
   // 1.8.1 (SPEC §6 step 2, RFC 9901 §4): the grammar is closed, as the reference — no '~', an empty component before the last, or a last
   // component that is neither empty nor a KB-JWT (three dot-separated segments) is refused by name (up to 1.8.0: read as a plain JWT,
   // dropped in silence, taken as the KB-JWT)
-  if (!compact.includes("~")) throw new Refused("sd_jwt_no_separator: an SD-JWT has at least one '~' after the issuer JWT (RFC 9901 §4: <Issuer-signed JWT>~<D.1>~...~<D.N>~[<KB-JWT>])");
+  if (!compact.includes("~")) throw new Refused("sd_jwt_no_separator: an SD-JWT has at least one '~' after the issuer JWT (RFC 9901 §4: <Issuer-signed JWT>~<D.1>~...~<D.N>~[<KB-JWT>]); a plain JWS such as an AP2 receipt enters as <jwt>~, an SD-JWT with no disclosures (SPEC §2.1)");
   const parts = compact.split("~"); const jwt = parts[0]; const middle = parts.slice(1, -1); const kb = parts[parts.length - 1] || null;
-  if (middle.some((d) => d === "")) throw new Refused("sd_jwt_empty_component: an empty component between two '~' (RFC 9901 §4: DISCLOSURE = 1*base64url; only the last component may be empty)");
-  if (kb !== null && kb.split(".").length !== 3) throw new Refused("sd_jwt_final_component_not_kb_jwt: the last '~'-separated component is neither empty nor a KB-JWT of three dot-separated segments (RFC 9901 §4: an SD-JWT ends with '~')");
+  if (middle.some((d) => d === "")) throw new Refused("sd_jwt_empty_component: an empty component between two '~' (RFC 9901 §4: DISCLOSURE = 1*base64url; only the last component may be empty; an AP2 chain joins its hops with '~~' before an issuer JWT, and `build` splits it into hops, SPEC §2.1)");
+  if (kb !== null && kb.split(".").length !== 3) throw new Refused("sd_jwt_final_component_not_kb_jwt: the last '~'-separated component is neither empty nor a KB-JWT of three dot-separated segments, so it would be read as the KB-JWT: is the trailing '~' missing? (RFC 9901 §4: an SD-JWT without a KB-JWT ends with '~')");
   const seg = jwt.split("."); if (seg.length !== 3) throw new Refused("issuer JWT must have 3 dot-separated segments");
   let header, payload; try { header = jsonOf(b64uDecode(seg[0])); payload = jsonOf(b64uDecode(seg[1])); } catch (e) { throw new Refused("JWT header/payload not valid JSON/base64url: " + e.message); }
   return { compact, jwt, header, payload, signature: b64uDecode(seg[2]), signingInput: Buffer.from(seg[0] + "." + seg[1], "ascii"), disclosures: middle, kbJwt: kb };
@@ -158,7 +159,7 @@ function checkUnknown(obj, what, allowed) {   // 1.6.0 — SPEC §9.1/§6.9: onl
 }
 // ---- 1.6.0 — SPEC §6.9: the five subjects of an admitted pack (the same derivation as the reference's derive_states) ----
 export const STATES_VOCABULARY = "ap2-evidence-pack/states-1";
-const POLICY_UNMET = ["require_producer", "require_pq", "require_anchor", "min_anchors", "trusted_producer_keys", "trust_set_complete"];
+const POLICY_UNMET = ["require_producer", "require_pq", "require_anchor", "min_anchors", "require_binding", "trusted_producer_keys", "trust_set_complete"];   // require_binding: 1.9.0
 function subject(elements) {   // [state, reason, detail?]: contradicted > not_evaluated/instrument_failure > other not_evaluated > verified
   const rank = (e) => e[0] === "contradicted" ? 3 : e[1] === "instrument_failure" ? 2 : e[0] === "not_evaluated" ? 1 : 0;
   let top = elements[0]; for (const e of elements) if (rank(e) > rank(top)) top = e;
@@ -182,7 +183,8 @@ function deriveStates({ digestOk, artResults, bindingSetMatch, tsBlock, rfcBlock
   const verifiedArts = artResults.filter((r) => !("error" in r));
   const notSeen = verifiedArts.length === artResults.length ? null : "artifacts that are errors are stated in sealed_content only";
   let holder = [];
-  for (const r of verifiedArts) { const kb = r.kb_jwt ?? {}; if (!kb.present) continue;
+  for (const r of verifiedArts) { if (r.chain_hop) holder.push(["verified", null]);   // 1.9.0 (SPEC §2.1, §6.9): an AP2 hop is the holder binding of the hop before it
+    const kb = r.kb_jwt ?? {}; if (!kb.present) continue;
     if (kb.verified === true) holder.push(["verified", null]);
     else if (kb.verified === false) holder.push(["contradicted", kb.signature_ok !== true ? "kb_signature_invalid" : "sd_hash_mismatch"]);
     else holder.push(["not_evaluated", "holder_key_unknown"]); }
@@ -293,7 +295,7 @@ function verifyKbJwt(parsed, resolved) {
   const sigOk = es256Verify(Buffer.from(seg[0] + "." + seg[1], "ascii"), b64uDecode(seg[2]), jwk);
   return { present: true, verified: Boolean(sigOk && sdHashOk), signature_ok: sigOk, sd_hash_ok: sdHashOk, note: null, claims_recorded_not_validated: recorded, _ignored: ignored };   // final check: the sealed scope says these are RECORDED — the reference did it, this verifier did not
 }
-const PROVENANCE_CLASSES = new Set(["supplied", "x5c_header", "jwk_header", "jwks_fetched"]);
+const PROVENANCE_CLASSES = new Set(["supplied", "x5c_header", "jwk_header", "jwks_fetched", "chain_cnf"]);   // chain_cnf: 1.9.0 (SPEC §2.1)
 // ---- closed schema (SPEC §9, 1.4.0): every object this format defines is an exhaustive key list (unknown = refusal / artifact
 // error / FAIL entry, the key named); every object a standard defines follows that standard's rule for the unknown (ignored AND
 // reported). Measured 2026-10-10 on 1.3.0: a key nobody defined inside rfc3161_timestamp, the producer block or a signature entry
@@ -320,9 +322,9 @@ const ANCHOR_RFC3161_KEYS = { mechanism: [[(v) => v === "rfc3161", '"rfc3161"'],
 const DIGEST_EXCLUDED = ["evidence_digest_sha256", "rfc3161_timestamp", "producer_signatures", "anchors"];   // SPEC §3 (1.5.0: + anchors)
 const RFC3161_KEYS = { anchored: [T.bool, 1], tsr_b64: [T.str, 0], tsa_url: [T.str, 0], tsa: [T.str, 0], note: [T.str, 0] };   // tsr_b64 ABSENT under anchored: §6.4, rfc3161_verified false
 const PRODUCER_KEYS = { scheme: [T.scheme, 1], over: [T.over, 1], signatures: [T.list, 1] };
-const BINDING_KEYS = { in: [T.str, 1], claim: [T.str, 1], commits_to: [T.str, 1], encoding: [T.enc, 1] };
+const BINDING_KEYS = { in: [T.str, 1], claim: [T.str, 1], commits_to: [T.str, 1], encoding: [T.enc, 1], over: [[(v) => v === "issuer_jwt", '"issuer_jwt"'], 0] };   // over: 1.9.0 (SPEC §4)
 const ARTIFACT_KEYS = { name: [T.str, 1], sd_jwt_compact: [T.str, 1], header: [T.obj, 1], key: [T.obj, 1], resolved_claims: [T.any, 1], kb_jwt: [T.obj, 1], verified_at_build: [T.obj, 1] };
-const KEY_KEYS = { jwk: [T.obj, 1], provenance_class: [T.str, 1], note: [T.str, 0], x5c_chain_sha256: [T.listOfStr, 0], jwks_url: [T.str, 0], jwks_sha256: [T.str, 0], fetched_utc: [T.str, 0] };
+const KEY_KEYS = { jwk: [T.obj, 1], provenance_class: [T.str, 1], note: [T.str, 0], x5c_chain_sha256: [T.listOfStr, 0], jwks_url: [T.str, 0], jwks_sha256: [T.str, 0], fetched_utc: [T.str, 0], chain_from: [T.str, 0] };   // chain_from: 1.9.0 (SPEC §2.1)
 const KB_COPY_KEYS = { present: [T.bool, 1], verified: [T.boolOrNull, 0], signature_ok: [T.bool, 0], sd_hash_ok: [T.bool, 0], note: [T.strOrNull, 0], claims_recorded_not_validated: [T.obj, 0] };
 const VAB_KEYS = { signature_ok: [T.isTrue, 1], disclosures_ok: [T.isTrue, 1] };
 const ENTRY_KEYS = new Set(["sig_alg", "public_key_b64", "signature_b64", "post_quantum"]);
@@ -411,12 +413,38 @@ function reconcileUnusedHeaderKeys(header, jwk, pc) {
 }
 function findBindings(arts) {
   const byValue = new Map();   // r5: inverse index (digest string -> [name, encoding]) — the per-leaf scan was O(artifacts), quadratic
-  for (const a of arts) { const raw = Buffer.from(a.compact, "ascii"); const h = sha256(raw); for (const [v, enc] of [[h.toString("hex"), "hex"], [b64u(h), "b64url"]]) { if (!byValue.has(v)) byValue.set(v, []); byValue.get(v).push([a.name, enc]); } }
+  for (const a of arts) { const h = sha256(Buffer.from(a.compact, "ascii")); const hj = sha256(Buffer.from(a.compact.split("~")[0], "ascii"));   // 1.9.0 (SPEC §4): also over the issuer JWT
+    for (const [v, enc, over] of [[h.toString("hex"), "hex", null], [b64u(h), "b64url", null], [hj.toString("hex"), "hex", "issuer_jwt"], [b64u(hj), "b64url", "issuer_jwt"]]) { if (!byValue.has(v)) byValue.set(v, []); byValue.get(v).push([a.name, enc, over]); } }
   const found = [];
   function scan(node, path, holder) { if (node !== null && typeof node === "object" && !Array.isArray(node)) { for (const k of Object.keys(node)) scan(node[k], path ? path + "." + k : k, holder); }
     else if (Array.isArray(node)) node.forEach((v, i) => scan(v, path + "[" + i + "]", holder));
-    else if (typeof node === "string") { for (const [other, enc] of byValue.get(node) ?? []) { if (other === holder) continue; found.push({ in: holder, claim: path, commits_to: other, encoding: enc }); } } }
+    else if (typeof node === "string") { for (const [other, enc, over] of byValue.get(node) ?? []) { if (other === holder) continue; found.push({ in: holder, claim: path, commits_to: other, encoding: enc, ...(over ? { over } : {}) }); } } }
   for (const a of arts) scan(a.resolved, "", a.name); return found;
+}
+// 1.9.0 — SPEC §2.1: AP2 delegation chains (draft-gco-oauth-delegate-sd-jwt-00 §6 as the AP2 SDK implements it, e1ea56d)
+const HOP_TERMINAL = ["kb+sd-jwt", "kb-sd-jwt"], HOP_INTERMEDIATE = ["kb+sd-jwt+kb", "kb-sd-jwt+kb"];
+function chainCnfJwk(resolved) {   // the reference's chain_cnf_jwk: delegate_payload object elements first, then the top level
+  const found = []; const dp = isObj(resolved) ? resolved.delegate_payload : undefined;
+  for (const h of (Array.isArray(dp) ? dp.filter((x) => isObj(x)) : []).concat([resolved])) {
+    if (isObj(h) && Object.hasOwn(h, "cnf")) { const c = h.cnf; if (!isObj(c) || !isObj(c.jwk)) throw new Refused("chain_cnf_malformed: a cnf of the previous hop is not an object with a jwk object (SPEC §2.1)"); found.push(c.jwk); } }
+  if (!found.length) throw new Refused("chain_cnf_missing: the previous hop carries no cnf.jwk to verify this hop with (SPEC §2.1)");
+  if (found.slice(1).some((f) => !sameKey(f, found[0]))) throw new Refused("chain_cnf_ambiguous: the previous hop carries two cnf.jwk naming different keys (SPEC §2.1)");
+  const o = {}; for (const f of ["kty", "crv", "x", "y"]) if (Object.hasOwn(found[0], f)) o[f] = found[0][f]; return o;
+}
+function checkChainHop(parsed, resolved, prevCompact) {   // the reference's check_chain_hop
+  const typ = parsed.header.typ; const mt = typeof typ === "string" ? mediaType(typ) : null; const k = mt === null ? null : JSON.stringify(mt);
+  const term = k !== null && HOP_TERMINAL.some((t) => JSON.stringify(mediaType(t)) === k), inter = k !== null && HOP_INTERMEDIATE.some((t) => JSON.stringify(mediaType(t)) === k);
+  if (!term && !inter) throw new Refused("chain_hop_typ: a hop after the first must have typ kb+sd-jwt or kb+sd-jwt+kb (SPEC §2.1)");
+  const has = ["sd_hash", "issuer_jwt_hash"].filter((c) => isObj(resolved) && Object.hasOwn(resolved, c));
+  if (has.length !== 1) throw new Refused("chain_binding_mismatch: a hop must carry exactly one of sd_hash and issuer_jwt_hash (SPEC §2.1)");
+  const prevSd = prevCompact.slice(0, prevCompact.lastIndexOf("~") + 1);
+  const want = b64u(sha256(Buffer.from(has[0] === "sd_hash" ? prevSd : prevCompact.split("~")[0], "ascii")));
+  if (resolved[has[0]] !== want) throw new Refused("chain_binding_mismatch: " + has[0] + " is not the hash of the previous hop (SPEC §2.1)");
+  const dp = resolved.delegate_payload; const hasCnf = Array.isArray(dp) && dp.some((x) => isObj(x) && isObj(x.cnf));
+  if (term && hasCnf) throw new Refused("chain_terminal_with_cnf: a terminal hop (kb+sd-jwt) must not carry cnf (SPEC §2.1)");
+  if (inter && !hasCnf) throw new Refused("chain_intermediate_without_cnf: an intermediate hop (kb+sd-jwt+kb) must carry cnf (SPEC §2.1)");
+  if (term && !Object.hasOwn(resolved, "iat")) throw new Refused("chain_terminal_without_iat: a terminal hop (kb+sd-jwt) must carry iat (SPEC §2.1)");
+  return { binding: has[0], terminal: term };
 }
 // ---- producer signatures ----
 const MLDSA65_SPKI_PREFIX = Buffer.from("308207b2300b0609608648016503040312038207a100", "hex");   // SEQ{ SEQ{OID 2.16.840.1.101.3.4.3.18}, BIT STRING(0x00||1952 bytes) } — the wrapping measured in omega-evidence
@@ -783,6 +811,8 @@ export { checkNotBefore, parseNotBefore };
 export function verifyEvidence(path, opts = {}) {
   // 1.7.2 (SPEC §3.1): acceptIntegralFloats, a boolean, default false; when true the receipt says so
   if (opts.acceptIntegralFloats !== undefined && typeof opts.acceptIntegralFloats !== "boolean") throw new TypeError("acceptIntegralFloats must be a boolean");
+  // 1.9.0 (SPEC §6.9): requireBindings, a list of [in, commits_to] pairs of non-empty names, as the reference's require_bindings
+  if (opts.requireBindings !== undefined && opts.requireBindings !== null && !(Array.isArray(opts.requireBindings) && opts.requireBindings.every((pr) => Array.isArray(pr) && pr.length === 2 && pr.every((x) => typeof x === "string" && x !== "")))) throw new TypeError("requireBindings must be a list of [in, commits_to] pairs of non-empty names");
   const saved = INTEGRAL_READ; INTEGRAL_READ = opts.acceptIntegralFloats ? [] : null;
   try { const r = verifyEvidenceInner(path, opts); if (opts.acceptIntegralFloats) r.accept_integral_floats = true; return r; }
   finally { INTEGRAL_READ = saved; }
@@ -798,7 +828,7 @@ function verifyEvidenceInner(path, opts) {
   // shape of the top-level fields (SPEC §1), the same refusals as the reference
   if (ev.evidence_format !== EVIDENCE_FORMAT) return refuse("evidence_format must be " + JSON.stringify(EVIDENCE_FORMAT), "format_unsupported");   // r5: a "…/2.0" pack was verified under the 1.0 rules
   for (const f of ["subject", "created_utc", "honest_scope"]) if (typeof ev[f] !== "string") return refuse(f + " must be a string (SPEC §1)");
-  if (createHash("sha256").update(Buffer.from(ev.honest_scope, "utf8")).digest("hex") !== HONEST_SCOPE_SHA256) return refuse("honest_scope does not match the canonical scope of this evidence_format (SPEC §1)", "format_unsupported");   // r8: the receipt used to reprint any scope the file carried
+  if (createHash("sha256").update(Buffer.from(ev.honest_scope, "utf8")).digest("hex") !== HONEST_SCOPE_SHA256) return refuse(createHash("sha256").update(Buffer.from(ev.honest_scope, "utf8")).digest("hex") === HONEST_SCOPE_SHA256_1_0 ? "honest_scope is the scope of ap2-evidence-pack 1.0.0-1.0.2 (sha256 431877e4...): a pack built by 1.0.x, sealed under rules 1.1.0 changed (SPEC §1, CHANGELOG 1.1.0); this verifier reads packs built by 1.1.0 and later, and does not verify it" : "honest_scope does not match the canonical scope of this evidence_format (SPEC §1)", "format_unsupported");   // r8: the receipt used to reprint any scope the file carried
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(ev.created_utc)) return refuse("created_utc must be ISO-8601 UTC, YYYY-MM-DDTHH:MM:SSZ (SPEC §1)");   // r6
   if (!Array.isArray(ev.artifacts) || ev.artifacts.some((a) => a === null || typeof a !== "object" || Array.isArray(a))) return refuse("artifacts must be a list of objects");
   const names = ev.artifacts.map((a) => a.name); if (names.some((n) => typeof n !== "string" || !n)) return refuse("artifacts[].name must be a non-empty string");   // r3
@@ -827,7 +857,7 @@ function verifyEvidenceInner(path, opts) {
   } catch (e) { return refuse(String(e.message ?? e), e instanceof UnknownMember ? "unknown_member" : e instanceof FormatUnsupported ? "format_unsupported" : "malformed"); }
   const e2 = Object.create(null); for (const k of Object.keys(ev)) if (!DIGEST_EXCLUDED.includes(k)) e2[k] = ev[k];
   const recomputed = sha256(Buffer.from(canon(e2), "utf-8")).toString("hex"); const digestOk = recomputed === ev.evidence_digest_sha256;
-  const artResults = []; let allOk = true; const forBindings = [];
+  const artResults = []; let allOk = true; const forBindings = []; const chainSeen = new Map();   // chainSeen: 1.9.0 (SPEC §2.1)
   for (const a of ev.artifacts) {
     const read0 = INTEGRAL_READ === null ? null : INTEGRAL_READ.length;   // 1.7.2: the literals this artifact had read as integers
     try { checkClosed(a, "artifact", ARTIFACT_KEYS); checkClosed(a.key, "artifact key", KEY_KEYS); checkClosed(a.kb_jwt, "artifact kb_jwt", KB_COPY_KEYS); checkClosed(a.verified_at_build, "artifact verified_at_build", VAB_KEYS);   // 1.4.0 — SPEC §9.1
@@ -835,6 +865,11 @@ function verifyEvidenceInner(path, opts) {
       if (!a.key || typeof a.key !== "object" || Array.isArray(a.key)) throw new Refused("artifact key.jwk must be an object");
       const pc = a.key.provenance_class;   // r2: a list was sorted here; r5: out-of-enum passed as a strong class; r7: absent/null used to CLEAR self_asserted_only
       if (typeof pc !== "string" || !PROVENANCE_CLASSES.has(pc)) throw new Refused("artifact key.provenance_class must be one of " + [...PROVENANCE_CLASSES].sort().join(", "));
+      if ((pc === "chain_cnf") !== Object.hasOwn(a.key, "chain_from")) throw new Refused("artifact key.chain_from goes with provenance_class chain_cnf, and only with it (SPEC §2.1)");
+      let prevHop = null;
+      if (pc === "chain_cnf") { prevHop = chainSeen.get(a.key.chain_from) ?? null;   // 1.9.0 — SPEC §2.1: reconciled against the previous hop the pack carries
+        if (prevHop === null) throw new Refused("artifact key.chain_from " + JSON.stringify(a.key.chain_from) + " names no artifact before this one that verified (SPEC §2.1)");
+        if (!sameKey(chainCnfJwk(prevHop.resolved), a.key.jwk)) throw new Refused("provenance_class chain_cnf but the key is not the cnf.jwk of the artifact named by chain_from (SPEC §2.1)"); }
       const parsed = parseSdJwt(compact);
       // r6: this shape check spent round 5 INSIDE an unterminated line comment — a signed payload that is a JSON array
       // verified in this verifier and failed in the reference. It runs before checkProvenance, which reads the header.
@@ -846,11 +881,14 @@ function verifyEvidenceInner(path, opts) {
       const prov = checkProvenance(pc, parsed, a.key); const selfAsserted = prov.selfAsserted;   // r5: reconciled with the signed header; r7: decides self_asserted_only
       reconcileUnusedHeaderKeys(parsed.header, a.key.jwk, pc); ignored.key_material = keyMaterialNotUsed(parsed.header, pc);   // 1.7.3 (SPEC §2 (d), §6 step 2, §9.2)
       const sigOk = es256Verify(parsed.signingInput, parsed.signature, a.key.jwk); const resolved = resolveDisclosures(parsed.payload, parsed.disclosures);
-      const claimsOk = canon(resolved) === canon(a.resolved_claims ?? null); const kb = verifyKbJwt(parsed, resolved);
+      const claimsOk = canon(resolved) === canon(a.resolved_claims ?? null);
+      const chainHop = (prevHop !== null && sigOk && claimsOk) ? { ...checkChainHop(parsed, resolved, prevHop.compact), from: a.key.chain_from } : null;   // 1.9.0 — SPEC §2.1
+      const kb = verifyKbJwt(parsed, resolved);
       for (const k of ["verified", "signature_ok", "sd_hash_ok", "claims_recorded_not_validated"]) if (Object.hasOwn(a.kb_jwt, k) && (!Object.hasOwn(kb, k) || canon(a.kb_jwt[k]) !== canon(kb[k]))) throw new Refused("artifact kb_jwt." + k + " contradicts the KB-JWT (SPEC §9.1)");   // SPEC §9.1 (NEMESIS 2026-10-11)
       Object.assign(ignored, kb._ignored ?? {}); delete kb._ignored; const ign = {}; for (const k of Object.keys(ignored).sort(cmp)) if (ignored[k].length) ign[k] = ignored[k];   // SPEC §9.2: only the non-empty slots
-      artResults.push({ name: a.name, signature_ok: sigOk, claims_match: claimsOk, kb_jwt: kb, provenance_class: a.key?.provenance_class, self_asserted: selfAsserted, ignored: ign, ...(prov.ident ? { x5c_leaf: prov.ident } : {}) });
+      artResults.push({ name: a.name, signature_ok: sigOk, claims_match: claimsOk, kb_jwt: kb, provenance_class: a.key?.provenance_class, self_asserted: selfAsserted, ignored: ign, ...(prov.ident ? { x5c_leaf: prov.ident } : {}), ...(chainHop ? { chain_hop: chainHop } : {}) });
       allOk = allOk && sigOk && claimsOk && kb.verified !== false; forBindings.push({ name: a.name, compact: parsed.compact, resolved });
+      if (sigOk && claimsOk && typeof a.name === "string") chainSeen.set(a.name, { compact: parsed.compact, resolved });
     } catch (e) { artResults.push({ name: a?.name, error: String(e.message ?? e) }); allOk = false; }
     if (read0 !== null) artResults[artResults.length - 1].integral_literals_read = INTEGRAL_READ.slice(read0);
   }
@@ -885,6 +923,9 @@ function verifyEvidenceInner(path, opts) {
   if (opts.requirePq && !(producer.pq_protected && producer.trusted === true)) unmet.push("require_pq");
   if (opts.requireAnchor && anchorsVerified < 1) unmet.push("require_anchor");
   if (opts.minAnchors !== undefined && opts.minAnchors !== null && anchorsVerified < opts.minAnchors) unmet.push("min_anchors");   // under --tsa-cert nothing counts here (no openssl): not a pass (declared)
+  let bindingMissing = null;   // 1.9.0 — SPEC §6.9: each IN->TO must be in the RECOMPUTED set, which counts only when bindingsOk
+  if (opts.requireBindings && opts.requireBindings.length) { const held = new Set(bindingsOk ? findBindings(forBindings).map((b) => JSON.stringify([b.in, b.commits_to])) : []);
+    const miss = opts.requireBindings.filter((pr) => !held.has(JSON.stringify(pr))); if (miss.length) { unmet.push("require_binding"); bindingMissing = miss; } }
   const policyOk = unmet.length === 0;
   if ((opts.trusted ?? null) !== null && producer.present && producer.trusted !== true) unmet.push("trusted_producer_keys");
   const states = deriveStates({ digestOk, artResults, bindingSetMatch, tsBlock: ts, rfcBlock, anchorResults, tsaRequested: Boolean(opts.tsaCert),
@@ -898,18 +939,19 @@ function verifyEvidenceInner(path, opts) {
     // a missing class is a refusal; r8: this verifier cannot validate x5c chains, so chain_verified is always null (declared)
     self_asserted_only: artResults.length === 0 || artResults.some((r) => r.self_asserted !== false), chain_verified: null, policy_ok: policyOk,
     valid: Boolean(artResults.length && digestOk && allOk && bindingsOk && rfc.verified !== false && policyOk && (nbRep === null || nbRep.state !== "failed")), honest_scope: ev.honest_scope ?? null,
-    admission: "admitted", refusal_class: null, states_vocabulary: STATES_VOCABULARY, states, policy: { met: unmet.length === 0, unmet: POLICY_UNMET.filter((u) => unmet.includes(u)) },
+    admission: "admitted", refusal_class: null, states_vocabulary: STATES_VOCABULARY, states, policy: { met: unmet.length === 0, unmet: POLICY_UNMET.filter((u) => unmet.includes(u)), ...(bindingMissing ? { require_binding_missing: bindingMissing } : {}) },
     mldsa_backend: HAVE_MLDSA, ...(nbRep === null ? {} : { not_before: nbRep }) };
 }
 function main(argv) {
   // 1.5.2 review: a usage line that stderr does not take (/dev/full) is 74, as in the Python CLI (console.error dropped the error and exited 2)
-  const usage = () => { try { writeAllSync(2, "usage: ap2-verify.mjs <evidence.json> [--trusted-producer-key ALG=B64]... [--require-producer] [--require-pq] [--require-anchor] [--min-anchors N] [--tsa-cert PEM] [--trust-set-complete] [--accept-integral-floats]\n"); } catch { process.exit(EX_IOERR); } process.exit(2); };
+  const usage = () => { try { writeAllSync(2, "usage: ap2-verify.mjs <evidence.json> [--trusted-producer-key ALG=B64]... [--require-producer] [--require-pq] [--require-anchor] [--min-anchors N] [--tsa-cert PEM] [--trust-set-complete] [--accept-integral-floats] [--require-binding IN->TO]...\n"); } catch { process.exit(EX_IOERR); } process.exit(2); };
   const a = argv.slice(2); const opts = { trusted: null }; let path = null;
   for (let i = 0; i < a.length; i++) { let tok = a[i], eqv = null; const eq = tok.indexOf("="); if (eq > 0 && tok.startsWith("--")) { eqv = tok.slice(eq + 1); tok = tok.slice(0, eq); }
     const nx = () => { const v = eqv !== null ? eqv : a[++i]; if (v === undefined || v === "" || v.startsWith("-")) usage(); return v; };
     if (tok === "--trusted-producer-key") { const v = nx(); const k = v.indexOf("="); if (k <= 0 || k === v.length - 1) usage(); opts.trusted = opts.trusted ?? Object.create(null); (opts.trusted[v.slice(0, k)] ??= []).push(v.slice(k + 1)); }   // r2: a null-prototype table, so "constructor=…" is a pin like any other
     else if (tok === "--tsa-cert") opts.tsaCert = nx();
     else if (tok === "--min-anchors") { const v = nx(); if (!/^[1-9][0-9]{0,5}$/.test(v)) usage(); opts.minAnchors = Number(v); }   // 1.5.0 — the reference's grammar
+    else if (tok === "--require-binding") { const v = nx(); const k = v.indexOf("->"); if (k <= 0 || k + 2 >= v.length || v.indexOf("->", k + 2) !== -1) usage(); (opts.requireBindings ??= []).push([v.slice(0, k), v.slice(k + 2)]); }   // 1.9.0 — SPEC §6.9
     else if (tok === "--trust-anchor") { nx(); usage(); }   // 1.6.0: this verifier cannot validate x5c chains; a flag accepted that does nothing is a usage error (r8 accepted it and reported chain_verified null)
     else if (tok === "--require-producer" && eqv === null) opts.requireProducer = true; else if (tok === "--require-pq" && eqv === null) opts.requirePq = true; else if (tok === "--require-anchor" && eqv === null) opts.requireAnchor = true;
     else if (tok === "--trust-set-complete" && eqv === null) opts.trustSetComplete = true;   // 1.6.0 — SPEC §6.9

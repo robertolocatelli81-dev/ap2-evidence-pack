@@ -1,9 +1,74 @@
 # Changelog
 
-## Unreleased (1.8.1) — false greens closed: SD-JWT grammar, sd_hash without the holder key; TSA signer not found; typ parameters
+## Unreleased (1.9.0) — AP2 chains in their native form; receipts bound to the closed mandate; a binding policy; false greens closed
 
-SPEC 1.8.1 (§3.2, §6 step 2, §6.9, §7, §9.2, §13; each rule written before the code). Measured on 2026-11-18 on the PyPI
-wheel 1.7.3 (sha256 109227df…203b5c00) and on the tag v1.8.0 (d5601e4); the two gave the same outcomes.
+SPEC 1.9.0 (§1, §2.1, §3.1, §3.2, §4, §6 step 2, §6.9, §7, §9.2, §10, §13; each rule written before the code). Measured on
+2026-11-18 on the PyPI wheel 1.7.3 (sha256 109227df…203b5c00), on the tag v1.8.0 (d5601e4) and on the PyPI wheel 1.8.0, on
+662 SD-JWTs found in public repositories and on the goodmeta/ap2-conformance vectors. A minor version: the pack gains a
+provenance class (`chain_cnf`), a key member (`chain_from`) and a binding member (`over`) that a 1.8.x verifier refuses;
+a pack without them reads as before. The work started as 1.8.1; the entries below that say 1.8.1 are part of this release.
+
+### AP2 (measured on 2026-11-18 on 1.8.0: what the format exists for did not work)
+
+- **AP2 delegation chains `<hop0>~~<hop1>...` are read as AP2 writes them (SPEC §2.1).** 1.8.0 refused every native chain
+  with `malformed disclosure: invalid base64url segment` (157 of 157 found in 9 public repositories; 0 of 23 goodmeta
+  vectors, the 3 valid ones included). `build` now splits a chain given for `N` into the artifacts `N.0`, `N.1`, …; the
+  root takes the key named for `N`, every later hop is verified with the previous hop's `cnf.jwk` (new provenance class
+  `chain_cnf`, with `chain_from` naming that hop, reconciled offline by both verifiers) and must satisfy the AP2 SDK's hop
+  rules (`kb_sd_jwt.verify` at e1ea56d): KB-SD-JWT `typ`, exactly one of `sd_hash` / `issuer_jwt_hash` equal to the hash of
+  the previous hop, `cnf` on intermediate hops only, `iat` present on the terminal hop. `aud`, `nonce` and the values of
+  `iat` and `exp` are not checked (transaction context and time, declared).
+  On the 23 goodmeta chain vectors: the 3 valid ones verify; of the 9 "reject" vectors that 1.8.0 gave `valid: true`
+  when split by hand, 6 are refused, each for the vector's own reason (sd_hash mismatch, both binding claims, neither,
+  wrong typ, terminal with cnf, intermediate without), and `aud_mismatch`, `nonce_mismatch`, `expired` stay valid
+  (declared, §2.1); the other 10 "reject" vectors were refused before and are now (signature or alg 5, x5c 5), and
+  `valid_x5c`, which goodmeta expects valid, is refused: its certificates are base64url where RFC 7515 §4.1.6 says
+  base64. A terminal hop without `iat` is refused as the SDK refuses it. On
+  145 tokens holding `~~`, re-read from 11 public repositories at the commits recorded (143 chains, and 2 SD-JWTs with
+  an empty component, refused as such): in 107 chains every hop after the root verifies under the previous hop's
+  `cnf.jwk` and the hop rules (the root's signature is not part of this count: its key is not in those files); 36 are
+  refused by name — a hop rule 16, a hop's signature 4, a number that is not an integer or needs the option 7, a
+  32-byte signature 3, a disclosure no digest refers to 3, a payload that is not JSON 2, a key that is not P-256 1.
+  1.8.0 read none of the 143.
+- **The KB of a chain hop is evaluated (SPEC §2.1, §6.9).** 1.8.0 gave `holder_binding: not_evaluated` on every hop (0 of
+  109 split chains): the key is in the previous hop. A `chain_cnf` artifact is now a `holder_binding` element, `verified`
+  when the hop verifies under the previous hop's `cnf.jwk` and its binding claim matches; otherwise that artifact's error.
+- **A receipt binds the closed mandate (SPEC §4, `over: "issuer_jwt"`).** The AP2 SDK computes a receipt's `reference` as
+  the SHA-256 of the closed mandate's issuer JWT (`get_closed_mandate_jwt`, `mandate.py` 402-417 at e1ea56d); 1.8.0 looked
+  only for the hash of the compact form and found no binding (measured on an SDK-issued receipt). Bindings are now also
+  searched over each artifact's issuer JWT and recorded with `"over": "issuer_jwt"`; the `issuer_jwt_hash` hop binding is
+  found the same way. The goodmeta receipts, whose `reference` is over the compact form, bind as before.
+- **`--require-binding IN->TO` (SPEC §6.9).** A relying-party policy, repeatable, in both verifiers and the library
+  (`require_bindings`): each pair must be a recomputed binding, else `policy.unmet` `require_binding`, the missing pairs
+  in `policy.require_binding_missing`, and not valid. No default (the format cannot know which artifact must be bound).
+  On the 12 goodmeta receipt vectors under `receipt->` the closed hop: the 3 accept vectors are valid, the 3 wrong-key
+  or tampered ones are refused at build, `reference_mismatch` (payment and checkout), `reference_is_root_hash` and
+  `missing_reference` are not valid; `missing_payment_id` and `error_without_error_code` stay valid (receipt contents this
+  format does not read, declared). A chain mixing two mandates (the SDK refuses it) is refused at build (§2.1).
+- **A plain JWS** (an AP2 receipt) enters as `<jwt>~`; `sd_jwt_no_separator` now says so.
+
+### TSA signer named by key identifier (SPEC §3.2)
+
+- **More than one ESSCertID** is read as RFC 2634 §5.4 / RFC 5035 write it: the first is the signer's, the ones after it
+  limit the token certificates the path may use (closed shapes: known algorithm, certHash of its length, no certificate
+  twice, a later issuerSerial naming the certificate it hashes). Up to 1.8.x the key-identifier step refused any list
+  longer than one, so a TSA that lists its chain was `tsa_verified: false` there (the same class as cryptovalid-opencore
+  SPEC v0.11 §11 step 7, Sectigo). `test_ap2_tsa_ess_ids.py`: 3 of 4 tests fail on the previous commit (the fourth, one
+  ESSCertID, is the control).
+
+### Messages and help (measured on 1.8.0, 2026-11-18)
+
+- A pack built by 1.0.x is refused as before, and the refusal now names it ("the scope of ap2-evidence-pack
+  1.0.0-1.0.2 … a pack built by 1.0.x"), in both verifiers (SPEC §1); 1.8.0 said "honest_scope does not match the
+  canonical scope". Reading 1.0.x packs is not offered (SPEC §1: their rules are the ones 1.1.0 corrected).
+- `sd_jwt_final_component_not_kb_jwt` asks whether the trailing `~` is missing; `sd_jwt_empty_component` names the chain
+  form `~~`.
+- SPEC §3.1: a number that is not an integer stays outside this format, now stated against RFC 7519 §2 with the reason and
+  the count measured (8 of 662 public SD-JWTs). Its error says so with or without `--accept-integral-floats`
+  (`float '0.1' in the SD-JWT: not an integer within +/-(2^53-1)`), in both verifiers; 1.8.0 answered "needs
+  accept_integral_floats", an option that refuses the same token.
+- `ap2_chain_malformed` names the two forms a chain cannot take: a last hop with no `~`, a KB-JWT on a hop before the last.
+- SPEC §10: the informative mapping follows draft-xg-payment-dispute-profile-02 (§8.2, §8.3, §4; it was -01 §4.2, §4.3, §3).
 
 ### False greens (`valid: true` where the input breaks RFC 9901), in 1.7.3 and 1.8.0, Python and JavaScript
 

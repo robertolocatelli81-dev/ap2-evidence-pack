@@ -102,7 +102,12 @@ HONEST_SCOPE = (
     "for the auditor, not validated — their expected values are transaction context "
     "this tool cannot know offline.")
 
-HONEST_SCOPE_SHA256 = hashlib.sha256(HONEST_SCOPE.encode("utf-8")).hexdigest()   # r8: pinned in SPEC §1, so both verifiers refuse a rewritten scope
+HONEST_SCOPE_SHA256 = hashlib.sha256(HONEST_SCOPE.encode("utf-8")).hexdigest()
+# 1.9.0 (SPEC §1): the scope 1.0.0-1.0.2 sealed (same text in the three tags); a pack carrying it is named, not "a rewritten scope"
+HONEST_SCOPE_SHA256_1_0 = "431877e44b759e99d306f79dd52739f08bd94bc05d70a6a03ee82f74fc0f15db"
+_PACK_1_0_REFUSAL = ("honest_scope is the scope of ap2-evidence-pack 1.0.0-1.0.2 (sha256 431877e4...): a pack built by 1.0.x, "
+                     "sealed under rules 1.1.0 changed (SPEC §1, CHANGELOG 1.1.0); this verifier reads packs built by 1.1.0 "
+                     "and later, and does not verify it")   # r8: pinned in SPEC §1, so both verifiers refuse a rewritten scope
 
 
 class Ap2EvidenceError(ValueError):
@@ -193,11 +198,11 @@ _INTEGRAL_READ: ContextVar = ContextVar("ap2_integral_read", default=None)
 def _token_number(text: str):
     shown = text if len(text) <= 30 else text[:30] + "…"   # the literal is attacker-sized; the receipt keeps 120 chars of an error
     read = _INTEGRAL_READ.get()
+    v = _integral_literal(text)
+    if v is None:   # 1.9.0: said first — up to 1.8.x `0.1` without the option "needs accept_integral_floats", which does not read it
+        raise Ap2EvidenceError(f"float {shown!r} in the SD-JWT: not an integer within +/-(2^53-1) (SPEC §3.1)")
     if read is None:
         raise Ap2EvidenceError(f"float {shown!r} in the SD-JWT needs accept_integral_floats")   # literal first: the receipt keeps 120 chars
-    v = _integral_literal(text)
-    if v is None:
-        raise Ap2EvidenceError(f"float {shown!r} in the SD-JWT: not an integer within +/-(2^53-1) (SPEC §3.1)")
     read.append(shown)
     return v
 
@@ -368,17 +373,20 @@ def parse_sd_jwt(compact: str) -> Dict:
     dot-separated segments; `sd_jwt_final_component_not_kb_jwt`, e.g. a missing trailing '~') is refused with that name.
     Up to 1.8.0 they were read as a JWT with no disclosures, dropped in silence, and taken as the KB-JWT."""
     compact = compact.strip()
-    if "~" not in compact:
+    if "~" not in compact:   # 1.9.0: the message says how a plain JWS (an AP2 receipt) enters
         raise Ap2EvidenceError("sd_jwt_no_separator: an SD-JWT has at least one '~' after the issuer JWT "
-                               "(RFC 9901 §4: <Issuer-signed JWT>~<D.1>~...~<D.N>~[<KB-JWT>])")
+                               "(RFC 9901 §4: <Issuer-signed JWT>~<D.1>~...~<D.N>~[<KB-JWT>]); a plain JWS such as an AP2 "
+                               "receipt enters as <jwt>~, an SD-JWT with no disclosures (SPEC §2.1)")
     parts = compact.split("~")
     jwt, middle, kb = parts[0], parts[1:-1], parts[-1] or None
-    if any(d == "" for d in middle):
+    if any(d == "" for d in middle):   # 1.9.0: an AP2 chain (`~~` before an issuer JWT) is split by build, never here
         raise Ap2EvidenceError("sd_jwt_empty_component: an empty component between two '~' "
-                               "(RFC 9901 §4: DISCLOSURE = 1*base64url; only the last component may be empty)")
-    if kb is not None and kb.count(".") != 2:
+                               "(RFC 9901 §4: DISCLOSURE = 1*base64url; only the last component may be empty; an AP2 chain "
+                               "joins its hops with '~~' before an issuer JWT, and `build` splits it into hops, SPEC §2.1)")
+    if kb is not None and kb.count(".") != 2:   # 1.9.0: the message names the usual cause
         raise Ap2EvidenceError("sd_jwt_final_component_not_kb_jwt: the last '~'-separated component is neither empty nor "
-                               "a KB-JWT of three dot-separated segments (RFC 9901 §4: an SD-JWT ends with '~')")
+                               "a KB-JWT of three dot-separated segments, so it would be read as the KB-JWT: is the trailing "
+                               "'~' missing? (RFC 9901 §4: an SD-JWT without a KB-JWT ends with '~')")
     seg = jwt.split(".")
     if len(seg) != 3:   # 1.8.0 (SPEC §13): the dots found are named
         raise Ap2EvidenceError(f"issuer JWT must have 3 dot-separated segments (found {len(seg) - 1} dot(s))")
@@ -730,7 +738,7 @@ def verify_es256(signing_input: bytes, signature: bytes, jwk: Dict) -> bool:
         return False
 
 
-PROVENANCE_CLASSES = frozenset({"supplied", "x5c_header", "jwk_header", "jwks_fetched"})
+PROVENANCE_CLASSES = frozenset({"supplied", "x5c_header", "jwk_header", "jwks_fetched", "chain_cnf"})   # chain_cnf: 1.9.0, SPEC §2.1
 
 # ── closed schema (SPEC §9, 1.4.0). Measured 2026-10-10 on 1.3.0: a key nobody defined, inside rfc3161_timestamp, the
 # producer block or a signature entry, was accepted with valid: true and no trace in the receipt. Every object this format
@@ -798,13 +806,15 @@ _RFC3161_KEYS = {"anchored": (_is_bool, "a boolean", True), "tsr_b64": (_is_str,
 _PRODUCER_KEYS = {"scheme": (lambda v: v in ("hybrid", "classical-only"), '"hybrid" or "classical-only"', True),
                   "over": (lambda v: v == "evidence_digest_sha256", '"evidence_digest_sha256"', True), "signatures": (_is_list, "a list", True)}
 _BINDING_KEYS = {"in": (_is_str, "a string", True), "claim": (_is_str, "a string", True), "commits_to": (_is_str, "a string", True),
-                 "encoding": (lambda v: v in ("hex", "b64url"), '"hex" or "b64url"', True)}
+                 "encoding": (lambda v: v in ("hex", "b64url"), '"hex" or "b64url"', True),
+                 "over": (lambda v: v == "issuer_jwt", '"issuer_jwt"', False)}   # 1.9.0 (SPEC §4)
 _ARTIFACT_KEYS = {"name": (_is_str, "a string", True), "sd_jwt_compact": (_is_str, "a string", True), "header": (_is_obj, "an object", True),
                   "key": (_is_obj, "an object", True), "resolved_claims": (lambda v: True, "", True), "kb_jwt": (_is_obj, "an object", True),
                   "verified_at_build": (_is_obj, "an object", True)}
 _KEY_KEYS = {"jwk": (_is_obj, "an object", True), "provenance_class": (_is_str, "a string", True), "note": (_is_str, "a string", False),
              "x5c_chain_sha256": (_is_list_of_str, "a list of strings", False), "jwks_url": (_is_str, "a string", False),
-             "jwks_sha256": (_is_str, "a string", False), "fetched_utc": (_is_str, "a string", False)}
+             "jwks_sha256": (_is_str, "a string", False), "fetched_utc": (_is_str, "a string", False),
+             "chain_from": (_is_str, "a string", False)}   # 1.9.0 (SPEC §2.1): with chain_cnf, and only with it
 _KB_COPY_KEYS = {"present": (_is_bool, "a boolean", True), "verified": (_is_bool_or_none, "a boolean or null", False), "signature_ok": (_is_bool, "a boolean", False),
                  "sd_hash_ok": (_is_bool, "a boolean", False), "note": (_is_str_or_none, "a string or null", False), "claims_recorded_not_validated": (_is_obj, "an object", False)}
 _VAB_KEYS = {"signature_ok": (_is_true, "true", True), "disclosures_ok": (_is_true, "true", True)}
@@ -1215,12 +1225,17 @@ def verify_kb_jwt(parsed: Dict, resolved_claims: Dict) -> Dict:
 def find_bindings(artifacts: List[Dict]) -> List[Dict]:
     """Cross-artifact hash commitments, recomputed from the PRIMARY quantity: sha-256 over
     each artifact's exact compact serialization (hex and b64url forms), matched against
-    every string claim of the other artifacts. Deterministic; found-or-absent, never guessed."""
+    every string claim of the other artifacts. Deterministic; found-or-absent, never guessed.
+    1.9.0 (SPEC §4): also over each artifact's issuer-signed JWT alone (AP2's receipt `reference`, the chain hop's
+    `issuer_jwt_hash`), recorded with `"over": "issuer_jwt"`."""
     by_value = {}   # r5: inverse index (digest string -> name, encoding) — the per-leaf scan used to be O(artifacts), quadratic
     for a in artifacts:
         raw = a["compact"].encode("ascii")
-        by_value.setdefault(hashlib.sha256(raw).hexdigest(), []).append((a["name"], "hex"))
-        by_value.setdefault(_sha256_b64url(raw), []).append((a["name"], "b64url"))
+        by_value.setdefault(hashlib.sha256(raw).hexdigest(), []).append((a["name"], "hex", None))
+        by_value.setdefault(_sha256_b64url(raw), []).append((a["name"], "b64url", None))
+        ij = a["compact"].split("~", 1)[0].encode("ascii")
+        by_value.setdefault(hashlib.sha256(ij).hexdigest(), []).append((a["name"], "hex", "issuer_jwt"))
+        by_value.setdefault(_sha256_b64url(ij), []).append((a["name"], "b64url", "issuer_jwt"))
     found = []
 
     def scan(node, path, holder):
@@ -1231,14 +1246,101 @@ def find_bindings(artifacts: List[Dict]) -> List[Dict]:
             for i, v in enumerate(node):
                 scan(v, f"{path}[{i}]", holder)
         elif isinstance(node, str):
-            for other, enc in by_value.get(node, ()):
+            for other, enc, over in by_value.get(node, ()):
                 if other == holder:
                     continue
-                found.append({"in": holder, "claim": path, "commits_to": other, "encoding": enc})
+                found.append({"in": holder, "claim": path, "commits_to": other, "encoding": enc,
+                              **({"over": over} if over else {})})
 
     for a in artifacts:
         scan(a["resolved_claims"], "", a["name"])
     return found
+
+
+# ────────────────────────────────────────────────────────── AP2 delegation chains (SPEC §2.1, 1.9.0)
+# draft-gco-oauth-delegate-sd-jwt-00 §6 as the AP2 SDK implements it (google-agentic-commerce/AP2 e1ea56d,
+# code/sdk/python/ap2/sdk/sdjwt/chain.py and kb_sd_jwt.py): hops joined by "~~", the root an SD-JWT, every later hop a
+# KB-SD-JWT signed with the previous hop's cnf.jwk and bound to it by exactly one of sd_hash / issuer_jwt_hash.
+AP2_HOP_TYPS_TERMINAL = ("kb+sd-jwt", "kb-sd-jwt")
+AP2_HOP_TYPS_INTERMEDIATE = ("kb+sd-jwt+kb", "kb-sd-jwt+kb")
+
+
+def split_ap2_chain(token: str) -> Optional[List[str]]:
+    """SPEC §2.1: the hops of an AP2 chain `<hop0>~~<hop1>...`, each an SD-JWT of its own (the '~' the SDK drops before
+    joining is put back on every hop but the last), or None when `token` is not one: a chain needs at least two parts and
+    every part after the first starting with an issuer JWT (three dot-separated segments before its first '~'); so
+    `<jwt>~~` (an empty component, RFC 9901 §4) is never read as a chain. Raises on a part that is empty or starts
+    with '~' once the token is a chain (`ap2_chain_malformed`)."""
+    token = token.strip()
+    parts = token.split("~~")
+    if len(parts) < 2 or any(p.split("~", 1)[0].count(".") != 2 or p.startswith("~") for p in parts[1:]):
+        return None
+    if not parts[0] or parts[0].startswith("~") or parts[0].endswith("~") or any(p.endswith("~~") for p in parts):
+        raise Ap2EvidenceError("ap2_chain_malformed: an AP2 chain is hops joined by '~~', each hop an SD-JWT without its "
+                               "last '~' (AP2 SDK mandate.py; SPEC §2.1)")
+    if "~" not in parts[-1]:
+        raise Ap2EvidenceError("ap2_chain_malformed: what follows the last '~~' is a JWT with no '~': the last hop of an AP2 "
+                               "chain keeps its '~' (<open>~~<closed>~); read as one SD-JWT it is an empty component before "
+                               "a KB-JWT (RFC 9901 §4: DISCLOSURE = 1*base64url) — refused either way (SPEC §2.1)")
+    if any("~" in p and p.rsplit("~", 1)[1].count(".") == 2 for p in parts[:-1]):
+        raise Ap2EvidenceError("ap2_chain_malformed: a hop before the last ends with a KB-JWT; in an AP2 chain the next hop "
+                               "is the key binding, and only the last hop may carry one (AP2 kb_sd_jwt.py; SPEC §2.1)")
+    return [p + "~" for p in parts[:-1]] + [parts[-1]]
+
+
+def chain_cnf_jwk(resolved: Dict) -> Dict:
+    """SPEC §2.1: the key the next hop is verified with — `cnf.jwk` of the hop's resolved claims, looked up where the AP2
+    SDK looks (ParsedToken._find_cnf): in each object element of `delegate_payload`, then at the top level. Every `cnf`
+    found must be an object whose `jwk` is an object; two that name different keys are ambiguous (refused, this format's
+    rule; the SDK takes the first); none is `chain_cnf_missing` (the SDK: 'Previous token missing cnf.jwk')."""
+    found = []
+    dp = resolved.get("delegate_payload") if isinstance(resolved, dict) else None
+    for holder in ([x for x in dp if isinstance(x, dict)] if isinstance(dp, list) else []) + [resolved]:
+        if isinstance(holder, dict) and "cnf" in holder:
+            cnf = holder["cnf"]
+            if not isinstance(cnf, dict) or not isinstance(cnf.get("jwk"), dict):
+                raise Ap2EvidenceError("chain_cnf_malformed: a cnf of the previous hop is not an object with a jwk object (SPEC §2.1)")
+            found.append(cnf["jwk"])
+    if not found:
+        raise Ap2EvidenceError("chain_cnf_missing: the previous hop carries no cnf.jwk to verify this hop with (SPEC §2.1)")
+    if any(not _same_key(f, found[0]) for f in found[1:]):
+        raise Ap2EvidenceError("chain_cnf_ambiguous: the previous hop carries two cnf.jwk naming different keys (SPEC §2.1)")
+    return {f: found[0].get(f) for f in ("kty", "crv", "x", "y") if f in found[0]}
+
+
+def check_chain_hop(parsed: Dict, resolved: Dict, prev_compact: str) -> Dict:
+    """SPEC §2.1, the checks of the AP2 SDK's kb_sd_jwt.verify that need no transaction context: `typ` one of the four
+    KB-SD-JWT types (compared as SPEC §13 says), exactly one of `sd_hash` / `issuer_jwt_hash` at the top level of the
+    hop's claims and equal to BASE64URL(SHA-256) of the previous hop's SD-JWT (without a KB-JWT) / its issuer JWT, a
+    terminal type with no `cnf` in `delegate_payload` and an intermediate one with one, a terminal hop carrying `iat`.
+    Each failure is that artifact's error. Not checked (transaction context and time, as for a KB-JWT): `aud`, `nonce`,
+    the values of `iat` and `exp`."""
+    typ = parsed["header"].get("typ")
+    mt = _media_type(typ) if isinstance(typ, str) else None
+    term = mt is not None and mt in {_media_type(t) for t in AP2_HOP_TYPS_TERMINAL}
+    inter = mt is not None and mt in {_media_type(t) for t in AP2_HOP_TYPS_INTERMEDIATE}
+    if not (term or inter):
+        raise Ap2EvidenceError(f"chain_hop_typ: a hop after the first must have typ kb+sd-jwt or kb+sd-jwt+kb (got {_jkey(typ)}; "
+                               "AP2 kb_sd_jwt.py, SPEC §2.1)")
+    has = [c for c in ("sd_hash", "issuer_jwt_hash") if c in resolved]
+    if len(has) != 1:
+        raise Ap2EvidenceError(f"chain_binding_mismatch: a hop must carry exactly one of sd_hash and issuer_jwt_hash "
+                               f"(found {len(has)}; AP2 common.verify_binding, SPEC §2.1)")
+    prev_sd_jwt = prev_compact.rsplit("~", 1)[0] + "~"
+    want = (_sha256_b64url(prev_sd_jwt.encode("ascii")) if has[0] == "sd_hash" else issuer_jwt_hash(prev_compact))
+    if resolved[has[0]] != want:
+        raise Ap2EvidenceError(f"chain_binding_mismatch: {has[0]} is not the hash of the previous hop (SPEC §2.1)")
+    dp = resolved.get("delegate_payload")
+    has_cnf = isinstance(dp, list) and any(isinstance(x, dict) and isinstance(x.get("cnf"), dict) for x in dp)
+    if term and has_cnf:
+        raise Ap2EvidenceError("chain_terminal_with_cnf: a terminal hop (kb+sd-jwt) must not carry cnf (AP2 kb_sd_jwt.py, SPEC §2.1)")
+    if inter and not has_cnf:
+        raise Ap2EvidenceError("chain_intermediate_without_cnf: an intermediate hop (kb+sd-jwt+kb) must carry cnf "
+                               "(AP2 kb_sd_jwt.py, SPEC §2.1)")
+    if term and "iat" not in resolved:   # the SDK's verify_expected_claims, run on terminal hops: presence needs no context
+        raise Ap2EvidenceError("chain_terminal_without_iat: a terminal hop (kb+sd-jwt) must carry iat (AP2 common.py "
+                               "verify_expected_claims, SPEC §2.1)")
+    return {"binding": has[0], "terminal": term}
 
 
 # ────────────────────────────────────────────────────────── RFC 3161 time anchor
@@ -1577,6 +1679,13 @@ def _ski_pem(der):
     return b"-----BEGIN CERTIFICATE-----\n" + base64.encodebytes(der) + b"-----END CERTIFICATE-----\n"
 
 
+def _ski_issuer_serial(cert_der):
+    """(serialNumber value bytes, issuer Name TLV) of a DER certificate (1.9.0, for a later ESSCertID's issuerSerial)."""
+    tbs = _ski_items(_ski_items(_ski_one(cert_der, "certificate", 0x30), "certificate")[0][1], "tbsCertificate")
+    k = 1 if tbs[0][0] == 0xA0 else 0
+    return tbs[k][1], _ski_tlv(0x30, tbs[k + 2][1])
+
+
 class KeyIdCheckNotRun(Exception):
     """the key-id step could not be run here (an openssl whose `verify` does not know an option it needs)"""
 
@@ -1633,7 +1742,7 @@ def key_id_token_problem(der, digest_hex, ca_file, at, tmp, exe="openssl"):
                     e = _ski_items(ev, "Extension")
                     if _ski_oid(e[0][1]) == _SKI_SAN:
                         san = [_ski_tlv(gt, gv) for gt, gv in _ski_items(_ski_one(e[-1][1], "subjectAltName", 0x30), "GeneralNames")]
-        attrs = {}
+        attrs, allowed = {}, None   # allowed: 1.9.0, the token certificates a later ESSCertID names (None: no limit)
         for t, av in _ski_items(si[3][1], "signedAttrs"):   # Attribute ::= SEQUENCE { attrType OID, attrValues SET }
             a = _ski_items(av, "Attribute") if t == 0x30 else []
             if len(a) != 2 or a[0][0] != 0x06 or a[1][0] != 0x31:
@@ -1650,24 +1759,48 @@ def key_id_token_problem(der, digest_hex, ca_file, at, tmp, exe="openssl"):
             if not 1 <= len(sc) <= 2 or sc[0][0] != 0x30 or (len(sc) == 2 and not _ski_policies_shape(sc[1])):
                 return "ESS attribute %s: not {certs, policies?}" % o
             ids = _ski_items(sc[0][1], "certs")
-            if len(ids) != 1:
-                return "ESS attribute %s: %d ESSCertIDs (exactly one is evaluated here)" % (o, len(ids))
-            if ids[0][0] != 0x30:
-                return "ESS attribute %s: the ESSCertID is not a SEQUENCE" % o
-            cid = _ski_items(ids[0][1], "ESSCertID")
-            alg = "sha1"
-            if o == _SKI_ESS_V2:
-                alg = "sha256"
-                if cid and cid[0][0] == 0x30:
-                    ai = _ski_items(cid[0][1], "hashAlgorithm")
-                    alg = _SKI_HASHES.get(_ski_oid(ai[0][1]))
-                    if alg is None or not (len(ai) == 1 or (len(ai) == 2 and ai[1] == (0x05, b""))):
-                        return "ESSCertIDv2: hash algorithm not known"
-                    cid = cid[1:]
-            if not cid or cid[0][0] != 0x04 or len(cid) > 2 or (len(cid) == 2 and cid[1][0] != 0x30):
-                return "ESSCertID: not {certHash, issuerSerial?}"
+            if not ids:   # 1.9.0 (SPEC §3.2): RFC 2634 §5.4 / RFC 5035: the first ESSCertID is the signer's, the ones after
+                return "ESS attribute %s: no ESSCertID" % o   # it limit the certificates of the path (up to 1.8.x: exactly one)
+            parsed_ids = []
+            for n_, (t_, v_) in enumerate(ids):
+                if t_ != 0x30:
+                    return "ESS attribute %s: the ESSCertID is not a SEQUENCE" % o
+                cid = _ski_items(v_, "ESSCertID")
+                alg = "sha1"
+                if o == _SKI_ESS_V2:
+                    alg = "sha256"
+                    if cid and cid[0][0] == 0x30:
+                        ai = _ski_items(cid[0][1], "hashAlgorithm")
+                        alg = _SKI_HASHES.get(_ski_oid(ai[0][1]))
+                        if alg is None or not (len(ai) == 1 or (len(ai) == 2 and ai[1] == (0x05, b""))):
+                            return "ESSCertIDv2: hash algorithm not known"
+                        cid = cid[1:]
+                if not cid or cid[0][0] != 0x04 or len(cid) > 2 or (len(cid) == 2 and cid[1][0] != 0x30):
+                    return "ESSCertID: not {certHash, issuerSerial?}"
+                if len(cid[0][1]) != hashlib.new(alg).digest_size:
+                    return "ESSCertID: certHash is not a %s digest" % alg
+                if any(pa == alg and ph == cid[0][1] for pa, ph, _c in parsed_ids):
+                    return "ESS attribute %s: a certificate listed twice" % o
+                parsed_ids.append((alg, cid[0][1], cid))
+            alg, _h, cid = parsed_ids[0]
             if cid[0][1] != hashlib.new(alg, signer).digest():
                 return "ESS certHash is not the hash of the signer certificate"
+            if len(parsed_ids) > 1:   # the path may use only the token certificates a later ESSCertID names (RFC 5035 §5.4.1)
+                named = []
+                for alg2, h2, cid2 in parsed_ids[1:]:
+                    hit = [c for c in certs if hashlib.new(alg2, c).digest() == h2]
+                    if len(cid2) == 2:   # an issuerSerial is checked against the token certificate it hashes, when there is one
+                        for c in hit:
+                            ser_c, iss_c = _ski_issuer_serial(c)
+                            iss2 = _ski_items(cid2[1][1], "IssuerSerial")
+                            nm2 = _ski_items(_ski_one(_ski_tlv(0x30, iss2[0][1]), "GeneralNames", 0x30), "GeneralNames") \
+                                if iss2 and iss2[0][0] == 0x30 else None
+                            if not (len(iss2) == 2 and iss2[1][0] == 0x02 and nm2 is not None and len(nm2) == 1
+                                    and nm2[0][0] == 0xA4 and _ski_names_equal(nm2[0][1], iss_c)
+                                    and int.from_bytes(iss2[1][1], "big", signed=True) == int.from_bytes(ser_c, "big", signed=True)):
+                                return "ESS issuerSerial of a later ESSCertID does not name the certificate it hashes"
+                    named += hit
+                allowed = named if allowed is None else [c for c in allowed if c in named]
             if len(cid) == 2:
                 iss = _ski_items(cid[1][1], "IssuerSerial")
                 names = _ski_items(_ski_one(_ski_tlv(0x30, iss[0][1]), "GeneralNames", 0x30), "GeneralNames") \
@@ -1684,6 +1817,8 @@ def key_id_token_problem(der, digest_hex, ca_file, at, tmp, exe="openssl"):
                 return "the TSTInfo tsa field names neither the signer's subject nor one of its subjectAltName"
     except (ValueError, IndexError) as e:
         return "signer certificate or attributes not read: %s" % e
+    if allowed is not None:   # 1.9.0 (SPEC §3.2, RFC 5035 §5.4.1): only these may build the path below the pins
+        certs = [c for c in certs if c in allowed]
     up = os.path.join(tmp, "ski_untrusted.pem")
     with open(up, "wb") as fh:
         fh.write(b"".join(_ski_pem(c) for c in certs))
@@ -1909,13 +2044,41 @@ def _build_evidence(artifacts: List[Dict], out_path: str,
         raise Ap2EvidenceError(f"artifact {both[0]!r}: both a supplied key and a JWKS URL — ambiguous, refused (SPEC §2 (b))")
     not_used = {}
     entries, for_bindings = [], []
+    # 1.9.0 (SPEC §2.1): an AP2 chain `<hop0>~~<hop1>...` given for name N becomes the artifacts N.0, N.1, ...; the key
+    # named for N is the key of N.0, every later hop is verified with the previous hop's cnf.jwk (class chain_cnf)
+    expanded = []
     for a in artifacts:
+        hops = split_ap2_chain(a["sd_jwt"]) if isinstance(a.get("sd_jwt"), str) else None
+        if hops is None:
+            expanded.append({"name": a["name"], "sd_jwt": a["sd_jwt"], "key_for": a["name"], "chain_from": None})
+            continue
+        for i, h in enumerate(hops):
+            expanded.append({"name": f"{a['name']}.{i}", "sd_jwt": h, "key_for": a["name"] if i == 0 else None,
+                             "chain_from": f"{a['name']}.{i - 1}" if i else None})
+    hop_names = [e["name"] for e in expanded]
+    if len(set(hop_names)) != len(hop_names):
+        raise Ap2EvidenceError("duplicate artifact names once the AP2 chains are split into hops (N.0, N.1, ...; SPEC §2.1) "
+                               "— refused fail-closed")
+    done = {}
+    for a in expanded:
         parsed = parse_sd_jwt(a["sd_jwt"])
         if not isinstance(parsed["header"], dict) or not isinstance(parsed["payload"], dict):
             raise Ap2EvidenceError(f"artifact {a['name']!r}: JWT header and payload must be objects")
         _jose_header_ignored(parsed["header"], "JWT header")   # RFC 7515 §4.1.11 at build: refused at the source, like a bad signature
-        key = _snapshot_key(parsed, supplied_jwk=keys.get(a["name"]),
-                            jwks_url=jwks_urls.get(a["name"]))
+        if a["chain_from"] is None:
+            key = _snapshot_key(parsed, supplied_jwk=keys.get(a["key_for"]),
+                                jwks_url=jwks_urls.get(a["key_for"]))
+        else:
+            prev = done[a["chain_from"]]
+            if parsed["header"].get("alg") != "ES256":   # as _snapshot_key does for every other artifact
+                raise Ap2EvidenceError(f"artifact {a['name']!r}: alg {parsed['header'].get('alg')!r} unsupported: ES256 only "
+                                       "(other algs are rejected, never half-verified)")
+            try:
+                key = {"jwk": chain_cnf_jwk(prev["resolved_claims"]), "provenance_class": "chain_cnf",
+                       "chain_from": a["chain_from"],
+                       "note": "the cnf.jwk of the previous hop of this AP2 chain, an artifact of this pack (SPEC §2.1)"}
+            except Ap2EvidenceError as e:
+                raise Ap2EvidenceError(f"artifact {a['name']!r}: {e} (build refused)") from e
         v = _verify_one(parsed, key)
         if not v["signature_ok"]:
             raise Ap2EvidenceError(f"artifact {a['name']!r}: ES256 signature INVALID "
@@ -1926,6 +2089,12 @@ def _build_evidence(artifacts: List[Dict], out_path: str,
             raise Ap2EvidenceError(f"artifact {a['name']!r}: {e} (build refused)") from e
         if _key_material_not_used(parsed["header"], key["provenance_class"]):
             not_used[a["name"]] = _key_material_not_used(parsed["header"], key["provenance_class"])
+        if a["chain_from"] is not None:   # 1.9.0 (SPEC §2.1): the AP2 hop rules, after the signature under the previous cnf.jwk
+            try:
+                check_chain_hop(parsed, v["resolved_claims"], done[a["chain_from"]]["compact"])
+            except Ap2EvidenceError as e:
+                raise Ap2EvidenceError(f"artifact {a['name']!r}: {e} (build refused)") from e
+        done[a["name"]] = {"compact": parsed["compact"], "resolved_claims": v["resolved_claims"]}
         kb = verify_kb_jwt(parsed, v["resolved_claims"]); kb.pop("_ignored", None)   # the receipt's report, not part of the sealed copy
         if kb.get("verified") is None:   # 1.8.1 (SPEC §9.2): sd_hash_ok of the holder-key-unknown branch is the receipt's,
             kb.pop("sd_hash_ok", None)   # not sealed: a 1.8.0 verifier, which does not recompute it there, refuses a copy with it
@@ -1987,7 +2156,11 @@ def _build_evidence(artifacts: List[Dict], out_path: str,
         _write_pack_file(out_path, evidence)
     except OSError as e:
         raise Ap2WriteError(f"cannot write the pack {out_path!r}: {type(e).__name__}: {e.strerror or e}") from e
-    return {"out": out_path, "artifacts": len(entries),
+    chains = {}
+    for e in expanded:
+        if e["chain_from"] is not None or (e["key_for"] is not None and e["name"] != e["key_for"]):
+            chains.setdefault(e["name"].rsplit(".", 1)[0], []).append(e["name"])
+    return {"out": out_path, "artifacts": len(entries), **({"ap2_chains": chains} if chains else {}),   # 1.9.0 (SPEC §2.1)
             "bindings": len(evidence["bindings"]),
             "evidence_digest_sha256": evidence["evidence_digest_sha256"],
             "rfc3161_anchored": evidence["rfc3161_timestamp"].get("anchored", False),
@@ -2104,7 +2277,8 @@ def _gt_key(gt: str):
 STATES_VOCABULARY = "ap2-evidence-pack/states-1"   # 1.6.0 — SPEC §6.9: immutable; a change of meaning is a new identifier
 REFUSAL_CLASSES = ("format_unsupported", "unknown_member", "malformed")
 SUBJECTS = ("sealed_content", "holder_binding", "time_anchor", "producer_signature", "issuer_identity")
-POLICY_UNMET = ("require_producer", "require_pq", "require_anchor", "min_anchors", "trusted_producer_keys", "trust_set_complete")
+POLICY_UNMET = ("require_producer", "require_pq", "require_anchor", "min_anchors", "require_binding", "trusted_producer_keys",
+                "trust_set_complete")   # require_binding: 1.9.0
 
 
 def _refusal_receipt(msg: str, cls: str) -> Dict:
@@ -2168,6 +2342,8 @@ def derive_states(*, digest_ok, art_results, binding_set_match, ts_block, rfc_bl
     not_seen = None if len(verified_arts) == len(art_results) else "artifacts that are errors are stated in sealed_content only"
     holder = []
     for r in verified_arts:
+        if r.get("chain_hop"):   # 1.9.0 (SPEC §2.1, §6.9): an AP2 hop is the holder binding of the hop before it
+            holder.append(("verified", None))
         kb = r.get("kb_jwt") or {}
         if not kb.get("present"):
             continue
@@ -2610,19 +2786,25 @@ def check_not_before(nb: Dict, ev: Dict, art_results: List[Dict], proven_time: O
 def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = False,
                     require_producer: bool = False, require_anchor: bool = False, tsa_cert: Optional[str] = None,
                     trust_anchor: Optional[str] = None, min_anchors: Optional[int] = None,
-                    trust_set_complete: bool = False, accept_integral_floats: bool = False) -> Dict:
-    """See `_verify_evidence`. 1.7.2 (SPEC §3.1): `accept_integral_floats` (default False) reads a number literal of a token
+                    trust_set_complete: bool = False, accept_integral_floats: bool = False,
+                    require_bindings=None) -> Dict:
+    """See `_verify_evidence`. 1.9.0 (SPEC §6.9): `require_bindings`, a list of (in, commits_to) artifact-name pairs, each
+    of which the recomputed binding set must hold (`policy.unmet` `require_binding` otherwise, `policy_ok` false). 1.7.2 (SPEC §3.1): `accept_integral_floats` (default False) reads a number literal of a token
     written with a fraction or an exponent whose value is an integer within +/-(2^53-1) (`10.0`) as that integer; without
     it such a literal is that artifact's error. When it is set the receipt says so (`accept_integral_floats: true`) and
     each artifact entry lists the literals read that way (`integral_literals_read`); without it neither member is present,
     and the receipt is the 1.7.1 receipt but for the message of an artifact whose token has such a literal."""
     if type(accept_integral_floats) is not bool:   # SPEC §7 discipline: an option of the wrong type never changes a verdict in silence
         raise ValueError(f"accept_integral_floats must be a boolean (got {accept_integral_floats!r})")
+    if require_bindings is not None and not (isinstance(require_bindings, (list, tuple)) and all(
+            isinstance(pr, (list, tuple)) and len(pr) == 2 and all(isinstance(x, str) and x for x in pr) for pr in require_bindings)):
+        raise ValueError(f"require_bindings must be a list of (in, commits_to) pairs of non-empty names (got {require_bindings!r})")
     tok = _INTEGRAL_READ.set([] if accept_integral_floats else None)
     try:
         r = _verify_evidence(path, trusted_producer_keys=trusted_producer_keys, require_pq=require_pq,
                              require_producer=require_producer, require_anchor=require_anchor, tsa_cert=tsa_cert,
-                             trust_anchor=trust_anchor, min_anchors=min_anchors, trust_set_complete=trust_set_complete)
+                             trust_anchor=trust_anchor, min_anchors=min_anchors, trust_set_complete=trust_set_complete,
+                             require_bindings=require_bindings)
     except Ap2WriteError as e:
         if accept_integral_floats and isinstance(getattr(e, "receipt", None), dict):
             e.receipt["accept_integral_floats"] = True
@@ -2637,7 +2819,7 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
 def _verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = False,
                      require_producer: bool = False, require_anchor: bool = False, tsa_cert: Optional[str] = None,
                      trust_anchor: Optional[str] = None, min_anchors: Optional[int] = None,
-                     trust_set_complete: bool = False) -> Dict:
+                     trust_set_complete: bool = False, require_bindings=None) -> Dict:
     """OFFLINE re-verification from the evidence file alone: digest, every signature with
     the SNAPSHOTTED key, every disclosure, every binding, and the RFC 3161 token's binding
     (status + imprint; the TSA itself only with `tsa_cert`, via openssl). Fail-closed. Raises Ap2WriteError (1.5.2) when
@@ -2673,6 +2855,8 @@ def _verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = F
     if hashlib.sha256(ev["honest_scope"].encode("utf-8")).hexdigest() != HONEST_SCOPE_SHA256:
         # r8: the receipt used to REPRINT whatever scope the file carried — an author could write "anchored by a QTSP under
         # eIDAS art. 45j" and see it beside `valid: true`. The scope is the format's, not the pack's (SPEC §1).
+        if hashlib.sha256(ev["honest_scope"].encode("utf-8")).hexdigest() == HONEST_SCOPE_SHA256_1_0:   # 1.9.0 (SPEC §1)
+            return refusal(_PACK_1_0_REFUSAL, "format_unsupported")
         return refusal("honest_scope does not match the canonical scope of this evidence_format (SPEC §1)", "format_unsupported")
     if not isinstance(ev.get("artifacts"), list) or any(not isinstance(a, dict) for a in ev["artifacts"]):
         return refusal("artifacts must be a list of objects")
@@ -2759,6 +2943,7 @@ def _verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = F
 
     art_results, all_ok = [], True
     for_bindings = []
+    chain_seen = {}   # 1.9.0 (SPEC §2.1): the artifacts verified so far, by name, for chain_from
     for a in ev["artifacts"]:
         _read = _INTEGRAL_READ.get()   # 1.7.2 (SPEC §3.1): the literals this artifact had read as integers, when asked
         _read0 = None if _read is None else len(_read)
@@ -2776,6 +2961,17 @@ def _verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = F
             pc = key.get("provenance_class")
             if not isinstance(pc, str) or pc not in PROVENANCE_CLASSES:   # r7: absent/null used to mean "no class", which CLEARED self_asserted_only   # r2: a list was a TypeError in sorted(); r5: an out-of-enum value passed as a strong class
                 raise Ap2EvidenceError(f"artifact key.provenance_class must be one of {sorted(PROVENANCE_CLASSES)}")
+            if (pc == "chain_cnf") != ("chain_from" in key):   # 1.9.0 (SPEC §2.1): chain_from with chain_cnf, and only with it
+                raise Ap2EvidenceError("artifact key.chain_from goes with provenance_class chain_cnf, and only with it (SPEC §2.1)")
+            prev_hop = None
+            if pc == "chain_cnf":   # the key is reconciled against the previous hop the pack carries, verified before this one
+                prev_hop = chain_seen.get(key["chain_from"])
+                if prev_hop is None:
+                    raise Ap2EvidenceError(f"artifact key.chain_from {_jkey(key['chain_from'])} names no artifact before this one "
+                                           "that verified (SPEC §2.1)")
+                if not _same_key(chain_cnf_jwk(prev_hop["resolved"]), key["jwk"]):
+                    raise Ap2EvidenceError("provenance_class chain_cnf but the key is not the cnf.jwk of the artifact named by "
+                                           "chain_from (SPEC §2.1)")
             parsed = parse_sd_jwt(compact)
             if not isinstance(parsed["payload"], dict) or not isinstance(parsed["header"], dict):
                 raise Ap2EvidenceError("JWT header and payload must be objects")
@@ -2793,6 +2989,9 @@ def _verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = F
             sig_ok = verify_es256(parsed["signing_input"], parsed["signature"], key["jwk"])
             resolved = resolve_disclosures(parsed["payload"], parsed["disclosures"])
             claims_ok = _canon(resolved) == _canon(a.get("resolved_claims"))
+            chain_hop = None
+            if prev_hop is not None and sig_ok and claims_ok:   # 1.9.0 (SPEC §2.1): the AP2 hop rules, each an artifact error
+                chain_hop = dict(check_chain_hop(parsed, resolved, prev_hop["compact"]), **{"from": key["chain_from"]})
             kb = verify_kb_jwt(parsed, resolved)
             for k in _KB_RECOMPUTED:   # SPEC §9.1 (NEMESIS 2026-10-11): a recorded KB value that says something else is that artifact's error
                 if k in a["kb_jwt"] and (k not in kb or _canon(a["kb_jwt"][k]) != _canon(kb[k])):
@@ -2803,11 +3002,14 @@ def _verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = F
                                 "provenance_class": key.get("provenance_class"),
                                 "self_asserted": self_asserted,
                                 "ignored": {k: v for k, v in sorted(ignored.items()) if v},   # SPEC §9.2: only the non-empty slots
-                                **({"x5c_leaf": leaf_ident} if leaf_ident else {})})
+                                **({"x5c_leaf": leaf_ident} if leaf_ident else {}),
+                                **({"chain_hop": chain_hop} if chain_hop else {})})
             all_ok = (all_ok and sig_ok and claims_ok
                       and kb.get("verified") is not False)
             for_bindings.append({"name": a.get("name"), "compact": parsed["compact"],
                                  "resolved_claims": resolved})
+            if sig_ok and claims_ok and isinstance(a.get("name"), str):
+                chain_seen[a["name"]] = {"compact": parsed["compact"], "resolved": resolved}
         except Ap2WriteError:   # this process could not run a check (no writable temporary file): not the artifact's error
             raise
         except Exception as e:  # noqa: BLE001 — any malformation of an artifact is that artifact's error, never a traceback
@@ -2859,7 +3061,7 @@ def _verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = F
     # 1.6.0 — SPEC §6.9: each requirement that is not met is NAMED in `policy.unmet`; `policy_ok` keeps its 1.5.x meaning
     # (the four policy inputs of 1.5.x), `policy.met` is false when anything in `unmet` (also the pinned set and
     # `trust_set_complete`).
-    unmet = []
+    unmet, binding_policy_missing = [], None
     if require_producer and not (producer["present"] and producer.get("ok")):
         unmet.append("require_producer")
     if require_pq and not (producer.get("pq_protected") and producer.get("trusted") is True):
@@ -2868,6 +3070,14 @@ def _verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = F
         unmet.append("require_anchor")
     if min_anchors is not None and anchors_verified < min_anchors:   # SPEC §3.3: require_anchor alone is min_anchors = 1
         unmet.append("min_anchors")
+    if require_bindings:   # 1.9.0 (SPEC §6.9): each (in, commits_to) pair must be in the RECOMPUTED set, which counts only
+        held = set()       # when bindings_ok (every artifact verified and the recorded set equal to the recomputation)
+        if bindings_ok:
+            held = {(b["in"], b["commits_to"]) for b in find_bindings(for_bindings)}
+        missing = [list(pr) for pr in require_bindings if tuple(pr) not in held]
+        if missing:
+            unmet.append("require_binding")
+            binding_policy_missing = missing
     policy_ok = not unmet
     if trusted_producer_keys is not None and producer["present"] and producer.get("trusted") is not True:
         unmet.append("trusted_producer_keys")
@@ -2914,7 +3124,8 @@ def _verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = F
             "honest_scope": ev.get("honest_scope"),
             "admission": "admitted", "refusal_class": None,   # 1.6.0 — SPEC §6.9
             "states_vocabulary": STATES_VOCABULARY, "states": states,
-            "policy": {"met": not unmet, "unmet": [u for u in POLICY_UNMET if u in unmet]},
+            "policy": {"met": not unmet, "unmet": [u for u in POLICY_UNMET if u in unmet],
+                       **({"require_binding_missing": binding_policy_missing} if binding_policy_missing else {})},
             # informative, both verifiers (SPEC §6): whether THIS verifier can check ML-DSA-65 at all — without it a
             # producer signature is SKIP, never a pass, and the reader of the receipt should not have to guess why
             "mldsa_backend": bool(_sigsuite.MLDSA_AVAILABLE)}
@@ -3693,6 +3904,9 @@ def _main(argv: Optional[List[str]] = None) -> int:
     v.add_argument("--require-anchor", action="store_true", help="policy: the RFC 3161 anchor must be present and BOUND to this pack (status granted, messageImprint = digest); with --tsa-cert also TSA-verified")
     v.add_argument("--trust-anchor", help="PEM trust anchor: validate the artifact x5c chain with openssl verify. Without it every key is self-asserted (offline, a certificate proves only that the signer wrote it) — the JS verifier cannot validate chains and reports chain_verified null (declared)")
     v.add_argument("--min-anchors", help="policy: at least N distinct anchors must verify (SPEC §3.3; --require-anchor alone is 1)")
+    v.add_argument("--require-binding", action="append", default=None, metavar="IN->TO",
+                   help="policy (1.9.0, SPEC §6.9): artifact IN must commit to artifact TO by a recomputed binding (§4); may repeat. "
+                        "Unmet: policy.unmet require_binding, not valid. Default: none (the format cannot know which artifact a relying party expects bound)")
     v.add_argument("--tsa-cert", help="PEM certificate (or chain) of the TSA: verify the token's signature and chain with openssl ts -verify (without it, the TSA is NOT verified — declared)")
     v.add_argument("--accept-integral-floats", action="store_true", help="1.7.2 (SPEC §3.1): read a number of a token written with a fraction or an exponent whose value is an integer within +/-(2^53-1) (10.0, as the AP2 SDK writes a budget) as that integer, and say so in the result; without it such a token is refused")
     rs = sub.add_parser("restriction", allow_abbrev=False, add_help=False)   # SPEC §11 (1.7.0)
@@ -3810,6 +4024,14 @@ def _main(argv: Optional[List[str]] = None) -> int:
             if not re.fullmatch(r"[1-9][0-9]{0,5}", a.min_anchors):   # ASCII digits, >= 1 (the JS verifier: the same grammar)
                 p.error(f"--min-anchors expects an integer >= 1 (got {a.min_anchors!r})")
             min_anchors = int(a.min_anchors)
+        req_b = None
+        if a.require_binding:   # 1.9.0: IN->TO, both non-empty, no second "->"
+            req_b = []
+            for spec in a.require_binding:
+                frm, sep, to = spec.partition("->")
+                if not sep or not frm or not to or "->" in to:
+                    p.error(f"--require-binding expects IN->TO (got {spec!r})")
+                req_b.append((frm, to))
         trusted = None
         if a.trusted_producer_key:
             trusted = {}
@@ -3830,7 +4052,7 @@ def _main(argv: Optional[List[str]] = None) -> int:
             r = verify_evidence(a.evidence, trusted_producer_keys=trusted, require_pq=a.require_pq,
                                 require_producer=a.require_producer, require_anchor=a.require_anchor, tsa_cert=a.tsa_cert,
                                 trust_anchor=a.trust_anchor, min_anchors=min_anchors, trust_set_complete=a.trust_set_complete,
-                                accept_integral_floats=a.accept_integral_floats)
+                                accept_integral_floats=a.accept_integral_floats, require_bindings=req_b)
         except Ap2WriteError as e:   # a check could not be run here: never "not valid"
             if e.receipt is None:
                 return _not_written(str(e))

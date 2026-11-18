@@ -189,14 +189,18 @@ class TokenLayer(unittest.TestCase):
                           ("range", '{"iss":"x","max":9007199254740992.0}'), ("exp", '{"iss":"x","max":1E400}'),
                           ("round", '{"iss":"x","max":10.000000000000000001}')):   # float() says 10.0: the digits say no
             p = self._pack(name, txt, {"iss": "x"})
-            for accept, want in ((False, DEFAULT_ERR), (True, "in the SD-JWT: not an integer within")):
+            # 1.9.0: the same message with and without the option (up to 1.8.x, without it: "needs accept_integral_floats",
+            # an option that does not read these)
+            for accept, want in ((False, "in the SD-JWT: not an integer within"), (True, "in the SD-JWT: not an integer within")):
                 r = ap2.verify_evidence(p, accept_integral_floats=accept)
                 self.assertFalse(r["valid"], name); err = r["artifacts"][0].get("error") or ""
                 self.assertIn(want, err, (name, accept, err))   # the receipt keeps 120 chars of an error
                 self.assertEqual(r["states"]["sealed_content"]["state"], "contradicted", name)
                 if shutil.which("node"):
                     j = _js_verify(p, accept=accept); self.assertFalse(j["valid"], name)
-                    self.assertIn(DEFAULT_ERR if not accept else "not an integer within", j["artifacts"][0].get("error") or "", (name, accept))
+                    self.assertIn("not an integer within", j["artifacts"][0].get("error") or "", (name, accept))
+                    self.assertNotIn(DEFAULT_ERR, j["artifacts"][0].get("error") or "", (name, accept))
+                self.assertNotIn(DEFAULT_ERR, err, (name, accept))
 
     def test_file_layer_unchanged_a_float_in_the_file_is_a_refusal(self):
         p = os.path.join(self.d, "file.json")
@@ -233,7 +237,7 @@ class TokenLayer(unittest.TestCase):
             out = os.path.join(self.d, "kb_%s.json" % ok)
             with self.assertRaises(ap2.Ap2EvidenceError) as cm0:              # default: refused, nothing written
                 ap2.build_evidence([{"name": "a", "sd_jwt": issuer + kb}], out)
-            self.assertIn(DEFAULT_ERR, str(cm0.exception)); self.assertFalse(os.path.exists(out))
+            self.assertIn(DEFAULT_ERR if ok else "not an integer within", str(cm0.exception)); self.assertFalse(os.path.exists(out))   # 1.9.0: a non-integer is named as such without the option too
             if ok:
                 res = ap2.build_evidence([{"name": "a", "sd_jwt": issuer + kb}], out, accept_integral_floats=True)
                 self.assertEqual(res["integral_literals_read"], [lit])
@@ -298,7 +302,7 @@ class SdkBudgetMandates(unittest.TestCase):
 
     def test_sdk_budget_0_29_is_refused_with_the_literal_named(self):
         out = os.path.join(self.d, "b029.json")
-        for accept, want in ((False, "float '0.29'" + DEFAULT_ERR),
+        for accept, want in ((False, "float '0.29' in the SD-JWT: not an integer within +/-(2^53-1)"),   # 1.9.0: the same without the option
                              (True, "float '0.29' in the SD-JWT: not an integer within +/-(2^53-1)")):
             with self.assertRaises(ap2.Ap2EvidenceError) as cm:
                 ap2.build_evidence([{"name": "open_payment", "sd_jwt": SDK_BUDGET_0_29}], out, keys={"open_payment": SDK_ISSUER_JWK},

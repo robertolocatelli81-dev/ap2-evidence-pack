@@ -1,8 +1,18 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Copyright 2026 Roberto Locatelli -->
 
-# ap2-evidence-pack — normative format v1.0 (2026-09-05), specification revision 1.8.1 (2026-11-18)
+# ap2-evidence-pack — normative format v1.0 (2026-09-05), specification revision 1.9.0 (2026-11-18)
 
+> Revision 1.9.0 (2026-11-18; it contains 1.8.1, which was not released on its own): §2.1 (new), AP2 delegation chains
+> `<hop0>~~<hop1>...` are read in their native form — split into hops by `build`, every hop after the first verified with
+> the previous hop's `cnf.jwk` (provenance class `chain_cnf`, key member `chain_from`) under the hop rules of the AP2 SDK,
+> and counted in `holder_binding` (§6.9). §4, a binding is also searched over an artifact's issuer JWT (`"over":
+> "issuer_jwt"`, AP2's receipt `reference`). §6.9, the policy `require_binding`. §3.2, more than one ESSCertID. §1, a
+> pack built by 1.0.x is refused by name. §3.1, a non-integer number stays outside this format, stated against RFC 7519
+> §2, and is named as such with or without `accept_integral_floats`. §9.1, the three new members. §10, the mapping
+> follows draft-xg-payment-dispute-profile-02. A 1.8.x verifier refuses a pack that carries `chain_cnf`, `chain_from` or
+> `over` (unknown class or member); a pack without them is read as by 1.8.1. §5, §8, §11 and §12 are unchanged.
+>
 > Revision 1.8.1 (2026-11-18): §6 step 2, the grammar of `sd_jwt_compact` is closed (RFC 9901 §4, Proposed Standard,
 > November 2025, no errata listed on 2026-11-18): no `~` at all (`sd_jwt_no_separator`), an empty component before the
 > last (`sd_jwt_empty_component`), or a last component that is neither empty nor a KB-JWT of three dot-separated segments
@@ -105,6 +115,13 @@ signature; it said nothing about a chain is sealed (the x5c bytes are, the valid
 and it described the producer signature and `valid` as covering "the file", when both cover the
 SEALED CONTENT — §3 excludes the digest, the anchor block and the signatures, so a removed time
 anchor is caught only under `require_anchor`.
+1.9.0: a pack whose `honest_scope` is the scope 1.0.0–1.0.2 sealed (the same text in the three tags, SHA-256
+`431877e44b759e99d306f79dd52739f08bd94bc05d70a6a03ee82f74fc0f15db`) is refused as before (`format_unsupported`: 1.1.0
+changed the rules it was sealed under — the binding encodings, the digest exclusions, the scope), and the refusal says so
+in words ("the scope of ap2-evidence-pack 1.0.0-1.0.2 … a pack built by 1.0.x"), in both verifiers; up to 1.8.x it read
+"honest_scope does not match the canonical scope", which a reader takes for a rewritten scope. Measured on 2026-11-18: the
+1.8.0 verifiers refuse the six 1.0 vectors an independent reader copied. Reading 1.0.x packs is not offered: their rules
+are those 1.1.0 corrected (r1–r11 in the CHANGELOG), and a verifier that applied them would give their false greens back.
 | `evidence_digest_sha256` | MUST | hex SHA-256 over the canonical content (§3) |
 | `rfc3161_timestamp` | MUST at build (a verifier treats an absent block as `anchored: false`) | `{"anchored": false, "note"?: string}` or `{"anchored": true, "tsr_b64": <b64 DER TimeStampResp>, "tsa_url"?: string, "note"?: string}` — closed (§9.1); `tsa` is accepted as the 1.0–1.3 spelling of `tsa_url` |
 | `producer_signatures` | MAY | hybrid producer-signature block (§5), closed (§9.1) |
@@ -124,7 +141,7 @@ anchor is caught only under `require_anchor`.
 
 An artifact entry is a closed object (§9.1): a key outside this table is that artifact's error.
 
-`provenance_class` is one of `x5c_header`, `jwk_header`, `supplied`, `jwks_fetched`
+`provenance_class` is one of `x5c_header`, `jwk_header`, `supplied`, `jwks_fetched`, and since 1.9.0 `chain_cnf` (§2.1)
 — the format records how the key was captured instead of pretending all captures
 are equal. `jwk_header` is self-asserted. Any other value (or a non-string) is a
 refusal of that artifact. A verifier MUST RECONCILE the two header-derived classes
@@ -208,6 +225,76 @@ unless its policy binds them to that identity"; it does not make them an error);
 `x5t#S256`, the header `kid` against the `kid` of a supplied key, and, at verification, the header `kid` against the `kid`
 of a `jwks_fetched` key (a capture-time fact).
 
+### 2.1 AP2 delegation chains (NORMATIVE, 1.9.0)
+
+**Source, read on 2026-11-18.** AP2 writes a delegation as a chain of SD-JWTs joined by `~~`: google-agentic-commerce/AP2
+at `e1ea56db72a6385bce3e5c1112b3a56ce60acb43` (the last commit of `main` that day), `code/sdk/python/ap2/sdk/sdjwt/chain.py`
+("dSD-JWT chain orchestration (draft-gco-oauth-delegate-sd-jwt-00 §6) … tokens are joined by `~~` … each hop's signing
+key is the previous hop's `cnf.jwk`"), `sdjwt/kb_sd_jwt.py` (a hop after the first is a KB-SD-JWT: `typ` `kb+sd-jwt` for
+the terminal hop, `kb+sd-jwt+kb` for an intermediate one, "Exactly one of `sd_hash` / `issuer_jwt_hash` is present and
+matches the hash of `prev_token`", "Terminal hops do not contain `cnf`; intermediate hops do"; "No separate trailing
+KB-JWT is used in the AP2 flow"), `sdjwt/common.py` (`sd_hash` over the previous hop's SD-JWT `<jwt>~<d>*~`,
+`issuer_jwt_hash` over its issuer JWT) and `mandate.py` (`token.split('~~')`; the trailing `~` of a hop is removed before
+`~~` is appended). The SDK is the description used here: "The core specification has been donated to FIDO" (AP2
+`CONTRIBUTING.md` at that commit), no public text of it defining `~~` was found that day, and in the AP2 repository
+`~~` appears in the SDK, its tests and the samples only (GitHub code search, 15 files, none under `docs/`). Up to 1.8.0 such a chain was refused as
+`malformed disclosure: invalid base64url segment` (157 of 157 chains found in public repositories, measured 2026-11-18),
+and a chain split by hand gave `holder_binding: not_evaluated` on every hop.
+
+**Input (the reference `build`).** A token given for name `N` is a chain when, split on `~~`, it has at least two parts
+and every part after the first begins with an issuer JWT (three dot-separated segments before its first `~`); `<jwt>~~`
+(an empty component, RFC 9901 §4) is therefore never a chain and stays `sd_jwt_empty_component`. `ap2_chain_malformed`
+(refused, never read another way): a first part that is empty; a last part with no `~` at all (`<open>~~<jwt>`: an AP2
+chain whose last hop lost its `~`, or, read as one SD-JWT, an empty component before a KB-JWT — the refusal names both);
+a part before the last that ends with a KB-JWT (in a chain the next hop is the key binding; only the last hop may carry
+a KB-JWT, which is then evaluated as §6 step 2 says). The parts become the artifacts `N.0`, `N.1`, … in order, every
+part but the last with its `~` put back; the build result lists them (`ap2_chains`). A name taken twice once the chains are split is refused.
+
+**Keys.** `N.0` takes the key named for `N` (`--key N=…`, `--jwks-url N=…`) or its header, as any artifact (§2). Every
+later hop `N.i` is verified with the `cnf.jwk` of `N.(i-1)`, found where the SDK looks (`ParsedToken._find_cnf`): `cnf`
+of each object element of `delegate_payload`, then `cnf` at the top level of the resolved claims; each `cnf` found must
+be an object with a `jwk` object (`chain_cnf_malformed`), none is `chain_cnf_missing`, two naming different keys
+(`kty`, `crv`, `x`, `y`) are `chain_cnf_ambiguous` (the SDK takes the first: refusing is this format's rule). The key is
+recorded as `{"jwk": {kty, crv, x, y}, "provenance_class": "chain_cnf", "chain_from": "N.(i-1)", "note": …}`;
+`chain_from` is allowed with `chain_cnf` only, and `chain_cnf` requires it (§9.1). The `alg` of every hop must be
+`ES256`, as for any artifact.
+
+**Hop rules** (each that artifact's error; at `build` a refusal): `typ` one of `kb+sd-jwt`, `kb-sd-jwt` (terminal),
+`kb+sd-jwt+kb`, `kb-sd-jwt+kb` (intermediate), compared as §13 says (`chain_hop_typ`); exactly one of `sd_hash` and
+`issuer_jwt_hash` at the top level of the hop's resolved claims, equal to BASE64URL(SHA-256) of the previous hop's
+`<jwt>~<d>*~` (its compact form without a KB-JWT) or of its issuer JWT (`chain_binding_mismatch`); a terminal hop with a
+`cnf` in `delegate_payload` (`chain_terminal_with_cnf`), an intermediate one without (`chain_intermediate_without_cnf`);
+a terminal hop without `iat` (`chain_terminal_without_iat`: the SDK's `verify_expected_claims`, `common.py`, which
+`kb_sd_jwt.verify` runs on terminal types only — presence, which needs no context).
+Not checked, as for a KB-JWT (§6 step 2): `aud`, `nonce`, the values of `iat` and `exp` — transaction context and time an
+offline verifier cannot know (goodmeta/ap2-conformance vectors `aud_mismatch`, `nonce_mismatch`, `expired` stay valid
+here, declared).
+Declared difference from the SDK: an item of `delegate_payload` that is a bare digest string, which the SDK resolves
+against the hop's disclosures (`_resolve_delegate_payload`, "the CMWallet format"), is no reference under RFC 9901
+(§4.2.4.2: an array element is referenced by `{"...": "<digest>"}`), so its disclosure is one no digest refers to and the
+hop is refused (§7.1 step 5, "MUST be rejected"); `test_ap2_chains.py` holds the case.
+
+**Verification.** For an artifact whose class is `chain_cnf`, the artifact named by `chain_from` must come before it in
+`artifacts` and have verified (signature and claims), its `cnf.jwk` (the rule above, recomputed) must equal the recorded
+key on `kty`, `crv`, `x`, `y`, and the hop rules hold; otherwise that artifact's error. The receipt's artifact entry then
+carries `chain_hop: {"binding": "sd_hash" | "issuer_jwt_hash", "terminal": bool, "from": name}`. In `holder_binding`
+(§6.9) such an artifact is an element, `verified`: the hop is the holder binding of the hop before it, checked under the
+key that hop delegated to. In `issuer_identity` its key is `self_asserted`, as `supplied` (the previous hop, not a CA under
+the relying party's anchor, vouches for it), so `self_asserted_only` stays true for a chain unless the format changes that
+in a later revision. A 1.8.x verifier refuses a pack with a `chain_cnf` key (unknown class, unknown key `chain_from`).
+
+**A plain JWS.** An AP2 receipt is a JWS, not an SD-JWT; it enters as `<jwt>~`, an SD-JWT with no disclosures (RFC 9901 §4),
+which the signature does not cover and does not change. `sd_jwt_no_separator` says so.
+
+**Measured on 2026-11-18** (`test_ap2_chains.py`, vectors in `spec/vectors/ap2_chains/`): the 23 chain vectors of
+goodmeta/ap2-conformance @41dff653 — the 3 valid ones and `aud_mismatch`, `nonce_mismatch`, `expired` built and valid
+with `holder_binding` verified, the 17 others refused at `build` (6 of them for the vector's own reason that this format
+did not check before: sd_hash mismatch, both binding claims, neither, wrong `typ`, terminal with `cnf`, intermediate
+without; 5 `x5c` vectors, `valid_x5c` among them, for the base64url encoding of their certificates, RFC 7515 §4.1.6,
+and the sixth for its `alg`, ES384); 145 tokens holding `~~` re-read from 11 public repositories (143 chains: in 107
+every hop after the root verifies under the previous hop's `cnf.jwk` and these rules, 36 are refused by name; 1.8.0
+read none); three chains emitted by the AP2 SDK (two built and valid, the mixed one refused as the SDK refuses it).
+
 ## 3. Canonicalisation and digest (NORMATIVE)
 
 `evidence_digest_sha256 = HEX(SHA-256(canonical_bytes))` where `canonical_bytes`
@@ -264,6 +351,9 @@ reader's side by default, and treats the exponent form (`1e2`), which §6.3 does
   number literal written with a fraction or an exponent is that artifact's error, the literal named first
   (`float '10.0' in the SD-JWT needs accept_integral_floats`), whatever its value. Same as 1.7.1 in effect
   (a 1.7.1 verifier refused such a token as `float '10.0' in the evidence file`); only the message changes.
+  1.9.0: a literal the option would not read either (`0.1`, `1E400`) is named as that, with or without the option
+  (`float '0.1' in the SD-JWT: not an integer within +/-(2^53-1)`); up to 1.8.x the default message sent the reader to
+  an option that refuses the same token.
 - **`accept_integral_floats`** (a boolean, default false; `--accept-integral-floats` on `build`, `verify` and
   `restriction`, `acceptIntegralFloats` / `--accept-integral-floats` in the JS verifier; in an expected file, a policy key,
   §7). Under it, such a literal whose value is an integer within ±(2^53−1) is READ as that integer: `10.0`, `1e2`,
@@ -305,6 +395,16 @@ to write and what the integer direction makes unnecessary, and `accept_integral_
 written by the SDK; if the major-unit reading prevails, a fractional budget remains outside this format (declared above)
 and the rule is revisited in a later revision.
 
+1.9.0 — a number that is not an integer (declared, measured 2026-11-18). RFC 7519 §2 lets a JWT write a NumericDate
+"that can represent non-integer values", and JSON numbers are not integers in general (RFC 8259 §6); 8 of 662 SD-JWTs found
+in public repositories carry one (`iat: 1.673987547e+09`, `age: 24.6`, `0.1`), and this format refuses each, with or without
+`accept_integral_floats` (8 tokens of 5 repositories; `1000.0` among them is carried under the option). The reason stays:
+the pack records the resolved claims (`resolved_claims`) inside the sealed canonical form, which two verifiers in two
+languages must reproduce byte for byte; this revision defines no canonical spelling of a non-integer number (Python and
+JavaScript print binary64 values differently, e.g. `1e+21` and `1e21`), so a pack could not carry such a claim and stay
+verifiable by both. A JWT with a non-integer number is outside this format, by this format's choice and not by RFC 7519;
+a later revision may carry such claims as the literal text (RFC 8785 §3.2.2.3 gives one canonical form) — open.
+
 1.7.1: the depth bound applies to the claims RESOLVED from an SD-JWT as well (§6 step 2): each JSON text of a token can be
 within the profile while a chain of disclosures, each nested in the one before, resolves into claims as deep as the chain.
 A producer MUST NOT write a pack this profile refuses: the reference `build` checks the pack under this profile — its
@@ -330,8 +430,17 @@ valid token of that form was `tsa_verified: false` (measured on 2026-11-17 with 
 `openssl cms -sign -keyid -cades`). For that form (1.8.0, as cryptovalid-opencore SPEC §11 step 7) the same checks are
 made one by one: the CMS signature and messageDigest (`openssl cms -verify -noverify`, the signer looked up in the token
 and in the `--tsa-cert` file); the TSTInfo imprint; a signed ESS attribute signingCertificate (RFC 2634) or
-signingCertificateV2 (RFC 5035), each one present with exactly one value and exactly one ESSCertID naming the signer
-certificate (hash, and issuer and serial number when present); the TSTInfo `tsa` field, when present, naming the
+signingCertificateV2 (RFC 5035), each one present with exactly one value, its first ESSCertID naming the signer
+certificate (hash, and issuer and serial number when present) — 1.9.0, more than one ESSCertID: RFC 2634 §5.4 as RFC 5035
+rewrites it (read on rfc-editor.org on 2026-11-18; 2634 updated by 5035, neither obsoleted), the first "MUST be the
+certificate" that verifies the signature and the ones after it "limit the set of certificates that are used during
+validation": every ESSCertID a known hash algorithm and a certHash of its length, no certificate listed twice, a later
+one that hashes a certificate of the token naming it in its issuerSerial when it carries one, and the `-untrusted`
+certificates below restricted to the token certificates a later ESSCertID names (with v1 and v2 both listing more than
+one: the certificates both name); up to 1.8.x a list longer than one was refused ("exactly one is evaluated here"), so a
+TSA listing its chain (openssl `ess_cert_id_chain = yes`) was `tsa_verified: false` on this path (`test_ap2_tsa_ess_ids.py`;
+the issuerAndSerialNumber form is `openssl ts -verify`'s as before, which asks every ESSCertID to be in the chain it
+builds); the TSTInfo `tsa` field, when present, naming the
 signer's subject or one of its subjectAltName; the names (that issuer, that subject, a directoryName) compared as
 OpenSSL's `X509_NAME_cmp` compares them (string values in UTF-8, white space trimmed and folded, ASCII letters
 lowercased; the same RDNs in order), the serial number as an integer; and `openssl verify -purpose timestampsign -attime <genTime> -CAfile
@@ -435,6 +544,21 @@ as multisets of canonical entries (each entry in the §3 canonical form, sorted)
 difference fails the pack. 1.1.0 r4: an ordered comparison split the verdict between two
 conformant verifiers on a pack the reference built (JavaScript enumerates array-index keys
 such as `"0"` before the other keys, whatever the insertion order).
+
+**Over the issuer JWT (1.9.0).** `A` also binds `B` iff some string value anywhere in `A`'s resolved claims equals
+`HEX(SHA-256(B.issuer_jwt))` or `BASE64URL(SHA-256(B.issuer_jwt))`, where `B.issuer_jwt` is the first `~`-separated
+component of `B.sd_jwt_compact` (the issuer-signed JWT, ASCII bytes, without disclosures or KB-JWT); that binding
+carries one more member, `"over": "issuer_jwt"` (the object above without `over` is over the compact serialization, as
+before; `over` with any other value is that pack's refusal, `unknown_member` style, §9.1). It is AP2's receipt rule: a
+receipt's `reference` is "the SHA-256 of" the closed mandate's JWT, "so a receipt stays bound to the same closed mandate
+regardless of how many delegation hops precede it or which open-mandate disclosures were revealed"
+(google-agentic-commerce/AP2 `code/sdk/python/ap2/sdk/mandate.py`, `get_closed_mandate_jwt`, lines 402-417 at commit
+`e1ea56db72a6385bce3e5c1112b3a56ce60acb43`, base64url, read on 2026-11-18). The two hashes of one `B` are over
+different strings (the compact form always holds at least one `~` more), so one value is not both; a value may still
+bind two different artifacts, and each binding found is recorded. Up to 1.8.0 a receipt issued by the AP2 SDK over a closed mandate of the pack bound nothing
+(measured on 2026-11-18: `reference` = BASE64URL(SHA-256(closed issuer JWT)), not the hash of its compact form). A 1.8.x
+verifier refuses a pack holding a binding with `over` (unknown key in a binding, §9.1); a pack without one reads as
+before.
 
 ## 5. Producer signatures (NORMATIVE when present)
 
@@ -651,9 +775,20 @@ receipt of both verifiers also carries:
   `absence`) is reserved: no check of this revision produces it.
 - `policy` (admitted packs): `{"met": bool, "unmet": [...]}`. `unmet` names, in this order, each requirement of the
   relying party the pack does not meet: `require_producer`, `require_pq`, `require_anchor`, `min_anchors` (§6 step 6),
-  `trusted_producer_keys` (a pinned set is given and a present producer block is not `trusted`, §5) and
-  `trust_set_complete` (below). `met` is true iff `unmet` is empty. `policy_ok` keeps its §6 step 6 meaning: it is false
-  exactly when one of the first four is unmet. A policy is a disposition of the relying party, not a state of the pack.
+  `require_binding` (1.9.0, below), `trusted_producer_keys` (a pinned set is given and a present producer block is not
+  `trusted`, §5) and `trust_set_complete` (below). `met` is true iff `unmet` is empty. `policy_ok` keeps its §6 step 6
+  meaning and, since 1.9.0, is also false when `require_binding` is unmet. A policy is a disposition of the relying party,
+  not a state of the pack.
+- `require_binding` (1.9.0; `--require-binding IN->TO`, repeatable, both verifiers; `require_bindings`, a list of
+  `(in, commits_to)` pairs, in the library; `requireBindings` in the JS library): each pair must be a binding of the
+  RECOMPUTED set (§4), which counts only when `bindings_ok` is true; a pair not held puts `require_binding` in `unmet`
+  and lists the pairs not held in `policy.require_binding_missing`. A value that is not `IN->TO` with both names
+  non-empty and one `->` is a usage error (exit 2). No default: which artifact must commit to which is a decision of the
+  relying party (for a receipt and the closed mandate of an AP2 chain, `receipt->N.k`); inside an AP2 chain the hop
+  rules of §2.1 already require the binding. Up to 1.8.0 no policy existed: measured on 2026-11-18, six goodmeta receipt
+  vectors declared "reject" came out `valid: true`, four of them with no receipt→mandate binding or one to the wrong hop
+  (`reference` of another mandate, payment and checkout; of the root hop; absent); under `require_binding receipt->N.k`
+  those four are not valid (the other two are receipt contents this format does not read: `payment_id`, `error_code`).
 
 **Elements and precedence.** Each subject is stated from its ELEMENTS — one per thing it covers (an artifact, a token, a
 signature entry) — and takes the state of its highest element under: `contradicted` > `not_evaluated` with reason
@@ -667,10 +802,10 @@ element is `not_evaluated` with `not_present`.
 | subject | elements | `verified` | `contradicted` (reason) | `not_evaluated` (reason) |
 |---|---|---|---|---|
 | `sealed_content` | the digest (§3); each artifact (§6 step 2: issuer signature and claims); the binding set (§4), recomputed for this subject whenever every artifact's signature and claims verified — also when a KB-JWT failed, where `bindings_ok` is false by §6 step 3 | every element | `digest_mismatch`; `artifact_invalid` (an artifact error, a signature or claims that do not verify, or no artifact); `binding_mismatch` | — |
-| `holder_binding` | each artifact that is not an error and carries a KB-JWT | its KB-JWT verifies under `cnf.jwk` | `kb_signature_invalid` (the signature does not verify, whatever `sd_hash`); `sd_hash_mismatch` (the signature verifies, `sd_hash` does not) | `holder_key_unknown` (no `cnf.jwk`: recorded, never fails the pack, §6 step 2 — except an `sd_hash` that does not match, an artifact error since 1.8.1); `not_present` |
+| `holder_binding` | each artifact that is not an error and carries a KB-JWT; since 1.9.0 also each `chain_cnf` artifact that is not an error (§2.1: `verified`) | its KB-JWT verifies under `cnf.jwk` | `kb_signature_invalid` (the signature does not verify, whatever `sd_hash`); `sd_hash_mismatch` (the signature verifies, `sd_hash` does not) | `holder_key_unknown` (no `cnf.jwk`: recorded, never fails the pack, §6 step 2 — except an `sd_hash` that does not match, an artifact error since 1.8.1); `not_present` |
 | `time_anchor` | the `rfc3161_timestamp` token when `anchored`; each `anchors` entry | binding verified (§3.2) AND, under `--tsa-cert`, the TSA signature verified | `binding_mismatch` (an imprint was read and is another digest, whatever else fails); `token_invalid` (otherwise: not a parseable, granted token); `token_missing` (`anchored` with no `tsr_b64`, §6 step 4) | `tsa_not_checked` (binding verified, no TSA certificate given: a self-issued token satisfies the binding, §3.2); `tsa_invalid` (the TSA signature does not verify under the certificate given: not counted, §3.3); `signer_certificate_absent` (1.8.1, §3.2: the signer certificate is not found, the signature not evaluated: not counted); `instrument_failure`; `not_present` |
 | `producer_signature` | each signature entry; the block itself | `PASS` with a key in the pinned set | `signature_invalid` (a `FAIL` entry; also a block with no entry, or whose `scheme` does not match its entries, §5, with a `detail`) | `self_asserted` (`PASS`, no pinned set: the key is carried by the pack — `valid` can be true without pins, a policy of this format, never a trust statement; krausz §5.4.2(a) has no resolved result without the relying party's trust material); `key_unresolved` (`PASS`, a pinned set that does not hold the key — not a failed signature); `backend_missing` (`SKIP`: no ML-DSA-65 backend, or a `sig_alg` this format does not define); `not_present` |
-| `issuer_identity` | the key of each artifact that is not an error | an `x5c_header` key whose chain validates to the relying party's trust anchor (§6 step 7) — qualifier `ca_certified`: a CA under YOUR anchor certified the key, never "this is the issuer" | `chain_broken` (openssl reports a certificate signature failure inside the chain, or an `x5c` entry is not strict base64) | `self_asserted` (`jwk_header`, `supplied`, `jwks_fetched`); `no_trust_anchor` (`x5c_header`, no anchor given); `chain_unresolved` (the chain does not reach the anchor given: not resolved in the relying party's material, not a defect of the input); `instrument_failure`; `not_present` |
+| `issuer_identity` | the key of each artifact that is not an error | an `x5c_header` key whose chain validates to the relying party's trust anchor (§6 step 7) — qualifier `ca_certified`: a CA under YOUR anchor certified the key, never "this is the issuer" | `chain_broken` (openssl reports a certificate signature failure inside the chain, or an `x5c` entry is not strict base64) | `self_asserted` (`jwk_header`, `supplied`, `jwks_fetched`, and since 1.9.0 `chain_cnf`, §2.1); `no_trust_anchor` (`x5c_header`, no anchor given); `chain_unresolved` (the chain does not reach the anchor given: not resolved in the relying party's material, not a defect of the input); `instrument_failure`; `not_present` |
 
 An artifact that is an error is stated once, in `sealed_content` (`artifact_invalid`); `holder_binding` and
 `issuer_identity` are stated over the artifacts that are not errors, and say `not_present` with a `detail` when none is.
@@ -834,9 +969,9 @@ after JSON unescaping — `"subj\u0065ct"` IS `subject`).
 | `rfc3161_timestamp` | `anchored` (boolean, MUST), `tsr_b64` (string; when `anchored` is true and it is ABSENT the §6.4 rule applies: `rfc3161_verified: false`, not a refusal), `tsa_url` (string), `tsa` (string, 1.0–1.3 spelling), `note` (string) | refusal |
 | `producer_signatures` | `scheme` (`"hybrid"` or `"classical-only"`, MUST), `over` (`"evidence_digest_sha256"`, MUST), `signatures` (list, MUST) | refusal |
 | `producer_signatures.signatures[i]` | `sig_alg` (string, MUST), `public_key_b64` (string, MUST), `signature_b64` (string, MUST), `post_quantum` (boolean, MUST, `true` iff `sig_alg == "ml-dsa-65"`); an entry that is not an object | FAIL entry; an UNKNOWN key: refusal (1.6.0, below) |
-| `bindings[i]` | `in` (string), `claim` (string), `commits_to` (string), `encoding` (`"hex"` or `"b64url"`) — all four MUST; an entry that is not an object | refusal |
+| `bindings[i]` | `in` (string), `claim` (string), `commits_to` (string), `encoding` (`"hex"` or `"b64url"`) — all four MUST; `over` (exactly `"issuer_jwt"`, 1.9.0, §4); an entry that is not an object | refusal |
 | `artifacts[i]` | `name` (non-empty string, MUST), `sd_jwt_compact` (string, MUST), `header` (object, MUST, canonically equal to the decoded protected header), `key` (object, MUST), `resolved_claims` (MUST, canonically equal to the recomputed claims), `kb_jwt` (object, MUST), `verified_at_build` (object, MUST) | artifact error (a `name` that is not a non-empty string stays a refusal, §2); an UNKNOWN key: refusal (1.6.0, below) |
-| `artifacts[i].key` | `jwk` (object, MUST), `provenance_class` (string in the §2 enum, MUST), `note` (string), `x5c_chain_sha256` (list of strings), `jwks_url` (string), `jwks_sha256` (string), `fetched_utc` (string) | artifact error; an UNKNOWN key: refusal (1.6.0) |
+| `artifacts[i].key` | `jwk` (object, MUST), `provenance_class` (string in the §2 enum, MUST), `note` (string), `x5c_chain_sha256` (list of strings), `jwks_url` (string), `jwks_sha256` (string), `fetched_utc` (string), `chain_from` (string, with `chain_cnf` only, 1.9.0, §2.1) | artifact error; an UNKNOWN key: refusal (1.6.0) |
 | `artifacts[i].kb_jwt` | `present` (boolean, MUST, equal to "the compact serialization ends with a KB-JWT"), `verified` (boolean or null), `signature_ok` (boolean), `sd_hash_ok` (boolean), `note` (string or null), `claims_recorded_not_validated` (object); each of `verified`, `signature_ok`, `sd_hash_ok`, `claims_recorded_not_validated` that is present MUST be canonically equal (§3) to the value the verifier recomputes from the KB-JWT (§6) — a recorded value the KB-JWT does not support, or a key the recomputation does not produce, is that artifact's error, like the `header` copy (added on review, 2026-10-11) | artifact error; an UNKNOWN key: refusal (1.6.0) |
 | `artifacts[i].verified_at_build` | `signature_ok` (exactly `true`, MUST), `disclosures_ok` (exactly `true`, MUST) | artifact error; an UNKNOWN key: refusal (1.6.0) |
 
@@ -979,22 +1114,25 @@ PR #316, `rfcs/rfc.dispute_resolution.md` at commit 6710a3a, 2026-10-17, a propo
 The RFC's requirement that "the determination **MUST** record the verifier output fields for each pack" is met, for a
 1.6.0 receipt, by recording `admission`, `refusal_class`, `states_vocabulary`, `states` and `policy` with the twelve fields.
 
-**draft-xg-payment-dispute-profile-01 (informative mapping).** That Internet-Draft (16 October 2026, Independent
-Submission, Informational, "a vendor profile documenting one implementation", no IETF consensus) carries agent-native
-facts in an `agent_anchors` block — "AP2 mandate_hash, TAP agent_id, approval event hash, receipt signature" (§4.2) —
-and a `scope_conformance` field, "one of in_scope, BREACH:<field>, or not_evaluated", which "MUST be re-derived by the
-verifier from recorded inputs, never asserted without re-derivation" (§4.2). Read against an ap2-evidence-pack receipt:
+**draft-xg-payment-dispute-profile-02 (informative mapping; 1.9.0, was -01).** That Internet-Draft (revision -02, 16
+November 2026, expires 20 May 2027, Intended status Informational, read on the IETF datatracker on 2026-11-18, SHA-256 of
+the text `e1c9345c…`; -02 "Retargeted from an Independent Submission vendor profile to consideration by the SCITT working
+group", Appendix B; no IETF consensus) carries agent-native facts in an `agent_anchors` block — "AP2 mandate_hash, TAP
+agent_id, approval event hash, receipt signature" (§8.2) — and a `scope_conformance` field, "one of in_scope,
+BREACH:<field>, or not_evaluated", which "MUST be re-derived by the verifier from recorded inputs, never asserted without
+re-derivation" (§8.2). Its §10 names this format ("ap2-evidence-pack 1.6.0 … publishes an informative mapping of its
+receipt fields to -01"). Read against an ap2-evidence-pack receipt:
 
-- `mandate_hash`: -01 does not define its preimage. Where a profile takes it as the SHA-256 of a mandate's compact
+- `mandate_hash`: -02 does not define its preimage (its §5, "Field Constructions", does not list it). Where a profile takes it as the SHA-256 of a mandate's compact
   serialization, that is the value §4 of this format computes for that artifact (lowercase hex), and
   `sealed_content: verified` states that the artifact verified with that exact serialization.
 - `scope_conformance`: no field of this receipt re-derives the intent scope against an executed action. A receipt of this
   format establishes which mandates were signed, bound and sealed — not whether an action stayed within them — so a
   profile that fills `scope_conformance` from it alone can state only `not_evaluated`, and none of this format's
   `not_evaluated` reasons may become `in_scope`.
-- `settlement_anchor` (§4.3): outside this format; a pack carries no settlement artifact.
-- Keys: -01 §3 requires keys to be "resolved out of band"; that is this format's `self_asserted` / `key_unresolved` →
-  pinned-key rule, for the producer and for the issuer.
+- `settlement_anchor` (§8.3): outside this format; a pack carries no settlement artifact.
+- Keys: -02 §4 requires that "Keys MUST be resolved out of band"; that is this format's `self_asserted` /
+  `key_unresolved` → pinned-key rule, for the producer and for the issuer.
 
 ## 11. Restriction record (profile `io.github.robertolocatelli81.restriction/1`, revision 1.7.0, 2026-10-29, reference as a constraint)
 
