@@ -475,9 +475,10 @@ class Chains(unittest.TestCase):
 
     def test_bindings_over_issuer_jwt_all_or_none(self):
         """SPEC §4: the recorded set is the recomputed one, or the recomputed one without EVERY binding over the issuer
-        JWT. Generated chains whose hops bind by issuer_jwt_hash (each pack holds two such bindings): every
+        JWT. Generated chains whose hops bind by issuer_jwt_hash (each pack holds four such bindings): every
         subset of them removed from the record, the digest recomputed — valid only for none removed and all removed; a
-        binding over the compact form removed, or one of either kind added, is a mismatch. Both verifiers."""
+        binding over the compact form removed, or one of either kind added, is a mismatch. Both verifiers, which must list the
+        bindings not recorded in one order (two of them sit under keys "b" and "7", which JavaScript enumerates the other way)."""
         rnd = random.Random(31); mk = ChainMaker(rnd)
         manifest, want = [], {}
         for c in range(6):
@@ -487,8 +488,11 @@ class Chains(unittest.TestCase):
             for i in range(n):
                 last = i == n - 1
                 mode = "sd_hash" if (i == 1 and n == 4) else "issuer_jwt_hash"   # the four-hop packs mix the two kinds
+                extra = {}
+                if i == n - 1:   # the last hop also names the first hops' issuer JWTs under keys JavaScript enumerates in
+                    extra = {"refs": {"b": ap2.issuer_jwt_hash(hops[0]), "7": ap2.issuer_jwt_hash(hops[1])}}   # another order
                 hops.append(mk.hop(keys[i][0], "ap2-mandate+sd-jwt" if i == 0 else ("kb+sd-jwt" if last else "kb+sd-jwt+kb"),
-                                   {"iss": f"h{i}", "iat": 1}, None if last else keys[i + 1][1], hops[-1] if hops else None, mode))
+                                   dict({"iss": f"h{i}", "iat": 1}, **extra), None if last else keys[i + 1][1], hops[-1] if hops else None, mode))
             out = os.path.join(self.d, f"aon{c}.json")
             ap2.build_evidence([{"name": "c", "sd_jwt": ChainMaker.join(hops)}], out, keys={"c": keys[0][1]})
             with open(out, encoding="utf-8") as f:
@@ -520,11 +524,13 @@ class Chains(unittest.TestCase):
                     self.assertEqual(len(r.get("bindings_not_recorded", [])), len(drop) if ok else 0)
                     if not ok:
                         self.assertEqual(r["states"]["sealed_content"]["reasons"], ["binding_mismatch"])
-                manifest.append((f"{c}/{name}", p, [])); want[f"{c}/{name}"] = (ok, len(drop) if ok else 0)
-        self.assertEqual(len(manifest), 48)   # 6 packs, each 2 bindings over the issuer JWT: 4 subsets + 3 or 5 other cases
+                nr = r.get("bindings_not_recorded", [])
+                self.assertEqual(nr, sorted(nr, key=ap2._canon))   # one order, whatever the scan order of the verifier
+                manifest.append((f"{c}/{name}", p, [])); want[f"{c}/{name}"] = (ok, nr)
+        self.assertEqual(len(manifest), 120)   # 6 packs, each 4 bindings over the issuer JWT: 16 subsets + 3 or 5 other cases
         for name, r in _js_many(self, manifest).items():
             with self.subTest(js=name):
-                self.assertEqual((r["valid"], r["bindings_ok"], len(r.get("bindings_not_recorded", []))), (want[name][0], want[name][0], want[name][1]))
+                self.assertEqual((r["valid"], r["bindings_ok"], r.get("bindings_not_recorded", [])), (want[name][0], want[name][0], want[name][1]))
 
     def test_legacy_1_0_pack_named(self):
         r = ap2.verify_evidence(_LEGACY)

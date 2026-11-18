@@ -894,7 +894,7 @@ function verifyEvidenceInner(path, opts) {
   }
   // 1.9.0 — SPEC §4 (the reference's bindings_recorded_match): null = not the recomputed set; else the recomputed bindings the pack does
   // not record — [] when equal, and for a pack recording no binding over the issuer JWT (built before 1.9.0) ALL of those, never some
-  const recordedMatch = (found, recorded) => { const rec = asSet(recorded); if (asSet(found) === rec) return []; return asSet(found.filter((b) => !Object.hasOwn(b, "over"))) === rec ? found.filter((b) => Object.hasOwn(b, "over")) : null; };
+  const recordedMatch = (found, recorded) => { const rec = asSet(recorded); if (asSet(found) === rec) return []; return asSet(found.filter((b) => !Object.hasOwn(b, "over"))) === rec ? found.filter((b) => Object.hasOwn(b, "over")).sort((x, y) => cmp(canon(x), canon(y))) : null; };   // sorted by canonical form, as the reference
   const asSet = (l) => l.map((b) => canon(b)).sort().join("\n");   // r4: binding SET (SPEC §4) — Object.keys enumerates index keys first, so the scan order is not the reference's
   // 1.6.0 — SPEC §6.9: the binding set as an element of sealed_content, recomputed whenever every artifact's signature and
   // claims verified (also when a KB-JWT failed, where bindings_ok is false by §6 step 3 without a recomputation)

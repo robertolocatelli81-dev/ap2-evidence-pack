@@ -567,7 +567,7 @@ verifier refuses a pack holding a binding with `over` (unknown key in a binding,
 must stay verifiable. So the recorded `bindings` are the recomputed set (as above), or the recomputed set without EVERY
 binding that carries `over` — all of them left out, never some; any other difference fails the pack (`bindings_ok`
 false, `binding_mismatch`). When bindings over the issuer JWT are found and not recorded, the receipt of both verifiers
-lists them in `bindings_not_recorded` (absent otherwise), and `require_binding` (§6.9) reads the recomputed set, so it
+lists them in `bindings_not_recorded` (absent otherwise; sorted by canonical form, §3), and `require_binding` (§6.9) reads the recomputed set, so it
 finds them. The reference `build` records every binding. Measured on 2026-11-18: a pack built by v1.8.0 from an AP2 SDK
 chain split by hand and its receipt (`spec/vectors/ap2_chains/pack_built_by_1.8.0.json`), `valid: true` under 1.8.0, was
 `binding_mismatch` under the first draft of this revision, which asked equality alone; it is `valid: true` with one entry

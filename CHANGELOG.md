@@ -44,7 +44,7 @@ a pack built by 1.8.x is read as before, with the bindings over the issuer JWT i
   (both verifiers). Measured: a pack built by v1.8.0 from an SDK chain split by hand and its receipt
   (`spec/vectors/ap2_chains/pack_built_by_1.8.0.json`) was `binding_mismatch` under the first draft of this change
   (5a09a53) and is `valid: true`; `test_ap2_chains.py` removes every subset of such bindings from 6 generated packs
-  (48 cases, both verifiers).
+  (120 cases, both verifiers, the list in one order in both).
 - **`--require-binding IN->TO` (SPEC §6.9).** A relying-party policy, repeatable, in both verifiers and the library
   (`require_bindings`): each pair must be a recomputed binding, else `policy.unmet` `require_binding`, the missing pairs
   in `policy.require_binding_missing`, and not valid. No default (the format cannot know which artifact must be bound).

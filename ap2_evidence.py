@@ -1267,7 +1267,7 @@ def bindings_recorded_match(found: List[Dict], recorded) -> Optional[List[Dict]]
     if sorted(_canon(b) for b in found) == rec:
         return []
     if sorted(_canon(b) for b in found if "over" not in b) == rec:
-        return [b for b in found if "over" in b]
+        return sorted((b for b in found if "over" in b), key=_canon)   # one order in both verifiers (their scan orders differ)
     return None
 
 
