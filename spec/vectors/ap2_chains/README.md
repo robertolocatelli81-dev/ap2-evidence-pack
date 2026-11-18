@@ -9,6 +9,11 @@ Test vectors for `test_ap2_chains.py`. Nothing here is executed; the files are r
 | `GOODMETA-NOTICE.txt` | `8f59d0d52c2efff8b49e67a34919961eb3d77b167c8d1b2e2c975fe02e7d6884` | the NOTICE of that repository at that commit, verbatim (Apache-2.0 §4(d)) |
 | `sdk_chainA.txt`, `sdk_chainB.txt`, `sdk_chain_mixed.txt`, `sdk_receiptA.jwt`, `sdk_issuer_pub.json`, `sdk_mpp_pub.json` | in `SHA256SUMS` beside this file | emitted on 2026-11-18 by the AP2 SDK (google-agentic-commerce/AP2 `code/sdk/python` at `e1ea56db72a6385bce3e5c1112b3a56ce60acb43`, Apache-2.0), run in a sandbox with keys generated there for this purpose; only public keys are kept. `chain_mixed` is the open mandate of chain A followed by the closed mandate of chain B (the AP2 SDK refuses it: sd_hash mismatch) |
 
+`pack_built_by_1.8.0.json` (sha256 in `SHA256SUMS`) is a pack written on 2026-11-18 by `build` of the tag v1.8.0
+(d5601e4) from `sdk_chainA.txt` split by hand (`open`, `closed`, the key of `closed` supplied from the open mandate's
+`cnf.jwk`) and `sdk_receiptA.jwt`: `valid: true` under 1.8.0, it records one binding, and none over the issuer JWT, which
+1.8.0 did not look for. SPEC §4 (1.9.0) keeps it valid; the test reads it.
+
 The goodmeta vectors are, per their NOTICE, "minted from the AP2 (Agent Payments Protocol) reference SDK at commit
 e1ea56db72a6385bce3e5c1112b3a56ce60acb43". Their `x5c` vectors encode certificates in base64url, which RFC 7515 §4.1.6
 does not allow ("base64-encoded ... -- not base64url-encoded"); this format refuses them for that reason, and the test

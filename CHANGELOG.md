@@ -6,7 +6,8 @@ SPEC 1.9.0 (§1, §2.1, §3.1, §3.2, §4, §6 step 2, §6.9, §7, §9.1, §9.2,
 2026-11-18 on the PyPI wheel 1.7.3 (sha256 109227df…203b5c00), on the tag v1.8.0 (d5601e4) and on the PyPI wheel 1.8.0, on
 662 SD-JWTs found in public repositories and on the goodmeta/ap2-conformance vectors. A minor version: the pack gains a
 provenance class (`chain_cnf`), a key member (`chain_from`) and a binding member (`over`) that a 1.8.x verifier refuses;
-a pack without them reads as before. The work started as 1.8.1; the entries below that say 1.8.1 are part of this release.
+a pack built by 1.8.x is read as before, with the bindings over the issuer JWT it does not record listed in the receipt
+(SPEC §4). The work started as 1.8.1; the entries below that say 1.8.1 are part of this release.
 
 ### AP2 (measured on 2026-11-18 on 1.8.0: what the format exists for did not work)
 
@@ -37,7 +38,13 @@ a pack without them reads as before. The work started as 1.8.1; the entries belo
   the SHA-256 of the closed mandate's issuer JWT (`get_closed_mandate_jwt`, `mandate.py` 402-417 at e1ea56d); 1.8.0 looked
   only for the hash of the compact form and found no binding (measured on an SDK-issued receipt). Bindings are now also
   searched over each artifact's issuer JWT and recorded with `"over": "issuer_jwt"`; the `issuer_jwt_hash` hop binding is
-  found the same way. The goodmeta receipts, whose `reference` is over the compact form, bind as before.
+  found the same way. The goodmeta receipts, whose `reference` is over the compact form, bind as before. A pack built
+  before 1.9.0 records no such binding and stays valid: the recorded set may be the recomputed one without every
+  binding over the issuer JWT (all of them, never some), and the receipt then lists them in `bindings_not_recorded`
+  (both verifiers). Measured: a pack built by v1.8.0 from an SDK chain split by hand and its receipt
+  (`spec/vectors/ap2_chains/pack_built_by_1.8.0.json`) was `binding_mismatch` under the first draft of this change
+  (5a09a53) and is `valid: true`; `test_ap2_chains.py` removes every subset of such bindings from 6 generated packs
+  (48 cases, both verifiers).
 - **`--require-binding IN->TO` (SPEC §6.9).** A relying-party policy, repeatable, in both verifiers and the library
   (`require_bindings`): each pair must be a recomputed binding, else `policy.unmet` `require_binding`, the missing pairs
   in `policy.require_binding_missing`, and not valid. No default (the format cannot know which artifact must be bound).
@@ -46,11 +53,12 @@ a pack without them reads as before. The work started as 1.8.1; the entries belo
   `missing_reference` are not valid; `missing_payment_id` and `error_without_error_code` stay valid (receipt contents this
   format does not read, declared). A chain mixing two mandates (the SDK refuses it) is refused at build (§2.1).
 - **A plain JWS** (an AP2 receipt) enters as `<jwt>~`; `sd_jwt_no_separator` now says so.
-- **Benches.** `test_ap2_chains.py` (12 tests; on an archive of the commit before, with the vectors copied, all 12
-  fail). The differential oracle gains the chain cases — packs built from the SDK and goodmeta vectors, the policy met
+- **Benches.** `test_ap2_chains.py` (14 tests; on an archive of 6728413, with the vectors copied, the first 12 fail;
+  the two of the all-or-none rule fail on 5a09a53). The differential oracle gains the chain cases — packs built from the SDK and goodmeta vectors, the policy met
   and unmet, the three new members given wrong values, removed and moved, ten CLI forms of `--require-binding` — and
-  compares each artifact's `chain_hop` and the policy's missing pairs: 569 cases, 0 disagreements, 12 declared (Node
-  24.19.0); with the JavaScript check of `chain_from` switched off it reports 1.
+  compares each artifact's `chain_hop`, the policy's missing pairs and `bindings_not_recorded`: 574 cases, 0
+  disagreements, 12 declared (Node 24.19.0); with the JavaScript check of `chain_from` switched off it reported 1 (run
+  when the cases were 569).
 
 ### TSA signer named by key identifier (SPEC §3.2)
 

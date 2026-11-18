@@ -1,0 +1,175 @@
+{
+ "artifacts": [
+  {
+   "header": {
+    "alg": "ES256",
+    "kid": "issuer-1",
+    "typ": "example+sd-jwt"
+   },
+   "kb_jwt": {
+    "present": false
+   },
+   "key": {
+    "jwk": {
+     "crv": "P-256",
+     "kid": "issuer-1",
+     "kty": "EC",
+     "x": "Hn7NZ_hZQ2okmN_Fu3G0Gdi4DQRhH43bGoyPyv7E17M",
+     "y": "n5OQhDnnFVkfFMF3yhSktjETgw_QggGP16x1amMoDvg"
+    },
+    "note": "key material supplied by the caller (caller vouches); the caller's choice is the policy, whatever the header carries",
+    "provenance_class": "supplied"
+   },
+   "name": "open",
+   "resolved_claims": {
+    "delegate_payload": [
+     {
+      "cnf": {
+       "jwk": {
+        "crv": "P-256",
+        "kid": "agent-1",
+        "kty": "EC",
+        "x": "sQNbkZa8hZsQt_Am2FDi_6Xn_t0cm297Jh5LWG5JPaM",
+        "y": "sX-QYAGJpXR0FOYXutKAV7VFi6tdPZ8L4YK4i9CTrGQ"
+       }
+      },
+      "constraints": [
+       {
+        "currency": "USD",
+        "max": 5000,
+        "min": 0,
+        "type": "payment.amount_range"
+       },
+       {
+        "allowed": [
+         {
+          "id": "M-1",
+          "name": "Cat Store"
+         }
+        ],
+        "type": "payment.allowed_payees"
+       }
+      ],
+      "exp": 1795005178,
+      "iat": 1795001578,
+      "vct": "mandate.payment.open.1"
+     }
+    ]
+   },
+   "sd_jwt_compact": "eyJhbGciOiAiRVMyNTYiLCAidHlwIjogImV4YW1wbGUrc2Qtand0IiwgImtpZCI6ICJpc3N1ZXItMSJ9.eyJkZWxlZ2F0ZV9wYXlsb2FkIjogW3siLi4uIjogIjRDTmZJWGU0c0N4c2xEbjFnTVVBR0tNSXo3OHVldl9pZFRCS0NJYkpsVWsifV0sICJfc2RfYWxnIjogInNoYS0yNTYifQ.-7cNBrwaMszl74RaxA7j8JZjMIUeR147e7fQS6Ca8ESrxb-u8IqoGj9-pTAbBVZhub7picU9SoOdS7GNKA8C_w~WyJ4Qk0zN01TNXY5V1ZKbXYybWE2YnlBIiwgeyJpZCI6ICJNLTEiLCAibmFtZSI6ICJDYXQgU3RvcmUifV0~WyJFTFItaTZ2cjVNVHNzZ3YtdTk3OUZBIiwgeyJ2Y3QiOiAibWFuZGF0ZS5wYXltZW50Lm9wZW4uMSIsICJjb25zdHJhaW50cyI6IFt7InR5cGUiOiAicGF5bWVudC5hbW91bnRfcmFuZ2UiLCAiY3VycmVuY3kiOiAiVVNEIiwgIm1heCI6IDUwMDAsICJtaW4iOiAwfSwgeyJ0eXBlIjogInBheW1lbnQuYWxsb3dlZF9wYXllZXMiLCAiYWxsb3dlZCI6IFt7Ii4uLiI6ICJSWmpMVUZFZlhraDNzeU5JUVl2THg1YU5EOWx4cFVKOXZoOFZtY2d4UU8wIn1dfV0sICJjbmYiOiB7Imp3ayI6IHsiY3J2IjogIlAtMjU2IiwgImtpZCI6ICJhZ2VudC0xIiwgImt0eSI6ICJFQyIsICJ4IjogInNRTmJrWmE4aFpzUXRfQW0yRkRpXzZYbl90MGNtMjk3Smg1TFdHNUpQYU0iLCAieSI6ICJzWC1RWUFHSnBYUjBGT1lYdXRLQVY3VkZpNnRkUFo4TDRZSzRpOUNUckdRIn19LCAiaWF0IjogMTc5NTAwMTU3OCwgImV4cCI6IDE3OTUwMDUxNzh9XQ~",
+   "verified_at_build": {
+    "disclosures_ok": true,
+    "signature_ok": true
+   }
+  },
+  {
+   "header": {
+    "alg": "ES256",
+    "kid": "agent-1",
+    "typ": "kb+sd-jwt"
+   },
+   "kb_jwt": {
+    "present": false
+   },
+   "key": {
+    "jwk": {
+     "crv": "P-256",
+     "kid": "agent-1",
+     "kty": "EC",
+     "x": "sQNbkZa8hZsQt_Am2FDi_6Xn_t0cm297Jh5LWG5JPaM",
+     "y": "sX-QYAGJpXR0FOYXutKAV7VFi6tdPZ8L4YK4i9CTrGQ"
+    },
+    "note": "key material supplied by the caller (caller vouches); the caller's choice is the policy, whatever the header carries",
+    "provenance_class": "supplied"
+   },
+   "name": "closed",
+   "resolved_claims": {
+    "aud": "merchant",
+    "delegate_payload": [
+     {
+      "exp": 1795005178,
+      "iat": 1795001578,
+      "payee": {
+       "id": "M-1",
+       "name": "Cat Store"
+      },
+      "payment_amount": {
+       "amount": 2500,
+       "currency": "USD"
+      },
+      "payment_instrument": {
+       "description": "Demo",
+       "id": "stub",
+       "type": "card"
+      },
+      "transaction_id": "tx_A",
+      "vct": "mandate.payment.1"
+     }
+    ],
+    "iat": 1795001578,
+    "nonce": "tx_A",
+    "sd_hash": "3v9k1VM9OB2FxVfSIBexhYRUndSMoIl5xKBVfxJsd0s"
+   },
+   "sd_jwt_compact": "eyJhbGciOiAiRVMyNTYiLCAidHlwIjogImtiK3NkLWp3dCIsICJraWQiOiAiYWdlbnQtMSJ9.eyJkZWxlZ2F0ZV9wYXlsb2FkIjogW3siLi4uIjogIlAxTWdVUGJkUHlWZnczc2VwLUpEN0t6ajhzMVBmSUZEOUZsOFBNRHBhM1UifV0sICJpYXQiOiAxNzk1MDAxNTc4LCAiYXVkIjogIm1lcmNoYW50IiwgIm5vbmNlIjogInR4X0EiLCAic2RfaGFzaCI6ICIzdjlrMVZNOU9CMkZ4VmZTSUJleGhZUlVuZFNNb0lsNXhLQlZmeEpzZDBzIiwgIl9zZF9hbGciOiAic2hhLTI1NiJ9.czaqY6Ue546fSmhXW4qVBjdrNrtRRS2EyUNPOZT5W61oqiN6JXgXiFc7zIW_YAndb6J32SthwSYF4CGPfSBTdA~WyJrNEQ4WXFuYVd6RVZadHFVekZLMlp3IiwgeyJ2Y3QiOiAibWFuZGF0ZS5wYXltZW50LjEiLCAidHJhbnNhY3Rpb25faWQiOiAidHhfQSIsICJwYXllZSI6IHsiaWQiOiAiTS0xIiwgIm5hbWUiOiAiQ2F0IFN0b3JlIn0sICJwYXltZW50X2Ftb3VudCI6IHsiYW1vdW50IjogMjUwMCwgImN1cnJlbmN5IjogIlVTRCJ9LCAicGF5bWVudF9pbnN0cnVtZW50IjogeyJpZCI6ICJzdHViIiwgInR5cGUiOiAiY2FyZCIsICJkZXNjcmlwdGlvbiI6ICJEZW1vIn0sICJpYXQiOiAxNzk1MDAxNTc4LCAiZXhwIjogMTc5NTAwNTE3OH1d~",
+   "verified_at_build": {
+    "disclosures_ok": true,
+    "signature_ok": true
+   }
+  },
+  {
+   "header": {
+    "alg": "ES256",
+    "kid": "mpp-key-1",
+    "typ": "JWT"
+   },
+   "kb_jwt": {
+    "present": false
+   },
+   "key": {
+    "jwk": {
+     "crv": "P-256",
+     "kid": "mpp-key-1",
+     "kty": "EC",
+     "x": "HCGkkePOJLfTDnG4SeTUd2lGptW9qdRFCTyuS4eGr7A",
+     "y": "WKHl2NmfTs0O8G06oC9i7nHAnuG2GrjH-EgFTaSQr1c"
+    },
+    "note": "key material supplied by the caller (caller vouches); the caller's choice is the policy, whatever the header carries",
+    "provenance_class": "supplied"
+   },
+   "name": "receipt",
+   "resolved_claims": {
+    "error": null,
+    "error_description": null,
+    "iat": 1795001795,
+    "iss": "",
+    "network_confirmation_id": "87dacca8-7162-413f-b043-92466c47e9cc",
+    "payment_id": "87dacca8-7162-413f-b043-92466c47e9cc",
+    "psp_confirmation_id": "87dacca8-7162-413f-b043-92466c47e9cc",
+    "reference": "42UzARB7yRP-cIK0SqB0WmpJlByZgu3JyW7UW0swnSo",
+    "status": "Success"
+   },
+   "sd_jwt_compact": "eyJhbGciOiAiRVMyNTYiLCAidHlwIjogIkpXVCIsICJraWQiOiAibXBwLWtleS0xIn0.eyJzdGF0dXMiOiAiU3VjY2VzcyIsICJpc3MiOiAiIiwgImlhdCI6IDE3OTUwMDE3OTUsICJyZWZlcmVuY2UiOiAiNDJVekFSQjd5UlAtY0lLMFNxQjBXbXBKbEJ5Wmd1M0p5VzdVVzBzd25TbyIsICJlcnJvciI6IG51bGwsICJlcnJvcl9kZXNjcmlwdGlvbiI6IG51bGwsICJwYXltZW50X2lkIjogIjg3ZGFjY2E4LTcxNjItNDEzZi1iMDQzLTkyNDY2YzQ3ZTljYyIsICJwc3BfY29uZmlybWF0aW9uX2lkIjogIjg3ZGFjY2E4LTcxNjItNDEzZi1iMDQzLTkyNDY2YzQ3ZTljYyIsICJuZXR3b3JrX2NvbmZpcm1hdGlvbl9pZCI6ICI4N2RhY2NhOC03MTYyLTQxM2YtYjA0My05MjQ2NmM0N2U5Y2MifQ.u-Arax7kBq_ikOL9YvoIf6zSiRsGUETfH7PPPERxtRC5Lg7PqzJNFgrkLzo4gl6pSmoFqe8ABlXN-n6HRQ8xmw~",
+   "verified_at_build": {
+    "disclosures_ok": true,
+    "signature_ok": true
+   }
+  }
+ ],
+ "bindings": [
+  {
+   "claim": "sd_hash",
+   "commits_to": "open",
+   "encoding": "b64url",
+   "in": "closed"
+  }
+ ],
+ "created_utc": "2026-11-18T18:42:35Z",
+ "evidence_digest_sha256": "a33c3a5adbe92b20a07ab1f589c3228539e674ee7288d4f2667b67ef03afb57a",
+ "evidence_format": "ap2-evidence-pack/1.0",
+ "honest_scope": "Proves: these exact SD-JWT artifacts, with the snapshotted key material (see each key's provenance_class), verified at build time; the RFC 3161 token (if present) binds this digest to a TimeStampResp, and attests the TSA's clock only once the relying party has verified the TSA's signature (--tsa-cert): a self-issued token satisfies the binding alone. Does NOT prove the issuer authorised the key beyond what the provenance class states, does NOT confer eIDAS qualified-archive legal presumption, and does NOT by itself validate x5c chains to a trust anchor — that is an act of the relying party at verification time, with `--trust-anchor`, reported in `chain_verified` and in each artifact's `x5c_leaf` (SPEC §6.7): the x5c bytes are sealed inside the signed header, the validation RESULT never is — and never proves the truth of the recorded transaction itself. When a producer signature is present, it protects the SEALED CONTENT (the file minus the digest, the anchor block and the signatures themselves - so a removed or downgraded time anchor is caught only under a require-anchor policy), and authenticity ONLY for a relying party that has PINNED the producer public key out of band (an embedded key alone proves consistency, not authenticity), across the retention window (hybrid: a classical signature + FIPS-204 ML-DSA-65, surviving the quantum transition per NIST IR 8547); it does NOT retro-protect the underlying ES256 mandate signature - for the existed-before-a-quantum-adversary claim you still need a trusted time anchor (RFC 3161 / RFC 4998 renewal). 'valid' means each artifact verifies and the SEALED CONTENT is intact — NOT that the file as a whole is unaltered (the anchor block lies outside the digest), NOT that the mandates form a bound chain (read `bindings`) nor that self-asserted keys prove issuer identity (read `provenance_classes`/`self_asserted_only`). KB-JWT holder binding is verified when the issuer payload carries cnf.jwk; without cnf.jwk it is recorded as present-but-unverifiable, never painted green. KB-JWT aud/nonce/iat are RECORDED for the auditor, not validated — their expected values are transaction context this tool cannot know offline.",
+ "rfc3161_timestamp": {
+  "anchored": false,
+  "note": "no TSA provided"
+ },
+ "subject": "agentic-payment mandate evidence"
+}

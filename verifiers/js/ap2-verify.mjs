@@ -892,13 +892,17 @@ function verifyEvidenceInner(path, opts) {
     } catch (e) { artResults.push({ name: a?.name, error: String(e.message ?? e) }); allOk = false; }
     if (read0 !== null) artResults[artResults.length - 1].integral_literals_read = INTEGRAL_READ.slice(read0);
   }
+  // 1.9.0 — SPEC §4 (the reference's bindings_recorded_match): null = not the recomputed set; else the recomputed bindings the pack does
+  // not record — [] when equal, and for a pack recording no binding over the issuer JWT (built before 1.9.0) ALL of those, never some
+  const recordedMatch = (found, recorded) => { const rec = asSet(recorded); if (asSet(found) === rec) return []; return asSet(found.filter((b) => !Object.hasOwn(b, "over"))) === rec ? found.filter((b) => Object.hasOwn(b, "over")) : null; };
   const asSet = (l) => l.map((b) => canon(b)).sort().join("\n");   // r4: binding SET (SPEC §4) — Object.keys enumerates index keys first, so the scan order is not the reference's
   // 1.6.0 — SPEC §6.9: the binding set as an element of sealed_content, recomputed whenever every artifact's signature and
   // claims verified (also when a KB-JWT failed, where bindings_ok is false by §6 step 3 without a recomputation)
   let bindingSetMatch = null;
   if (artResults.length && forBindings.length === artResults.length && artResults.every((r) => r.signature_ok === true && r.claims_match === true)) {
-    try { bindingSetMatch = asSet(findBindings(forBindings)) === asSet(ev.bindings ?? []); } catch { bindingSetMatch = false; } }
-  const bindingsOk = allOk ? asSet(findBindings(forBindings)) === asSet(ev.bindings ?? []) : false;   // `bindings` absent = [] in both; null is refused above
+    try { bindingSetMatch = recordedMatch(findBindings(forBindings), ev.bindings ?? []) !== null; } catch { bindingSetMatch = false; } }
+  const notRecorded = allOk ? recordedMatch(findBindings(forBindings), ev.bindings ?? []) : null;   // `bindings` absent = [] in both; null is refused above
+  const bindingsOk = notRecorded !== null;
   const ts = ev.rfc3161_timestamp ?? {}; let rfc = { claimed: Boolean(ts.anchored), verified: null };   // `anchored` is a boolean by the shape check above
   if (ts.anchored && typeof ts.tsr_b64 === "string") rfc = { claimed: true, ...verifyRfc3161(ts.tsr_b64, recomputed), tsa_verified: null };   // BINDING only (status granted + messageImprint == digest, SPEC §3.2); TSA signature/chain: this verifier cannot (no openssl) -> tsa_verified null = incomplete under --tsa-cert
   else if (ts.anchored) rfc = { claimed: true, verified: false, note: "anchored claimed but tsr_b64 absent" };
@@ -934,7 +938,7 @@ function verifyEvidenceInner(path, opts) {
   // 1.8.0 — SPEC §12.3: NB1-NB3. The upper bound is a TSA-VERIFIED genTime; this verifier cannot check a TSA signature
   // (no openssl), so it never has one: NB3 is at best not_evaluated:no_verified_time_anchor here (declared, as tsa_verified)
   const nbRep = "not_before" in ev ? checkNotBefore(ev.not_before, ev, artResults, null) : null;
-  return { digest_ok: digestOk, artifacts: artResults, producer_signatures: producer, pq_protected: producer.pq_protected ?? false, bindings_ok: bindingsOk, rfc3161: rfc, anchors: anchorResults, anchors_verified: anchorsVerified, provenance_classes: classes,
+  return { digest_ok: digestOk, artifacts: artResults, producer_signatures: producer, pq_protected: producer.pq_protected ?? false, bindings_ok: bindingsOk, ...(notRecorded !== null && notRecorded.length ? { bindings_not_recorded: notRecorded } : {}), rfc3161: rfc, anchors: anchorResults, anchors_verified: anchorsVerified, provenance_classes: classes,
     // r10: ANY — one reconciled artifact must not clear the flag for the others; r7: a label alone never clears it,
     // a missing class is a refusal; r8: this verifier cannot validate x5c chains, so chain_verified is always null (declared)
     self_asserted_only: artResults.length === 0 || artResults.some((r) => r.self_asserted !== false), chain_verified: null, policy_ok: policyOk,

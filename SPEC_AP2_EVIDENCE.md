@@ -7,7 +7,8 @@
 > `<hop0>~~<hop1>...` are read in their native form — split into hops by `build`, every hop after the first verified with
 > the previous hop's `cnf.jwk` (provenance class `chain_cnf`, key member `chain_from`) under the hop rules of the AP2 SDK,
 > and counted in `holder_binding` (§6.9). §4, a binding is also searched over an artifact's issuer JWT (`"over":
-> "issuer_jwt"`, AP2's receipt `reference`). §6.9, the policy `require_binding`. §3.2, more than one ESSCertID. §1, a
+> "issuer_jwt"`, AP2's receipt `reference`; a pack built before 1.9.0, which records none, stays valid and the receipt
+> lists them in `bindings_not_recorded`). §6.9, the policy `require_binding`. §3.2, more than one ESSCertID. §1, a
 > pack built by 1.0.x is refused by name. §3.1, a non-integer number stays outside this format, stated against RFC 7519
 > §2, and is named as such with or without `accept_integral_floats`. §9.1, the three new members. §10, the mapping
 > follows draft-xg-payment-dispute-profile-02. A 1.8.x verifier refuses a pack that carries `chain_cnf`, `chain_from` or
@@ -560,8 +561,17 @@ regardless of how many delegation hops precede it or which open-mandate disclosu
 different strings (the compact form always holds at least one `~` more), so one value is not both; a value may still
 bind two different artifacts, and each binding found is recorded. Up to 1.8.0 a receipt issued by the AP2 SDK over a closed mandate of the pack bound nothing
 (measured on 2026-11-18: `reference` = BASE64URL(SHA-256(closed issuer JWT)), not the hash of its compact form). A 1.8.x
-verifier refuses a pack holding a binding with `over` (unknown key in a binding, §9.1); a pack without one reads as
-before.
+verifier refuses a pack holding a binding with `over` (unknown key in a binding, §9.1).
+
+**The recorded set, since 1.9.0.** A pack built before 1.9.0 records no binding over the issuer JWT, and such a pack
+must stay verifiable. So the recorded `bindings` are the recomputed set (as above), or the recomputed set without EVERY
+binding that carries `over` — all of them left out, never some; any other difference fails the pack (`bindings_ok`
+false, `binding_mismatch`). When bindings over the issuer JWT are found and not recorded, the receipt of both verifiers
+lists them in `bindings_not_recorded` (absent otherwise), and `require_binding` (§6.9) reads the recomputed set, so it
+finds them. The reference `build` records every binding. Measured on 2026-11-18: a pack built by v1.8.0 from an AP2 SDK
+chain split by hand and its receipt (`spec/vectors/ap2_chains/pack_built_by_1.8.0.json`), `valid: true` under 1.8.0, was
+`binding_mismatch` under the first draft of this revision, which asked equality alone; it is `valid: true` with one entry
+in `bindings_not_recorded`, and `require_binding receipt->closed` is met.
 
 ## 5. Producer signatures (NORMATIVE when present)
 

@@ -1257,6 +1257,20 @@ def find_bindings(artifacts: List[Dict]) -> List[Dict]:
     return found
 
 
+def bindings_recorded_match(found: List[Dict], recorded) -> Optional[List[Dict]]:
+    """SPEC §4 (1.9.0): whether the recorded binding set is the recomputed one. Returns None when it is not, else the
+    recomputed bindings the pack does not record — [] when the two sets are equal, and, for a pack that records no binding
+    over the issuer JWT (every pack built before 1.9.0), the recomputed bindings with `over`: ALL of them left out, never
+    some. Measured on 2026-11-18 on the first 1.9.0 draft, which asked equality alone: a pack built by 1.8.0 from a chain
+    split by hand and a receipt of the AP2 SDK, `valid: true` there, came out `binding_mismatch`."""
+    rec = sorted(_canon(b) for b in recorded)
+    if sorted(_canon(b) for b in found) == rec:
+        return []
+    if sorted(_canon(b) for b in found if "over" not in b) == rec:
+        return [b for b in found if "over" in b]
+    return None
+
+
 # ────────────────────────────────────────────────────────── AP2 delegation chains (SPEC §2.1, 1.9.0)
 # draft-gco-oauth-delegate-sd-jwt-00 §6 as the AP2 SDK implements it (google-agentic-commerce/AP2 e1ea56d,
 # code/sdk/python/ap2/sdk/sdjwt/chain.py and kb_sd_jwt.py): hops joined by "~~", the root an SD-JWT, every later hop a
@@ -3024,12 +3038,17 @@ def _verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = F
     binding_set_match = None
     if art_results and len(for_bindings) == len(art_results) and all(r.get("signature_ok") is True and r.get("claims_match") is True for r in art_results):
         try:
-            binding_set_match = sorted(_canon(b) for b in find_bindings(for_bindings)) == sorted(_canon(b) for b in ev.get("bindings", []))
+            binding_set_match = bindings_recorded_match(find_bindings(for_bindings), ev.get("bindings", [])) is not None
         except Exception:  # noqa: BLE001
             binding_set_match = False
+    bindings_not_recorded = []   # 1.9.0 (SPEC §4): the bindings over the issuer JWT a pack built before 1.9.0 does not record
     try:   # r4: the binding SET (SPEC §4) — entries compared by sorted canonical form; the scan order of JS Object.keys puts
         # array-index keys ("0", "7") first, so an ordered comparison split the verdict on a pack the reference itself built
-        bindings_ok = (sorted(_canon(b) for b in find_bindings(for_bindings)) == sorted(_canon(b) for b in ev.get("bindings", []))) if all_ok else False
+        bindings_ok = False
+        if all_ok:
+            _nr = bindings_recorded_match(find_bindings(for_bindings), ev.get("bindings", []))
+            bindings_ok = _nr is not None
+            bindings_not_recorded = _nr or []
     except Exception:  # noqa: BLE001
         bindings_ok = False
 
@@ -3102,7 +3121,8 @@ def _verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = F
         nb_rep = check_not_before(ev["not_before"], ev, art_results, proven_time)
     receipt = {"digest_ok": digest_ok, "artifacts": art_results,
             "producer_signatures": producer, "pq_protected": producer.get("pq_protected", False),
-            "bindings_ok": bindings_ok, "rfc3161": rfc,
+            "bindings_ok": bindings_ok, **({"bindings_not_recorded": bindings_not_recorded} if bindings_not_recorded else {}),   # 1.9.0 (SPEC §4)
+            "rfc3161": rfc,
             "anchors": anchor_results, "anchors_verified": anchors_verified,   # 1.5.0 — SPEC §3.3
             "provenance_classes": classes,
             # r7 FAIL-CLOSED, r10 with ANY: the flag warns that a key in this pack is self-asserted, so ONE reconciled

@@ -179,7 +179,9 @@ hop's `cnf.jwk` (provenance class `chain_cnf`, reconciled again offline by both 
 `sd_hash` or `issuer_jwt_hash`, with the hop `typ` and `cnf` rules of the AP2 SDK; such a hop counts in `holder_binding`.
 An AP2 receipt is a plain JWS: give it as `<jwt>~`. Its `reference` binds the closed mandate whether it hashes the
 mandate's compact form or, as the AP2 SDK does, its issuer JWT alone (`"over": "issuer_jwt"`). `--require-binding IN->TO`
-makes a missing binding a policy failure (exit 1). Measured on the 23 chain and 12 receipt vectors of
+makes a missing binding a policy failure (exit 1). A pack built by 1.8.x, which records no binding over the issuer JWT,
+stays valid: the receipt lists those found in `bindings_not_recorded` and the policy reads them (SPEC §4;
+`spec/vectors/ap2_chains/pack_built_by_1.8.0.json`). Measured on the 23 chain and 12 receipt vectors of
 goodmeta/ap2-conformance and on chains emitted by the AP2 SDK (`spec/vectors/ap2_chains/`, `test_ap2_chains.py`): what
 remains valid among the "reject" vectors are checks of transaction context, time and receipt contents this format does
 not make (`aud`, `nonce`, `exp`, `payment_id`, `error_code`), listed in SPEC §2.1 and §6.9.

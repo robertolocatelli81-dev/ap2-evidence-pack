@@ -65,7 +65,7 @@ def _forged_tsr(digest, extra_tst=b""):
 # the cases that must PASS: they prove the bench can tell green from red (never hostile files)
 POSITIVE_CONTROLS = frozenset({"non-ascii-subject-rehashed", "kb-no-cnf-sd-hash-right", "fresh-pack-control-valid", "must-created_utc-ok", "file-exactly-at-the-bound",
                                "nb-valid",   # 1.8.0: the not_before pack built by the reference
-                               "chain-valid", "chain-require-binding-met", "chain-3hop-valid"})   # 1.9.0: AP2 chains built by the reference
+                               "chain-valid", "chain-require-binding-met", "chain-3hop-valid", "chain-built-by-1.8.0", "chain-over-binding-not-recorded"})   # 1.9.0: AP2 chains built by the reference
 MAX_EVIDENCE_BYTES = 64 << 20
 # 25/09/2026 — what a verifier must refuse BEFORE reading it, with a DECLARED reason that both must give: agreement alone is
 # not enough (a FIFO blocked both verifiers and a symlink to /dev/zero exhausted memory in both: they "agreed").
@@ -249,7 +249,8 @@ def run(cmd, path, flags):
                # and the pairs a require_binding policy did not find
                tuple(_chain_error(a["error"]) if "error" in a else json.dumps(a.get("chain_hop"), sort_keys=True)
                      for a in (r.get("artifacts") or [])),
-               json.dumps((r.get("policy") or {}).get("require_binding_missing")))
+               json.dumps((r.get("policy") or {}).get("require_binding_missing")),
+               json.dumps(r.get("bindings_not_recorded"), sort_keys=True))   # 1.9.0 — SPEC §4: found over the issuer JWT, not recorded
         return (r.get("valid"), r.get("digest_ok"), r.get("bindings_ok"), prod.get("present"), prod.get("ok"), prod.get("trusted"),
                 r.get("pq_protected"), ts.get("claimed"), ts.get("verified"), ts.get("granted"), ts.get("imprint_ok"), ts.get("gen_time"),
                 r.get("policy_ok"), r.get("self_asserted_only"), r.get("chain_verified"), tuple(r.get("provenance_classes") or ()),
@@ -731,7 +732,14 @@ def _chain_cases(d, w):
     mut("over-removed", lambda e: e["bindings"][bi].pop("over"))
     mut("over-removed-required", lambda e: e["bindings"][bi].pop("over"), ["--require-binding", "receipt->chain.1"])
     mut("over-added-to-compact-binding", lambda e: e["bindings"][bc].__setitem__("over", "issuer_jwt"))
-    mut("binding-removed-required", lambda e: e["bindings"].pop(bi), ["--require-binding", "receipt->chain.1"])
+    # SPEC §4: a record without the bindings over the issuer JWT (all of them) is a pack as 1.8.x built it — valid, the
+    # policy met on the recomputed set; the compact one left out instead is a mismatch
+    mut("over-binding-not-recorded", lambda e: e["bindings"].pop(bi))
+    mut("over-binding-not-recorded-required", lambda e: e["bindings"].pop(bi), ["--require-binding", "receipt->chain.1"])
+    mut("compact-binding-not-recorded", lambda e: e["bindings"].pop(bc))
+    mut("no-binding-recorded", lambda e: e.__setitem__("bindings", []))
+    cases["chain-built-by-1.8.0"] = (os.path.join(CHAIN_VDIR, "pack_built_by_1.8.0.json"), [])
+    cases["chain-built-by-1.8.0-required"] = (os.path.join(CHAIN_VDIR, "pack_built_by_1.8.0.json"), ["--require-binding", "receipt->closed"])
     mut("from-nothing", lambda e: key1(e).__setitem__("chain_from", "nope"))
     mut("from-itself", lambda e: key1(e).__setitem__("chain_from", "chain.1"))
     mut("from-the-receipt", lambda e: key1(e).__setitem__("chain_from", "receipt"))

@@ -9,7 +9,7 @@ accepted, with the message "malformed disclosure: invalid base64url segment"; th
 (0 of 109 split chains); 16 goodmeta/ap2-conformance vectors declared "reject" came out `valid: true`; a receipt issued
 by the AP2 SDK bound nothing. Data: spec/vectors/ap2_chains/ (README.md there: sources, licences, sha256). On the
 commit before this change (6728413) all twelve tests fail (measured with this file and the vectors copied onto an
-archive of that commit); `test_not_a_chain` only for its message (the refusal of an empty component is 1.8.1's, the
+archive of that commit; the two tests of SPEC §4's all-or-none rule, added after, fail on 5a09a53); `test_not_a_chain` only for its message (the refusal of an empty component is 1.8.1's, the
 mention of the chain form is new)."""
 import base64
 import copy
@@ -449,6 +449,82 @@ class Chains(unittest.TestCase):
                 self.assertEqual((r["valid"], r["admission"], r["refusal_class"]),
                                  (py[name]["valid"], py[name]["admission"], py[name]["refusal_class"]), (r.get("refused"), py[name].get("refused")))
                 self.assertEqual(["error" in a for a in r.get("artifacts") or []], ["error" in a for a in py[name].get("artifacts") or []])
+
+    def test_pack_built_by_1_8_0_stays_valid(self):
+        """SPEC §4: a pack built before 1.9.0 records no binding over the issuer JWT. The vector was written by `build` of
+        v1.8.0 (README of the vectors) and is `valid: true` there; on the first 1.9.0 draft (5a09a53), which asked the
+        recorded set to equal the recomputed one, both verifiers answered `binding_mismatch`. The receipt lists what the
+        pack does not record, and the policy, which reads the recomputed set, finds the receipt bound to the closed mandate."""
+        p = os.path.join(_D, "pack_built_by_1.8.0.json")
+        with open(p, encoding="utf-8") as f:
+            recorded = json.load(f)["bindings"]
+        self.assertEqual([("over" in b) for b in recorded], [False])
+        want = [{"in": "receipt", "claim": "reference", "commits_to": "closed", "encoding": "b64url", "over": "issuer_jwt"}]
+        runs = {"plain": [], "required": ["--require-binding", "receipt->closed"], "unmet": ["--require-binding", "receipt->open"]}
+        for name, flags in runs.items():
+            req = [tuple(flags[1].split("->"))] if flags else None
+            r = ap2.verify_evidence(p, require_bindings=req)
+            with self.subTest(py=name):
+                self.assertEqual((r["valid"], r["bindings_ok"]), (name != "unmet", True), r.get("policy"))
+                self.assertEqual(r["bindings_not_recorded"], want)
+                self.assertEqual(r["states"]["sealed_content"], {"state": "verified", "reasons": []})
+        for name, r in _js_many(self, [(n, p, fl) for n, fl in runs.items()]).items():
+            with self.subTest(js=name):
+                self.assertEqual((r["valid"], r["bindings_ok"]), (name != "unmet", True), r.get("policy"))
+                self.assertEqual(r["bindings_not_recorded"], want)
+
+    def test_bindings_over_issuer_jwt_all_or_none(self):
+        """SPEC §4: the recorded set is the recomputed one, or the recomputed one without EVERY binding over the issuer
+        JWT. Generated chains whose hops bind by issuer_jwt_hash (each pack holds two such bindings): every
+        subset of them removed from the record, the digest recomputed — valid only for none removed and all removed; a
+        binding over the compact form removed, or one of either kind added, is a mismatch. Both verifiers."""
+        rnd = random.Random(31); mk = ChainMaker(rnd)
+        manifest, want = [], {}
+        for c in range(6):
+            n = 3 + c % 2
+            keys = [_make_signer() for _ in range(n + 1)]
+            hops = []
+            for i in range(n):
+                last = i == n - 1
+                mode = "sd_hash" if (i == 1 and n == 4) else "issuer_jwt_hash"   # the four-hop packs mix the two kinds
+                hops.append(mk.hop(keys[i][0], "ap2-mandate+sd-jwt" if i == 0 else ("kb+sd-jwt" if last else "kb+sd-jwt+kb"),
+                                   {"iss": f"h{i}", "iat": 1}, None if last else keys[i + 1][1], hops[-1] if hops else None, mode))
+            out = os.path.join(self.d, f"aon{c}.json")
+            ap2.build_evidence([{"name": "c", "sd_jwt": ChainMaker.join(hops)}], out, keys={"c": keys[0][1]})
+            with open(out, encoding="utf-8") as f:
+                base = json.load(f)
+            over = [i for i, b in enumerate(base["bindings"]) if "over" in b]
+            plain = [i for i, b in enumerate(base["bindings"]) if "over" not in b]
+            self.assertGreaterEqual(len(over), 2)
+            cases = {}
+            for mask in range(1 << len(over)):
+                drop = [over[k] for k in range(len(over)) if mask >> k & 1]
+                cases[f"drop{mask}"] = (drop, None, len(drop) in (0, len(over)))
+            if plain:
+                cases["drop_plain"] = ([plain[0]], None, False)
+                cases["drop_plain_and_all_over"] = ([plain[0]] + over, None, False)
+            cases["add_over"] = ([], {"in": "c.0", "claim": "x", "commits_to": "c.1", "encoding": "b64url", "over": "issuer_jwt"}, False)
+            cases["add_plain"] = ([], {"in": "c.0", "claim": "x", "commits_to": "c.1", "encoding": "b64url"}, False)
+            cases["add_plain_dropping_all_over"] = (over, {"in": "c.0", "claim": "x", "commits_to": "c.1", "encoding": "b64url"}, False)
+            for name, (drop, add, ok) in cases.items():
+                ev = copy.deepcopy(base)
+                ev["bindings"] = [b for i, b in enumerate(ev["bindings"]) if i not in drop] + ([add] if add else [])
+                rnd.shuffle(ev["bindings"]); _rehash(ev)
+                p = os.path.join(self.d, f"aon{c}_{name}.json")
+                with open(p, "w", encoding="utf-8") as f:
+                    json.dump(ev, f)
+                r = ap2.verify_evidence(p)
+                with self.subTest(pack=c, case=name):
+                    self.assertEqual((r["valid"], r["bindings_ok"]), (ok, ok))
+                    self.assertTrue(r["digest_ok"])
+                    self.assertEqual(len(r.get("bindings_not_recorded", [])), len(drop) if ok else 0)
+                    if not ok:
+                        self.assertEqual(r["states"]["sealed_content"]["reasons"], ["binding_mismatch"])
+                manifest.append((f"{c}/{name}", p, [])); want[f"{c}/{name}"] = (ok, len(drop) if ok else 0)
+        self.assertEqual(len(manifest), 48)   # 6 packs, each 2 bindings over the issuer JWT: 4 subsets + 3 or 5 other cases
+        for name, r in _js_many(self, manifest).items():
+            with self.subTest(js=name):
+                self.assertEqual((r["valid"], r["bindings_ok"], len(r.get("bindings_not_recorded", []))), (want[name][0], want[name][0], want[name][1]))
 
     def test_legacy_1_0_pack_named(self):
         r = ap2.verify_evidence(_LEGACY)
