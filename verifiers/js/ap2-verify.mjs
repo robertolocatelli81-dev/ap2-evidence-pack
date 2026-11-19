@@ -108,7 +108,8 @@ function parseSdJwt(compact) {
   let header, payload; try { header = jsonOf(b64uDecode(seg[0])); payload = jsonOf(b64uDecode(seg[1])); } catch (e) { throw new Refused("JWT header/payload not valid JSON/base64url: " + e.message); }
   return { compact, jwt, header, payload, signature: b64uDecode(seg[2]), signingInput: Buffer.from(seg[0] + "." + seg[1], "ascii"), disclosures: middle, kbJwt: kb };
 }
-function resolveDisclosures(payload, disclosures) {
+function resolveDisclosures(payload, disclosures, census = null) {
+  let reservedDots = 0;   // variant "report, do not refuse": a plain "..." key outside an array placeholder is kept and counted
   // r2: SHAPES imposed, present-with-null is not absent (`??` said it was; the reference's dict.get did not): _sd_alg absent or "sha-256",
   // _sd absent or a list of strings, {"...": x} with x a string, a disclosed claim name a string
   if ("_sd_alg" in payload && payload._sd_alg !== "sha-256") throw new Refused("_sd_alg unsupported");
@@ -128,7 +129,7 @@ function resolveDisclosures(payload, disclosures) {
     if (node !== null && typeof node === "object" && depth > MAX_DEPTH) throw new Refused("disclosures_too_deep: the resolved claims nest deeper than " + MAX_DEPTH + " (SPEC §6 step 2, rejected fail-closed)");
     if (node !== null && typeof node === "object" && !Array.isArray(node)) { const out = Object.create(null);
       // 1.8.1 — SPEC §6 step 2: "..." only as an array placeholder (RFC 9901 §4.1 item 7), _sd_alg only at the payload's top level (§4.1.1)
-      if (Object.hasOwn(node, "...")) throw new Refused('sd_dots_outside_placeholder: a key "..." outside an array placeholder {"...": <digest>} (RFC 9901 §4.1 item 7, rejected fail-closed)');
+      if (Object.hasOwn(node, "...")) reservedDots++;   // RFC 9901 §4.1 item 7 is the Issuer's rule: reported in the receipt (reserved_names_in_clear)
       if (Object.hasOwn(node, "_sd_alg") && depth > 1) throw new Refused("sd_alg_not_top_level: a key _sd_alg below the top level of the issuer payload (RFC 9901 §4.1.1, rejected fail-closed)");
       for (const k of Object.keys(node)) { if (k === "_sd" || k === "_sd_alg") continue; out[k] = yield [node[k], depth + 1]; }
       const sd = "_sd" in node ? node._sd : []; if (!Array.isArray(sd) || sd.some((x) => typeof x !== "string")) throw new Refused("_sd must be a list of digest strings");
@@ -141,6 +142,7 @@ function resolveDisclosures(payload, disclosures) {
     while (stack.length) { const r = stack[stack.length - 1].next(value); if (r.done) { stack.pop(); value = r.value; } else { stack.push(walk(r.value[0], r.value[1])); } }   // a fresh generator ignores the value of its first next()
     return value; }
   const resolved = run(payload); for (const dig of byDigest.keys()) if (!used.has(dig)) throw new Refused("disclosure(s) match no digest");
+  if (census !== null) census.reserved = reservedDots;
   return resolved;
 }
 function es256Verify(signingInput, signature, jwk) {
@@ -885,13 +887,13 @@ function verifyEvidenceInner(path, opts) {
       const ignored = { header: joseHeaderIgnored(parsed.header, "JWT header"), header_jwk: unknownMembers(parsed.header.jwk, JWK_REGISTERED), key_jwk: unknownMembers(a.key.jwk, JWK_REGISTERED) };
       const prov = checkProvenance(pc, parsed, a.key); const selfAsserted = prov.selfAsserted;   // r5: reconciled with the signed header; r7: decides self_asserted_only
       reconcileUnusedHeaderKeys(parsed.header, a.key.jwk, pc); ignored.key_material = keyMaterialNotUsed(parsed.header, pc);   // 1.7.3 (SPEC §2 (d), §6 step 2, §9.2)
-      const sigOk = es256Verify(parsed.signingInput, parsed.signature, a.key.jwk); const resolved = resolveDisclosures(parsed.payload, parsed.disclosures);
+      const sigOk = es256Verify(parsed.signingInput, parsed.signature, a.key.jwk); const census = {}; const resolved = resolveDisclosures(parsed.payload, parsed.disclosures, census);
       const claimsOk = canon(resolved) === canon(a.resolved_claims ?? null);
       const chainHop = (prevHop !== null && sigOk && claimsOk) ? { ...checkChainHop(parsed, resolved, prevHop.compact), from: a.key.chain_from } : null;   // 1.9.0 — SPEC §2.1
       const kb = verifyKbJwt(parsed, resolved, prevHop !== null);
       for (const k of ["verified", "signature_ok", "sd_hash_ok", "claims_recorded_not_validated"]) if (Object.hasOwn(a.kb_jwt, k) && (!Object.hasOwn(kb, k) || canon(a.kb_jwt[k]) !== canon(kb[k]))) throw new Refused("artifact kb_jwt." + k + " contradicts the KB-JWT (SPEC §9.1)");   // SPEC §9.1 (NEMESIS 2026-10-11)
       Object.assign(ignored, kb._ignored ?? {}); delete kb._ignored; const ign = {}; for (const k of Object.keys(ignored).sort(cmp)) if (ignored[k].length) ign[k] = ignored[k];   // SPEC §9.2: only the non-empty slots
-      artResults.push({ name: a.name, signature_ok: sigOk, claims_match: claimsOk, kb_jwt: kb, provenance_class: a.key?.provenance_class, self_asserted: selfAsserted, ignored: ign, ...(prov.ident ? { x5c_leaf: prov.ident } : {}), ...(chainHop ? { chain_hop: chainHop } : {}) });
+      artResults.push({ name: a.name, signature_ok: sigOk, claims_match: claimsOk, kb_jwt: kb, provenance_class: a.key?.provenance_class, self_asserted: selfAsserted, ignored: ign, ...(prov.ident ? { x5c_leaf: prov.ident } : {}), ...(chainHop ? { chain_hop: chainHop } : {}), ...(census.reserved ? { reserved_names_in_clear: { "...": census.reserved } } : {}) });
       allOk = allOk && sigOk && claimsOk && kb.verified !== false; forBindings.push({ name: a.name, compact: parsed.compact, resolved });
       if (sigOk && claimsOk && typeof a.name === "string") chainSeen.set(a.name, { compact: parsed.compact, resolved });
     } catch (e) { artResults.push({ name: a?.name, error: String(e.message ?? e) }); allOk = false; }

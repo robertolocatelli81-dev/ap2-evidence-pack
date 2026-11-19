@@ -689,12 +689,16 @@ flags: `require_producer`, `require_pq`, `require_anchor`, and `min_anchors` (1.
    format keeps a disclosure so named as an ordinary claim at every level (this format's declared reading, both
    verifiers); 1.8.1, the reserved names as PLAIN keys, in the payload and in every disclosed value, at any level: a key
    `...` anywhere but as the only key of an array element whose value is a string (the placeholder of RFC 9901
-   §4.2.4.2) → `sd_dots_outside_placeholder`, and a key `_sd_alg` in any object but the payload's top level →
-   `sd_alg_not_top_level`, each that artifact's error, its name first in the message. RFC 9901 §4.1 item 7: "The
+   §4.2.4.2) is kept as an ordinary claim and REPORTED — the receipt's artifact entry carries
+   `reserved_names_in_clear: {"...": <count>}` (absent when there is none), in both verifiers, and the build result names
+   the artifact — and a key `_sd_alg` in any object but the payload's top level →
+   `sd_alg_not_top_level`, that artifact's error, its name first in the message. RFC 9901 §4.1 item 7: "The
    payload MUST NOT contain the claims _sd or ... except for the purpose of conveying digests as described in
    Sections 4.2.4.1 and 4.2.4.2"; §4.1.1: `_sd_alg` "MUST appear at the top level of the SD-JWT payload. It MUST NOT be
    used in any object nested within the payload" (text read on rfc-editor.org on 2026-11-18). Both are addressed to the
-   Issuer and §7.1 gives the Verifier no rejection step for them, so refusing is this format's rule. Up to 1.8.0 both
+   Issuer and §7.1 gives the Verifier no rejection step for them: for `...` this format reports and does not refuse (a
+   claim the Issuer signed is shown to the reader with its name; the same choice as omega-evidence's
+   `reserved_names_in_clear`), for a nested `_sd_alg` refusing is this format's rule. Up to 1.8.0 both
    verifiers kept a plain `...` key as an ordinary claim and dropped a nested plain `_sd_alg` in silence, as the
    `sd-jwt` reference implementation 0.10.4 does in `SDJWTVerifier._unpack_disclosed_claims` (read in its source on
    2026-11-18, not run; it refuses `_sd` only in the Issuer's input). For an `_sd`

@@ -584,6 +584,7 @@ def resolve_disclosures(payload: Dict, disclosures: List[str], census: Optional[
             raise Ap2EvidenceError("duplicate disclosure digest (rejected fail-closed)")
         by_digest[dig] = (d, arr)
     used = set()
+    reserved: List[str] = []   # a plain "..." key met outside an array placeholder (RFC 9901 §4.1 item 7), reported
     encountered: List[str] = []   # 1.7.0: every digest value met, matched or decoy (RFC 9901 §7.1 step 4 says "encountered")
     seen = set()
 
@@ -601,10 +602,9 @@ def resolve_disclosures(payload: Dict, disclosures: List[str], census: Optional[
         if isinstance(node, dict):
             # 1.8.1 (SPEC §6 step 2): the reserved names as plain keys. RFC 9901 §4.1 item 7, "..." only to convey a
             # digest (an array placeholder, handled in the list branch, never reaches here); §4.1.1, _sd_alg only at the
-            # top level of the payload (depth 1). Up to 1.8.0 a plain "..." was an ordinary claim, a nested _sd_alg dropped.
-            if "..." in node:
-                raise Ap2EvidenceError('sd_dots_outside_placeholder: a key "..." outside an array placeholder {"...": '
-                                       '<digest>} (RFC 9901 §4.1 item 7, rejected fail-closed)')
+            # top level of the payload (depth 1). Up to 1.8.0 a plain "..." was an ordinary claim unremarked, a nested _sd_alg dropped.
+            if "..." in node:   # variant "report, do not refuse": kept as an ordinary claim, as up to 1.8.0, and COUNTED —
+                reserved.append("...")   # the receipt names it (`reserved_names_in_clear`), as omega-evidence does
             if "_sd_alg" in node and depth > 1:
                 raise Ap2EvidenceError("sd_alg_not_top_level: a key _sd_alg below the top level of the issuer payload "
                                        "(RFC 9901 §4.1.1, rejected fail-closed)")
@@ -672,6 +672,7 @@ def resolve_disclosures(payload: Dict, disclosures: List[str], census: Optional[
     if census is not None:
         census["encountered"] = encountered
         census["matched"] = used
+        census["reserved_names_in_clear"] = {k: reserved.count(k) for k in sorted(set(reserved))}
     return resolved
 
 
@@ -1944,8 +1945,9 @@ def _verify_rfc3161(tsr_b64: str, expected_digest_hex: str, timeout: int = 15, t
 
 def _verify_one(parsed: Dict, key: Dict) -> Dict:
     sig_ok = verify_es256(parsed["signing_input"], parsed["signature"], key["jwk"])
-    resolved = resolve_disclosures(parsed["payload"], parsed["disclosures"])
-    return {"signature_ok": sig_ok, "resolved_claims": resolved,
+    c: Dict = {}
+    resolved = resolve_disclosures(parsed["payload"], parsed["disclosures"], census=c)
+    return {"signature_ok": sig_ok, "resolved_claims": resolved, "reserved_names_in_clear": c["reserved_names_in_clear"],
             "disclosures_ok": True}     # resolve_disclosures raised otherwise
 
 
@@ -2075,7 +2077,7 @@ def _build_evidence(artifacts: List[Dict], out_path: str,
     both = sorted(set(keys) & set(jwks_urls))   # 1.7.3 (SPEC §2 (b)): two sources named for one artifact is ambiguous
     if both:
         raise Ap2EvidenceError(f"artifact {both[0]!r}: both a supplied key and a JWKS URL — ambiguous, refused (SPEC §2 (b))")
-    not_used = {}
+    not_used, in_clear = {}, {}
     entries, for_bindings = [], []
     # 1.9.0 (SPEC §2.1): an AP2 chain `<hop0>~~<hop1>...` given for name N becomes the artifacts N.0, N.1, ...; the key
     # named for N is the key of N.0, every later hop is verified with the previous hop's cnf.jwk (class chain_cnf)
@@ -2122,6 +2124,8 @@ def _build_evidence(artifacts: List[Dict], out_path: str,
             raise Ap2EvidenceError(f"artifact {a['name']!r}: {e} (build refused)") from e
         if _key_material_not_used(parsed["header"], key["provenance_class"]):
             not_used[a["name"]] = _key_material_not_used(parsed["header"], key["provenance_class"])
+        if v["reserved_names_in_clear"]:
+            in_clear[a["name"]] = v["reserved_names_in_clear"]
         if a["chain_from"] is not None:   # 1.9.0 (SPEC §2.1): the AP2 hop rules, after the signature under the previous cnf.jwk
             try:
                 check_chain_hop(parsed, v["resolved_claims"], done[a["chain_from"]]["compact"])
@@ -2198,7 +2202,8 @@ def _build_evidence(artifacts: List[Dict], out_path: str,
             "evidence_digest_sha256": evidence["evidence_digest_sha256"],
             "rfc3161_anchored": evidence["rfc3161_timestamp"].get("anchored", False),
             "anchors_added": len(added), **({"anchors_failed": failed} if failed else {}),
-            **({"key_material_not_used": not_used} if not_used else {})}   # 1.7.3 (SPEC §2 (d))
+            **({"key_material_not_used": not_used} if not_used else {}),   # 1.7.3 (SPEC §2 (d))
+            **({"reserved_names_in_clear": in_clear} if in_clear else {})}   # SPEC §6 step 2: reported, not refused
 
 
 def add_anchor(path: str, tsa_url: str) -> Dict:
@@ -3020,7 +3025,8 @@ def _verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = F
             _reconcile_unused_header_keys(parsed["header"], key["jwk"], pc)   # 1.7.3 (SPEC §2 (d), §6 step 2)
             ignored["key_material"] = _key_material_not_used(parsed["header"], pc)   # SPEC §9.2: named, never dropped in silence
             sig_ok = verify_es256(parsed["signing_input"], parsed["signature"], key["jwk"])
-            resolved = resolve_disclosures(parsed["payload"], parsed["disclosures"])
+            _census: Dict = {}
+            resolved = resolve_disclosures(parsed["payload"], parsed["disclosures"], census=_census)
             claims_ok = _canon(resolved) == _canon(a.get("resolved_claims"))
             chain_hop = None
             if prev_hop is not None and sig_ok and claims_ok:   # 1.9.0 (SPEC §2.1): the AP2 hop rules, each an artifact error
@@ -3036,7 +3042,9 @@ def _verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = F
                                 "self_asserted": self_asserted,
                                 "ignored": {k: v for k, v in sorted(ignored.items()) if v},   # SPEC §9.2: only the non-empty slots
                                 **({"x5c_leaf": leaf_ident} if leaf_ident else {}),
-                                **({"chain_hop": chain_hop} if chain_hop else {})})
+                                **({"chain_hop": chain_hop} if chain_hop else {}),
+                                **({"reserved_names_in_clear": _census["reserved_names_in_clear"]}
+                                   if _census["reserved_names_in_clear"] else {})})
             all_ok = (all_ok and sig_ok and claims_ok
                       and kb.get("verified") is not False)
             for_bindings.append({"name": a.get("name"), "compact": parsed["compact"],
