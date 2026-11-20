@@ -604,7 +604,7 @@ def resolve_disclosures(payload: Dict, disclosures: List[str], census: Optional[
             # digest (an array placeholder, handled in the list branch, never reaches here); §4.1.1, _sd_alg only at the
             # top level of the payload (depth 1). Up to 1.8.0 a plain "..." was an ordinary claim unremarked, a nested _sd_alg dropped.
             if "..." in node:   # variant "report, do not refuse": kept as an ordinary claim, as up to 1.8.0, and COUNTED —
-                reserved.append("...")   # the receipt names it (`reserved_names_in_clear`), as omega-evidence does
+                reserved.append("...")   # the receipt names it (`reserved_names_in_clear`), as omega-evidence 0.12.0 does
             if "_sd_alg" in node and depth > 1:
                 raise Ap2EvidenceError("sd_alg_not_top_level: a key _sd_alg below the top level of the issuer payload "
                                        "(RFC 9901 §4.1.1, rejected fail-closed)")
