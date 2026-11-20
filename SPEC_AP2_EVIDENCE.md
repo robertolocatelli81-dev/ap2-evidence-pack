@@ -1,9 +1,9 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Copyright 2026 Roberto Locatelli -->
 
-# ap2-evidence-pack — normative format v1.0 (2026-09-05), specification revision 1.9.0 (2026-11-18)
+# ap2-evidence-pack — normative format v1.0 (2026-09-05), specification revision 1.9.0 (2026-11-20)
 
-> Revision 1.9.0 (2026-11-18; it contains 1.8.1, which was not released on its own): §2.1 (new), AP2 delegation chains
+> Revision 1.9.0 (2026-11-20; it contains 1.8.1, which was not released on its own): §2.1 (new), AP2 delegation chains
 > `<hop0>~~<hop1>...` are read in their native form — split into hops by `build`, every hop after the first verified with
 > the previous hop's `cnf.jwk` (provenance class `chain_cnf`, key member `chain_from`) under the hop rules of the AP2 SDK,
 > and counted in `holder_binding` (§6.9). §4, a binding is also searched over an artifact's issuer JWT (`"over":

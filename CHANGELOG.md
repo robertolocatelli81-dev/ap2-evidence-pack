@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (1.9.0) — AP2 chains in their native form; receipts bound to the closed mandate; a binding policy; false greens closed
+## 1.9.0 — 2026-11-20 — AP2 chains in their native form; receipts bound to the closed mandate; a binding policy; false greens closed
 
 SPEC 1.9.0 (§1, §2.1, §3.1, §3.2, §4, §6 step 2, §6.9, §7, §9.1, §9.2, §10, §11, §13; each rule written before the code). Measured on
 2026-11-18 on the PyPI wheel 1.7.3 (sha256 109227df…203b5c00), on the tag v1.8.0 (d5601e4) and on the PyPI wheel 1.8.0, on
