@@ -3230,8 +3230,12 @@ def _verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = F
         if missing:
             unmet.append("require_binding")
             binding_policy_missing = missing
-    policy_ok = not unmet
-    if trusted_producer_keys is not None and producer["present"] and producer.get("trusted") is not True:
+    # 1.9.1 (SPEC §6 step 6, §6.9): a pinned producer set implies require_producer — a pack whose block is ABSENT does not
+    # meet it (`trusted_producer_keys` unmet, `policy_ok` false). Up to 1.9.0 only a PRESENT block was held to the set:
+    # measured 2026-11-20, the block removed from a pack whose key was pinned gave `valid: true`, `unmet: []`, both verifiers.
+    pin_absent = trusted_producer_keys is not None and not producer["present"]
+    policy_ok = not unmet and not pin_absent
+    if trusted_producer_keys is not None and (pin_absent or producer.get("trusted") is not True):
         unmet.append("trusted_producer_keys")
     tsa_requested = tsa_cert is not None
     states = derive_states(digest_ok=digest_ok, art_results=art_results, binding_set_match=binding_set_match, ts_block=ts,

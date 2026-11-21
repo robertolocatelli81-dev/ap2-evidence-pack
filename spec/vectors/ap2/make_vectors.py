@@ -122,7 +122,8 @@ def main() -> int:
     _write("stripped_signature", stripped, _expected(
         "stripped_signature",
         "The signed pack with producer_signatures REMOVED (downgrade attack). The digest "
-        "still verifies — only the require_producer/require_pq policy rejects the strip.",
+        "still verifies — only the policy rejects the strip: require_producer, require_pq and, since 1.9.1, the "
+        "pinned set (SPEC §6.9: a pinned set implies require_producer).",
         policy_strict,
         {"valid": False, "digest_ok": True, "bindings_ok": True, "policy_ok": False,
          "pq_protected": False, "producer_present": False, "producer_ok": None,

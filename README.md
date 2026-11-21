@@ -229,7 +229,8 @@ classical signature (ed25519 or ecdsa-p256) plus **FIPS 204 ML-DSA-65** — so t
 integrity/authenticity survives the quantum transition (NIST IR 8547). Verification is
 fail-closed; authenticity requires the relying party to **pin** the producer public keys
 out of band (an embedded key proves consistency, never authenticity). Policy flags on
-`verify_evidence`: `require_producer`, `require_pq`, `require_anchor`, and since 1.5.0 `min_anchors`. The ML-DSA-65
+`verify_evidence`: `require_producer`, `require_pq`, `require_anchor`, and since 1.5.0 `min_anchors`; since 1.9.1 a
+pinned set implies `require_producer` (a pack without a producer block is not `valid` under it, SPEC §6 step 6). The ML-DSA-65
 path is checked against NIST ACVP sigVer vectors (`pqcrypto/vectors/`): every case of the ML-DSA-65 external/pure
 group of usnistgov/ACVP-Server (15), written by `pqcrypto/vectors/make_acvp_mldsa65.py` from NIST's JSON at a pinned
 commit — a local check against public test data, not a NIST validation. Running an ACVP subset in both stacks was

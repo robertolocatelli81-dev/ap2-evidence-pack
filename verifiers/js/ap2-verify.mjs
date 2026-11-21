@@ -982,8 +982,11 @@ function verifyEvidenceInner(path, opts) {
   let bindingMissing = null;   // 1.9.0 — SPEC §6.9: each IN->TO must be in the RECOMPUTED set, which counts only when bindingsOk
   if (opts.requireBindings && opts.requireBindings.length) { const held = new Set(bindingsOk ? findBindings(forBindings).map((b) => JSON.stringify([b.in, b.commits_to])) : []);
     const miss = opts.requireBindings.filter((pr) => !held.has(JSON.stringify(pr))); if (miss.length) { unmet.push("require_binding"); bindingMissing = miss; } }
-  const policyOk = unmet.length === 0;
-  if ((opts.trusted ?? null) !== null && producer.present && producer.trusted !== true) unmet.push("trusted_producer_keys");
+  // 1.9.1 — SPEC §6 step 6, §6.9: a pinned producer set implies require_producer: a block ABSENT does not meet it
+  // (up to 1.9.0 only a present block was held to the set: measured 2026-11-20, the block removed → valid: true, unmet [])
+  const pinAbsent = (opts.trusted ?? null) !== null && !producer.present;
+  const policyOk = unmet.length === 0 && !pinAbsent;
+  if ((opts.trusted ?? null) !== null && (pinAbsent || producer.trusted !== true)) unmet.push("trusted_producer_keys");
   const states = deriveStates({ digestOk, artResults, bindingSetMatch, tsBlock: ts, rfcBlock, anchorResults, tsaRequested: Boolean(opts.tsaCert),
     producer, pinned: (opts.trusted ?? null) !== null, trustAnchorGiven: false });
   if (opts.trustSetComplete && states.producer_signature.reasons.includes("key_unresolved")) unmet.push("trust_set_complete");

@@ -9,7 +9,9 @@
 > and §6.9, a validated x5c chain clears `self_asserted_only` only when its leaf is issued for signing (keyUsage and
 > extendedKeyUsage, RFC 5280 §4.2.1.3 and §4.2.1.12), `x5c_leaf.key_purpose` in both verifiers, reason
 > `key_purpose_not_signing` (added to the reasons of `ap2-evidence-pack/states-1`, as 1.8.1 added
-> `signer_certificate_absent`). No vector is added (the cases are in `test_ap2_issuer_alg.py`,
+> `signer_certificate_absent`); §6 step 6, §5 and §6.9, a pinned producer set implies `require_producer`: a pack
+> without a producer block is not `valid` under it, `policy.unmet` `trusted_producer_keys` (vector `stripped_signature`:
+> `trusted_producer_keys` added to its `policy.unmet`, `valid` unchanged). No vector is added (the cases are in `test_ap2_issuer_alg.py`,
 > `test_ap2_openssl_not_run_tsa.py` and `test_ap2_x5c_purpose.py`).
 
 > Revision 1.9.0 (2026-11-20; it contains 1.8.1, which was not released on its own): §2.1 (new), AP2 delegation chains
@@ -653,7 +655,8 @@ signature was `producer_ok: true`). **Pinning:** an embedded key proves internal
 authenticity. When the relying party supplies a pinned trust set
 (`{sig_alg: [public_key_b64, ...]}`), `producer_trusted` is `true` only if every
 present signature's key is pinned; a valid-but-unpinned signature MUST reject
-the pack even with no policy flags set. Without a pinned set `producer_trusted`
+the pack even with no policy flags set. 1.9.1: a pinned set implies `require_producer` — a pack without a producer
+block does not meet it (§6 step 6). Without a pinned set `producer_trusted`
 is `null` and the pack MUST NOT be treated as authentic. `pq_protected` is true
 only on a valid ML-DSA-65 signature whose key is pinned (or no pin set given).
 1.5.4: both are statements about a block that verified. When the block is not `ok`, `producer_trusted` is `null`
@@ -766,7 +769,11 @@ flags: `require_producer`, `require_pq`, `require_anchor`, and `min_anchors` (1.
 5. Verify the producer block per §5 → `producer_ok`, `producer_trusted`,
    `pq_protected`.
 6. Policy: `policy_ok` is false if `require_producer` and no valid producer
-   block; if `require_pq` and not (`pq_protected` and `producer_trusted` true);
+   block; 1.9.1, if a pinned producer set is given and the pack carries no producer block (the set implies
+   `require_producer`; `policy.unmet` names `trusted_producer_keys`, not `require_producer`, which the relying party did
+   not pass — both when it passed both; up to 1.9.0 the set was applied only to a block that was present: measured
+   2026-11-20 on 1.9.0, the block removed from a pack whose producer key was pinned gave `valid: true` and
+   `policy.unmet: []` in both verifiers); if `require_pq` and not (`pq_protected` and `producer_trusted` true);
    if `anchors_verified` < `min_anchors` (§3.3; `require_anchor` alone is `min_anchors = 1`, so missing,
    unverifiable and failing anchors all reject — "claimed" never upgrades to "proven").
    The receipt also carries `mldsa_backend` (informative): whether that verifier can check
@@ -873,8 +880,8 @@ receipt of both verifiers also carries:
   `absence`) is reserved: no check of this revision produces it.
 - `policy` (admitted packs): `{"met": bool, "unmet": [...]}`. `unmet` names, in this order, each requirement of the
   relying party the pack does not meet: `require_producer`, `require_pq`, `require_anchor`, `min_anchors` (§6 step 6),
-  `require_binding` (1.9.0, below), `trusted_producer_keys` (a pinned set is given and a present producer block is not
-  `trusted`, §5) and `trust_set_complete` (below). `met` is true iff `unmet` is empty. `policy_ok` keeps its §6 step 6
+  `require_binding` (1.9.0, below), `trusted_producer_keys` (a pinned set is given and the producer block is absent —
+  1.9.1, §6 step 6 — or present and not `trusted`, §5) and `trust_set_complete` (below). `met` is true iff `unmet` is empty. `policy_ok` keeps its §6 step 6
   meaning and, since 1.9.0, is also false when `require_binding` is unmet. A policy is a disposition of the relying party,
   not a state of the pack.
 - `require_binding` (1.9.0; `--require-binding IN->TO`, repeatable, both verifiers; `require_bindings`, a list of
@@ -937,7 +944,7 @@ every receipt; the pre-registered one fails on 7, all of them receipts of those 
 
 **What no state can say.** A producer block that was removed and one that was never added give the same digest and
 the same states (`producer_signature: not_evaluated`, `not_present`): only the SHA-256 of the whole file, or
-`require_producer`, tells them apart (§10).
+`require_producer`, or since 1.9.1 a pinned producer set, tells them apart (§10).
 
 ### 6.10 Exit codes and the receipt (NORMATIVE, 1.6.0)
 
@@ -1152,7 +1159,7 @@ does not emit their names. Since 1.6.0 the receipt states its verdict in four fi
 digest covers the sealed content (§3), not `rfc3161_timestamp`, `producer_signatures` or `anchors`, so a copy with a
 signature or an anchor removed, or re-signed, has the same digest (and a copy with its producer block removed has the
 states of a pack that never had one, §6.9). Record the SHA-256 of
-the whole file, or verify with pinned producer keys and `require_producer`, plus `require_anchor` or `min_anchors` when
+the whole file, or verify with pinned producer keys (since 1.9.1 they imply `require_producer`, §6 step 6), plus `require_anchor` or `min_anchors` when
 a ground rests on the pack's time.
 
 **First, was the pack evaluated at all: `admission`.** `refused` means the verifier did not evaluate the pack; its

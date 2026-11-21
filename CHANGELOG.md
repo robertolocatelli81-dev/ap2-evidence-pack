@@ -3,8 +3,8 @@
 ## Unreleased (1.9.1) — fixes after an internal review of 1.8.0, measured again on 1.9.0 on 2026-11-20
 
 Each item below was reproduced on the tag v1.9.0 (de28c3a) and on v1.8.0 (d5601e4) with a script made for it. Of the
-25 tests added, the 19 that state the new behaviour fail on v1.9.0, as a failure or as an error (a constant or a
-function they read does not exist there); the other 6 are the four controls and the unchanged direction (`build` refusing, a
+28 tests added, the 21 that state the new behaviour fail on v1.9.0, as a failure or as an error (a constant or a
+function they read does not exist there); the other 7 are the five controls and the unchanged direction (`build` refusing, a
 refusal of openssl staying `false`), which pass on both.
 
 - SPEC §6 step 2, both verifiers: the issuer signature is verified only under the `alg` the signed header names, ES256.
@@ -38,6 +38,13 @@ refusal of openssl staying `false`), which pass on both.
   rule written from the generator's parameters, 31 extension values written by hand (malformed, duplicated, DER edges)
   and 3000 byte mutations of a leaf, the same answer in both verifiers, and the whole path under openssl with eight
   leaves.
+- SPEC §6 step 6, §5, §6.9, both verifiers: a pinned producer set (`--trusted-producer-key`, `trusted_producer_keys`)
+  implies `require_producer`. Up to 1.9.0 the set was applied only to a block that was present: the producer block
+  removed from a pack whose key was pinned gave `valid: true`, `policy.unmet: []`. Now `policy_ok` and `valid` are
+  false and `policy.unmet` names `trusted_producer_keys`. Verdicts change on one vector: `stripped_signature`
+  (already `valid: false` under `require_producer`) gains `trusted_producer_keys` in `states.policy.unmet`; the
+  other 56 vectors reproduce their expected files unchanged. `test_ap2_producer_pin_implies.py`: 3 tests, the 12
+  combinations of block (pinned, not pinned, absent) × set × `require_producer` in both verifiers.
 
 ## 1.9.0 — 2026-11-20 — AP2 chains in their native form; receipts bound to the closed mandate; a binding policy; false greens closed
 
