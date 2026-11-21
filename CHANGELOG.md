@@ -45,6 +45,9 @@ refusal of openssl staying `false`), which pass on both.
   (already `valid: false` under `require_producer`) gains `trusted_producer_keys` in `states.policy.unmet`; the
   other 56 vectors reproduce their expected files unchanged. `test_ap2_producer_pin_implies.py`: 3 tests, the 12
   combinations of block (pinned, not pinned, absent) × set × `require_producer` in both verifiers.
+- SPEC §7: one conformance vector, `issuer_alg_not_es256` (`spec/vectors/ap2/make_vectors_191.py`): an ES256
+  signature of the issuer under a signed header that says `"alg": "none"`, an artifact error (`sealed_content`
+  `contradicted` `artifact_invalid`). On v1.9.0 both verifiers report it `valid: true`. Fifty-eight vectors.
 
 ## 1.9.0 — 2026-11-20 — AP2 chains in their native form; receipts bound to the closed mandate; a binding policy; false greens closed
 

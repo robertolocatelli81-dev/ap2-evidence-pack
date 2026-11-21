@@ -11,8 +11,8 @@
 > `key_purpose_not_signing` (added to the reasons of `ap2-evidence-pack/states-1`, as 1.8.1 added
 > `signer_certificate_absent`); §6 step 6, §5 and §6.9, a pinned producer set implies `require_producer`: a pack
 > without a producer block is not `valid` under it, `policy.unmet` `trusted_producer_keys` (vector `stripped_signature`:
-> `trusted_producer_keys` added to its `policy.unmet`, `valid` unchanged). No vector is added (the cases are in `test_ap2_issuer_alg.py`,
-> `test_ap2_openssl_not_run_tsa.py` and `test_ap2_x5c_purpose.py`).
+> `trusted_producer_keys` added to its `policy.unmet`, `valid` unchanged); §7, one vector added for §6 step 2,
+> `issuer_alg_not_es256` (fifty-eight).
 
 > Revision 1.9.0 (2026-11-20; it contains 1.8.1, which was not released on its own): §2.1 (new), AP2 delegation chains
 > `<hop0>~~<hop1>...` are read in their native form — split into hops by `build`, every hop after the first verified with
@@ -970,7 +970,9 @@ openssl ABSENT is neither: as in 1.5.x the field is `null` (`tsa_verified`, `cha
 Run every `spec/vectors/ap2/<name>.json` under the policy in
 `<name>.expected.json` and reproduce the `normative` block exactly
 (`run_ap2_conformance.py` does this for the reference; exit 0 = conformant).
-The set contains fifty-seven vectors (1.8.1: + 4, the grammar of §6 step 2 — `sd_jwt_no_separator` and
+The set contains fifty-eight vectors (1.9.1: + 1, `issuer_alg_not_es256`, the `alg` rule of §6 step 2 — an ES256
+signature of the issuer under a signed header that says `"alg": "none"`, `valid: true` under 1.9.0 in both verifiers,
+measured 2026-11-20; an artifact error, `sealed_content` `contradicted` `artifact_invalid`, no producer block; 1.8.1: + 4, the grammar of §6 step 2 — `sd_jwt_no_separator` and
 `sd_jwt_empty_component`, both `valid` under 1.8.0 in both verifiers, and `sd_jwt_no_trailing_tilde`, an artifact error
 under 1.8.0 too, with another reason — and `holder_sd_hash_mismatch_no_key` (§9.2), `valid` under 1.8.0 in both
 verifiers; each an artifact error, `sealed_content` `contradicted` `artifact_invalid`, no
