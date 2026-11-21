@@ -114,6 +114,51 @@ class IssuerAlg(unittest.TestCase):
                 A.build_evidence([{"name": "m", "sd_jwt": _token(self.sk, self._header(alg))}],
                                  os.path.join(self.d, "b.json"), keys={"m": _jwk(self.sk)})
 
+    def _js(self, p):
+        q = subprocess.run(["node", JS, p], capture_output=True, text=True)
+        return q.returncode, json.loads(q.stdout)
+
+    def test_every_key_source_and_the_check_before_the_signature(self):
+        """the rule does not depend on where the key came from (the tests above use a supplied key: here the header's
+        own jwk), and it is asked before the signature is read: a token that says ES384 and carries 96 octets is
+        issuer_alg_not_es256, not a remark about the length of an ES256 signature"""
+        jwk = _jwk(self.sk)
+        base = os.path.join(self.d, "hj.json")
+        A.build_evidence([{"name": "m", "sd_jwt": _token(self.sk, {"alg": "ES256", "typ": "ap2-mandate+sd-jwt", "jwk": jwk})}], base)
+        with open(base) as f:
+            ev = json.load(f)
+        self.assertEqual(ev["artifacts"][0]["key"]["provenance_class"], "jwk_header")
+        node = shutil.which("node")
+        saved, self.ev = self.ev, ev
+        try:
+            ctl = self._pack({"alg": "ES256", "typ": "ap2-mandate+sd-jwt", "jwk": jwk}, "hjctl.json")
+            self.assertTrue(A.verify_evidence(ctl)["valid"])
+            for i, alg in enumerate(("none", "HS256", "ES384", "RS256", "es256", None, "absent")):
+                with self.subTest(source="jwk_header", alg=alg):
+                    p = self._pack(dict(self._header(alg), jwk=jwk), "hj%d.json" % i)
+                    r = A.verify_evidence(p)
+                    self.assertFalse(r["valid"])
+                    self.assertIn("issuer_alg_not_es256", r["artifacts"][0].get("error", ""))
+                    if node:
+                        rc, j = self._js(p)
+                        self.assertEqual((rc, j["valid"]), (1, False))
+                        self.assertIn("issuer_alg_not_es256", j["artifacts"][0].get("error", ""))
+        finally:
+            self.ev = saved
+        p = self._pack({"alg": "ES384", "typ": "ap2-mandate+sd-jwt"}, "es384.json")
+        with open(p) as f:
+            ev = json.load(f)
+        head = ev["artifacts"][0]["sd_jwt_compact"].rsplit(".", 1)[0]
+        ev["artifacts"][0]["sd_jwt_compact"] = head + "." + _b64u(bytes(range(96))) + "~"
+        ev["evidence_digest_sha256"] = hashlib.sha256(A._canon({k: v for k, v in ev.items()
+                                                                if k not in A._DIGEST_EXCLUDED})).hexdigest()
+        with open(p, "w") as f:
+            json.dump(ev, f)
+        with self.subTest(case="96 octets under ES384"):
+            self.assertIn("issuer_alg_not_es256", A.verify_evidence(p)["artifacts"][0].get("error", ""))
+            if node:
+                self.assertIn("issuer_alg_not_es256", self._js(p)[1]["artifacts"][0].get("error", ""))
+
     @unittest.skipUnless(shutil.which("node"), "needs node")
     def test_generated_algs_js(self):
         rnd = random.Random(20261120)
@@ -129,6 +174,10 @@ class IssuerAlg(unittest.TestCase):
                 else:
                     self.assertEqual((q.returncode, r["valid"]), (1, False))
                     self.assertIn("issuer_alg_not_es256", r["artifacts"][0].get("error", ""))
+                    # the same message, whole, in both receipts: the reference writes the exception's name before it
+                    self.assertEqual("Ap2EvidenceError: " + r["artifacts"][0]["error"],
+                                     A.verify_evidence(p)["artifacts"][0]["error"])
+                    self.assertTrue(r["artifacts"][0]["error"].endswith("(RFC 7515 §5.2 step 8, SPEC §6 step 2)"))
 
 
 if __name__ == "__main__":

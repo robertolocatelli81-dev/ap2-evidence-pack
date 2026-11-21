@@ -150,7 +150,7 @@ def _no_dup_pairs(pairs):
 # JSON implementation is refused, so a third-party verifier computes the same canonical bytes or refuses the same file.
 MAX_JSON_DEPTH = 512
 MAX_EVIDENCE_BYTES = 64 << 20
-MAX_TSA_REPLY_BYTES = 1 << 20   # 1.9.1: an RFC 3161 reply read by stamp/build --tsa-url, as the 1 MiB of a JWKS
+MAX_TSA_REPLY_BYTES = 1 << 20   # 1.9.1: an RFC 3161 reply read by stamp --tsa / build --tsa, as the 1 MiB of a JWKS
 _SAFE_INT = (1 << 53) - 1
 
 
@@ -1742,7 +1742,8 @@ def _ski_policies_shape(el):
 def key_id_token_problem(der, digest_hex, ca_file, at, tmp, exe="openssl"):
     """the checks of `openssl ts -verify -digest D -CAfile CA -attime T`, made one by one for a token whose signer is
     named by subjectKeyIdentifier: None when they hold, else why not. `tmp` is an empty private directory. Raises
-    KeyIdCheckNotRun or (1.9.1) Ap2WriteError when openssl could not run a step here: never a "why not"."""
+    KeyIdCheckNotRun or (1.9.1) Ap2WriteError when openssl could not run a step here, or a temporary file it needs could
+    not be written: never a "why not"."""
     import hashlib
     import os
     try:
@@ -1758,8 +1759,7 @@ def key_id_token_problem(der, digest_hex, ca_file, at, tmp, exe="openssl"):
     except (ValueError, IndexError) as e:
         return "token not read: %s" % e
     tp, sp = os.path.join(tmp, "ski_token.der"), os.path.join(tmp, "ski_signer.pem")
-    with open(tp, "wb") as fh:
-        fh.write(token)
+    _tmp_write(tp, token)   # 1.9.1 (SPEC §6.10): a temporary file openssl needs that cannot be written is a check not run here
     # 1.9.1 (SPEC §6.10): through _run_openssl, so an openssl that is killed by a signal, gives no answer within 30 s or
     # cannot be started raises Ap2WriteError — the check was not run here, `tsa_verified` null. Up to 1.9.0 these two calls
     # were bare subprocess.run: measured 2026-11-20, SIGKILL gave "openssl cms -verify: refused" / "openssl verify: refused"
@@ -1862,8 +1862,7 @@ def key_id_token_problem(der, digest_hex, ca_file, at, tmp, exe="openssl"):
     if allowed is not None:   # 1.9.0 (SPEC §3.2, RFC 5035 §5.4.1): only these may build the path below the pins
         certs = [c for c in certs if c in allowed]
     up = os.path.join(tmp, "ski_untrusted.pem")
-    with open(up, "wb") as fh:
-        fh.write(b"".join(_ski_pem(c) for c in certs))
+    _tmp_write(up, b"".join(_ski_pem(c) for c in certs))   # 1.9.1 (SPEC §6.10), as ski_token.der above
     cmd = [exe, "verify", "-purpose", "timestampsign", "-attime", str(int(at)), "-CAfile", ca_file, "-no-CApath",
            "-no-CAstore"] + (["-untrusted", up] if certs else []) + [sp]
     r = _run_openssl(cmd, 30)
@@ -3027,9 +3026,8 @@ def _verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = F
                 # under the alg the signed header names, and this format knows ES256 only. Up to 1.9.0 verify checked ES256
                 # whatever the header said: measured 2026-11-20, a header saying "none", "HS256", "ES384" or "RS256" over an
                 # ES256 signature was valid: true in both verifiers (build refused it, in _snapshot_key)
-                raise Ap2EvidenceError("issuer_alg_not_es256: the signed header does not name alg ES256; the signature is "
-                                       "verified only under the alg the header names, ES256 here "
-                                       "(RFC 7515 §5.2 step 8, SPEC §6 step 2)")
+                raise Ap2EvidenceError("issuer_alg_not_es256: the signed header does not name alg ES256 "
+                                       "(RFC 7515 §5.2 step 8, SPEC §6 step 2)")   # whole within the 120 characters of the receipt
             if bool(parsed["kb_jwt"]) != a["kb_jwt"]["present"]:
                 raise Ap2EvidenceError("artifact kb_jwt.present contradicts the compact serialization (SPEC §9.1)")
             # SPEC §9.2 — the standards' rule for the unknown: ignored, and REPORTED (crit: RFC 7515 §4.1.11, a rejection)

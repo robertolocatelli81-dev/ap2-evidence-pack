@@ -2,21 +2,28 @@
 
 ## Unreleased (1.9.1) — fixes after an internal review of 1.8.0, measured again on 1.9.0 on 2026-11-20
 
-Each item below was reproduced on the tag v1.9.0 (de28c3a) and on v1.8.0 (d5601e4) with a script made for it, and each
-test added fails on v1.9.0.
+Each item below was reproduced on the tag v1.9.0 (de28c3a) and on v1.8.0 (d5601e4) with a script made for it. Of the
+15 tests added, the 11 that state the new behaviour fail on v1.9.0 (one of them as an error: the constant it reads does
+not exist there); the other 4 are the two controls and the unchanged direction (`build` refusing, a refusal of
+openssl staying `false`), which pass on both.
 
 - SPEC §6 step 2, both verifiers: the issuer signature is verified only under the `alg` the signed header names, ES256.
   Up to 1.9.0 `verify` checked ES256 whatever the header said (`build` refused it): a pack whose issuer header, signed
   by the issuer, says `none`, `HS256`, `ES384` or `RS256` over an ES256 signature was `valid: true` in the Python and
-  the JavaScript verifier. Now that artifact's error `issuer_alg_not_es256` (RFC 7515 §5.2 step 8).
-  `test_ap2_issuer_alg.py`: 68 generated `alg` values in Python, 30 in JavaScript, and `build` refusing four of them.
+  the JavaScript verifier. Now that artifact's error `issuer_alg_not_es256` (RFC 7515 §5.2 step 8), the same message
+  in both receipts (the reference writes `Ap2EvidenceError: ` before it).
+  `test_ap2_issuer_alg.py`: 68 generated `alg` values in Python, 30 in JavaScript, `build` refusing four of them,
+  and seven values with the key taken from the header's own `jwk` instead of a supplied key.
 - SPEC §3.2, §6.10: on the key-identifier path of an RFC 3161 token (a SignerInfo naming its signer by
   subjectKeyIdentifier) openssl ran outside `_run_openssl`: an openssl killed by a signal in `cms -verify` or in
   `verify`, or one giving no answer within 30 s, made `tsa_verified` `false`. It is now `null`, a check not run here,
-  with the reason in `tsa_note`, as on the `openssl ts -verify` path. A refusal of openssl stays `false`.
-- `stamp` and `build --tsa-url` read the TSA reply whole: an 8 MiB reply was read to the last byte. At most
+  with the reason in `tsa_note`, as on the `openssl ts -verify` path. A refusal of openssl stays `false`. The two
+  temporary files this step writes for openssl (the token, the certificates of the token) go through `_tmp_write`: one
+  that cannot be written is a check not run, `null` (SPEC §6.10), where up to 1.9.0 it was `false` (measured with open()
+  raising ENOSPC on each).
+- `stamp --tsa` and `build --tsa` read the TSA reply whole: an 8 MiB reply was read to the last byte. At most
   1 MiB + 1 byte is now read (`MAX_TSA_REPLY_BYTES`, the bound the JWKS fetch already had) and a larger reply is not
-  anchored, with a note. `test_ap2_openssl_not_run_tsa.py`: 8 tests.
+  anchored, with a note. `test_ap2_openssl_not_run_tsa.py`: 10 tests.
 
 ## 1.9.0 — 2026-11-20 — AP2 chains in their native form; receipts bound to the closed mandate; a binding policy; false greens closed
 

@@ -1,19 +1,25 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Roberto Locatelli
-"""1.9.1, SPEC §3.2, §6.10: two checks of the RFC 3161 path that ran outside the rules of the rest of the file.
+"""1.9.1, SPEC §3.2, §6.10: three places of the RFC 3161 path that ran outside the rules of the rest of the file.
 
 1. The key-identifier step (`key_id_token_problem`, a token whose SignerInfo names its signer by subjectKeyIdentifier)
    called openssl with a bare subprocess.run: measured on 2026-11-20 on 1.9.0, an openssl killed by SIGKILL in
    `cms -verify` or in `verify -purpose timestampsign` gave `tsa_verified: false` ("openssl ... : refused"), and one that
    did not answer within 30 s gave `tsa_verified: false` (TimeoutExpired) — a finding about the token where the check had
    not run. Now through `_run_openssl`: `tsa_verified` null and the reason in `tsa_note`, as for `openssl ts -verify`.
-2. The reply of a TSA (`stamp`, `build --tsa-url`) was read whole: measured on 2026-11-20 on 1.9.0, an 8 MiB reply was
+2. The reply of a TSA (`stamp --tsa`, `build --tsa`) was read whole: measured on 2026-11-20 on 1.9.0, an 8 MiB reply was
    read to the last byte. Now at most MAX_TSA_REPLY_BYTES + 1 are read and a larger reply is not anchored, as the JWKS
    fetch already was (1 MiB).
 
-Positive control: on 1.9.0 the four tests that need openssl fail (three false where null is expected, 8 388 608 bytes
-read)."""
+3. On the same key-identifier step two temporary files openssl reads (the token, the certificates of the token) were
+   written with a bare open(): one that cannot be written (a full disk) gave `tsa_verified: false` (OSError), where
+   SPEC §6.10 names it a check not run. Measured on 2026-11-20 on 1.9.0 with open() raising ENOSPC on each of the two
+   files. Now through `_tmp_write`: null, as for the file of the `openssl ts -verify` path.
+
+Positive control: on 1.9.0 eight of the ten tests below fail: five give false where null is expected, two read
+8 388 608 and 1 048 577 bytes and anchor nothing with another note, and the test of a reply of exactly the bound is an
+error (the constant does not exist there). The other two (the control, a refusal staying false) pass on both."""
 import base64
 import http.server
 import os
@@ -23,6 +29,7 @@ import tempfile
 import threading
 import unittest
 import urllib.request
+from unittest import mock
 
 sys.dont_write_bytecode = True
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -78,10 +85,32 @@ class KeyIdStepNotRun(unittest.TestCase):
         self.assertIsNone(r["tsa_verified"], r)
         self.assertIn("terminated by signal", r["tsa_note"])
 
+    def test_no_answer_in_cms_verify_is_not_run(self):   # the first of the two calls has the same 30 s
+        r = self._with_fake("slow_cms", 'case "$1 $2" in "cms -verify") exec sleep 45;; esac')
+        self.assertIsNone(r["tsa_verified"], r)
+        self.assertIn("no answer within 30 s", r["tsa_note"])
+
     def test_no_answer_is_not_run(self):
         r = self._with_fake("slow", 'case "$1 $2" in "verify -purpose") exec sleep 45;; esac')
         self.assertIsNone(r["tsa_verified"], r)
         self.assertIn("no answer within", r["tsa_note"])
+
+    def test_temporary_file_not_written_is_not_run(self):   # SPEC §6.10: "a temporary file openssl needs that cannot be written"
+        import builtins
+        import errno
+        real_open = builtins.open
+        for name in ("ski_token.der", "ski_untrusted.pem", "t.tsr"):   # t.tsr: the file both paths write, null before too
+            def full_disk(path, *a, **k):
+                if isinstance(path, str) and os.path.basename(path) == name and a and "w" in a[0]:
+                    raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
+                return real_open(path, *a, **k)
+            with self.subTest(file=name):
+                with mock.patch("builtins.open", full_disk):
+                    r = self._verify()
+                self.assertIsNone(r["tsa_verified"], r)
+                self.assertIn("check not run here: cannot write a temporary file for openssl", r["tsa_note"])
+                self.assertIn("_not_run", r)
+        self.assertIs(self._verify()["tsa_verified"], True)   # and with the files written, the same token verifies
 
     def test_a_refusal_stays_false(self):   # the other direction: a real "no" of openssl is still a finding
         r = A._verify_rfc3161(self.tsr, self.K.DIGEST.hex(), tsa_cert=self.lab.j("tsa.crt"))
@@ -144,6 +173,7 @@ class TsaReplyBounded(unittest.TestCase):
     def test_large_reply_not_read_whole(self):
         r = A._rfc3161_stamp("ab" * 32, self.url)
         self.assertFalse(r["anchored"])
+        self.assertEqual(r["tsa_url"], self.url)   # the note names the TSA asked, as the other notes of a reply do
         self.assertIn("larger than", r["note"])
         self.assertLessEqual(sum(self.read), A.MAX_TSA_REPLY_BYTES + 1)
 
