@@ -882,6 +882,7 @@ function verifyEvidenceInner(path, opts) {
       // verified in this verifier and failed in the reference. It runs before checkProvenance, which reads the header.
       if (parsed.payload === null || typeof parsed.payload !== "object" || Array.isArray(parsed.payload) || parsed.header === null || typeof parsed.header !== "object" || Array.isArray(parsed.header)) throw new Refused("JWT header and payload must be objects");
       if (canon(a.header) !== canon(parsed.header)) throw new Refused("artifact header copy differs from the decoded protected header (SPEC §2)");   // 1.4.0: the informative copy must say what the signed header says
+      if (parsed.header.alg !== "ES256") throw new Refused("issuer_alg_not_es256: the signed header does not name alg ES256; the signature is verified only under the alg the header names, ES256 here (RFC 7515 §5.2 step 8, SPEC §6 step 2)");   // 1.9.1: up to 1.9.0 ES256 was checked whatever the header said
       if (Boolean(parsed.kbJwt) !== a.kb_jwt.present) throw new Refused("artifact kb_jwt.present contradicts the compact serialization (SPEC §9.1)");
       // SPEC §9.2 — the standards' rule for the unknown: ignored, and REPORTED (crit: RFC 7515 §4.1.11, a rejection)
       const ignored = { header: joseHeaderIgnored(parsed.header, "JWT header"), header_jwk: unknownMembers(parsed.header.jwk, JWK_REGISTERED), key_jwk: unknownMembers(a.key.jwk, JWK_REGISTERED) };

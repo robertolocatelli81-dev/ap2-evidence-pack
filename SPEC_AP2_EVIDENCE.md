@@ -3,6 +3,10 @@
 
 # ap2-evidence-pack — normative format v1.0 (2026-09-05), specification revision 1.9.0 (2026-11-20)
 
+> Unreleased revision 1.9.1 (after 1.9.0, 2026-11-20): §6 step 2, the issuer signature is verified only under the
+> `alg` the signed header names (`issuer_alg_not_es256`). No vector is added (the cases are in
+> `test_ap2_issuer_alg.py`).
+
 > Revision 1.9.0 (2026-11-20; it contains 1.8.1, which was not released on its own): §2.1 (new), AP2 delegation chains
 > `<hop0>~~<hop1>...` are read in their native form — split into hops by `build`, every hop after the first verified with
 > the previous hop's `cnf.jwk` (provenance class `chain_cnf`, key member `chain_from`) under the hop rules of the AP2 SDK,
@@ -674,7 +678,12 @@ flags: `require_producer`, `require_pq`, `require_anchor`, and `min_anchors` (1.
    protected header (`crit` → RFC 7515 §4.1.11, unknown parameters ignored and reported); 1.7.3, compare every key source
    of the header that is not the source of the snapshotted key (§2 (d)): a `jwk` or `x5c` naming another key, or not a
    key, is that artifact's error, and the names go to `ignored.key_material`; verify the ES256 signature with
-   the snapshotted JWK over the JWS signing input; resolve disclosures
+   the snapshotted JWK over the JWS signing input — only when the signed header's `alg` is `"ES256"` (1.9.1, RFC 7515
+   §5.2 step 8: the signature is validated "in the manner defined for the algorithm being used, which MUST be accurately
+   represented by the value of the `alg` (algorithm) Header Parameter"); any other value, or none, is that artifact's
+   error `issuer_alg_not_es256`, as `build` already refused it. Up to 1.9.0 verify checked ES256 whatever the header
+   named: measured 2026-11-20, a header saying `none`, `HS256`, `ES384` or `RS256` over an ES256 signature of the issuer
+   was `valid: true` in both verifiers; resolve disclosures
    fail-closed (unmatched, duplicate, or malformed disclosure → reject — for an UNMATCHED
    disclosure this is RFC 9901 §7.1 step 5 verbatim, "the SD-JWT MUST be rejected"; 1.7.0, a digest value encountered
    more than once while resolving — in an `_sd` array or as a `{"...": d}` array placeholder, in the payload or inside a

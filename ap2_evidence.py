@@ -3015,6 +3015,13 @@ def _verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = F
                 raise Ap2EvidenceError("JWT header and payload must be objects")
             if _canon(a["header"]) != _canon(parsed["header"]):   # 1.4.0 — SPEC §2: the informative copy must say what the signed header says
                 raise Ap2EvidenceError("artifact header copy differs from the decoded protected header (SPEC §2)")
+            if parsed["header"].get("alg") != "ES256":   # 1.9.1 (SPEC §6 step 2, RFC 7515 §5.2 step 8): the signature is checked
+                # under the alg the signed header names, and this format knows ES256 only. Up to 1.9.0 verify checked ES256
+                # whatever the header said: measured 2026-11-20, a header saying "none", "HS256", "ES384" or "RS256" over an
+                # ES256 signature was valid: true in both verifiers (build refused it, in _snapshot_key)
+                raise Ap2EvidenceError("issuer_alg_not_es256: the signed header does not name alg ES256; the signature is "
+                                       "verified only under the alg the header names, ES256 here "
+                                       "(RFC 7515 §5.2 step 8, SPEC §6 step 2)")
             if bool(parsed["kb_jwt"]) != a["kb_jwt"]["present"]:
                 raise Ap2EvidenceError("artifact kb_jwt.present contradicts the compact serialization (SPEC §9.1)")
             # SPEC §9.2 — the standards' rule for the unknown: ignored, and REPORTED (crit: RFC 7515 §4.1.11, a rejection)

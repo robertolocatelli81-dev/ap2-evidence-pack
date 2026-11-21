@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased (1.9.1) — fixes after an internal review of 1.8.0, measured again on 1.9.0 on 2026-11-20
+
+Each item below was reproduced on the tag v1.9.0 (de28c3a) and on v1.8.0 (d5601e4) with a script made for it, and each
+test added fails on v1.9.0.
+
+- SPEC §6 step 2, both verifiers: the issuer signature is verified only under the `alg` the signed header names, ES256.
+  Up to 1.9.0 `verify` checked ES256 whatever the header said (`build` refused it): a pack whose issuer header, signed
+  by the issuer, says `none`, `HS256`, `ES384` or `RS256` over an ES256 signature was `valid: true` in the Python and
+  the JavaScript verifier. Now that artifact's error `issuer_alg_not_es256` (RFC 7515 §5.2 step 8).
+  `test_ap2_issuer_alg.py`: 68 generated `alg` values in Python, 30 in JavaScript, and `build` refusing four of them.
+
 ## 1.9.0 — 2026-11-20 — AP2 chains in their native form; receipts bound to the closed mandate; a binding policy; false greens closed
 
 SPEC 1.9.0 (§1, §2.1, §3.1, §3.2, §4, §6 step 2, §6.9, §7, §9.1, §9.2, §10, §11, §13; each rule written before the code). Measured on
