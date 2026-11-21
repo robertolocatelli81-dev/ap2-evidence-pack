@@ -3,9 +3,9 @@
 ## Unreleased (1.9.1) — fixes after an internal review of 1.8.0, measured again on 1.9.0 on 2026-11-20
 
 Each item below was reproduced on the tag v1.9.0 (de28c3a) and on v1.8.0 (d5601e4) with a script made for it. Of the
-15 tests added, the 11 that state the new behaviour fail on v1.9.0 (one of them as an error: the constant it reads does
-not exist there); the other 4 are the two controls and the unchanged direction (`build` refusing, a refusal of
-openssl staying `false`), which pass on both.
+25 tests added, the 19 that state the new behaviour fail on v1.9.0, as a failure or as an error (a constant or a
+function they read does not exist there); the other 6 are the four controls and the unchanged direction (`build` refusing, a
+refusal of openssl staying `false`), which pass on both.
 
 - SPEC §6 step 2, both verifiers: the issuer signature is verified only under the `alg` the signed header names, ES256.
   Up to 1.9.0 `verify` checked ES256 whatever the header said (`build` refused it): a pack whose issuer header, signed
@@ -24,6 +24,20 @@ openssl staying `false`), which pass on both.
 - `stamp --tsa` and `build --tsa` read the TSA reply whole: an 8 MiB reply was read to the last byte. At most
   1 MiB + 1 byte is now read (`MAX_TSA_REPLY_BYTES`, the bound the JWKS fetch already had) and a larger reply is not
   anchored, with a note. `test_ap2_openssl_not_run_tsa.py`: 10 tests.
+- SPEC §6 step 7, §6.9, both verifiers: an x5c chain that validates to the relying party's anchor clears
+  `self_asserted_only` only when its leaf is issued for signing — keyUsage, when present, with digitalSignature or
+  nonRepudiation/contentCommitment (RFC 5280 §4.2.1.3); extendedKeyUsage, when present, listing anyExtendedKeyUsage or
+  id-kp-documentSigning (RFC 5280 §4.2.1.12, RFC 9336; the closed list is this format's choice, SPEC §6 step 7 gives the
+  reasons). Up to 1.9.0 neither extension was read: a leaf with keyUsage keyCertSign only and extendedKeyUsage serverAuth
+  only, under the anchor, gave `chain_verified: true`, `self_asserted_only: false`, `issuer_identity` `verified /
+  ca_certified`. Now `chain_verified` stays `true`, the flag stays set and `issuer_identity` is `contradicted /
+  key_purpose_not_signing` (a new reason of `ap2-evidence-pack/states-1`; `valid` does not change, as for
+  `chain_broken`). Each `x5c_leaf` carries `key_purpose` (`{"signing", "reason"}`) in both verifiers, with or without an
+  anchor; the differential oracle compares it. Verdicts: no vector changes (the six x5c leaves of `spec/vectors` carry
+  neither extension: `signing: true`). `test_ap2_x5c_purpose.py`: 10 tests — 400 generated leaves checked against the
+  rule written from the generator's parameters, 31 extension values written by hand (malformed, duplicated, DER edges)
+  and 3000 byte mutations of a leaf, the same answer in both verifiers, and the whole path under openssl with eight
+  leaves.
 
 ## 1.9.0 — 2026-11-20 — AP2 chains in their native form; receipts bound to the closed mandate; a binding policy; false greens closed
 

@@ -83,6 +83,7 @@ def check_receipt(r: dict, kw: dict, bind_match=None) -> list:
         "token_missing": (r.get("rfc3161") or {}).get("verified") is False,
         "signature_invalid": any(s.get("status") == "FAIL" for s in sigs) or prod.get("scheme_ok") is False or (prod.get("present") and not sigs),
         "chain_broken": r.get("chain_verified") is False,
+        "key_purpose_not_signing": any(((a.get("x5c_leaf") or {}).get("key_purpose") or {}).get("signing") is False for a in arts),   # 1.9.1
     }
     for name, s in st.items():
         if s["state"] == "contradicted":
@@ -96,7 +97,8 @@ def check_receipt(r: dict, kw: dict, bind_match=None) -> list:
         v.append("C2 time_anchor verified without a TSA check")
     if st["producer_signature"]["state"] == "verified" and not (kw.get("trusted_producer_keys") and sigs and all(s.get("status") == "PASS" and s.get("key_trusted") is True for s in sigs)):
         v.append("C2 producer_signature verified without pinned keys")
-    if st["issuer_identity"]["state"] == "verified" and r.get("chain_verified") is not True:
+    if st["issuer_identity"]["state"] == "verified" and (r.get("chain_verified") is not True or any(
+            ((a.get("x5c_leaf") or {}).get("key_purpose") or {}).get("signing") is not True for a in arts if a.get("x5c_leaf"))):   # 1.9.1
         v.append("C2 issuer_identity verified without a validated chain")
     if st["holder_binding"]["state"] == "verified" and not any((a.get("kb_jwt") or {}).get("verified") is True for a in arts):
         v.append("C2 holder_binding verified without a KB-JWT that verified")

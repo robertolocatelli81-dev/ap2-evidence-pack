@@ -716,6 +716,90 @@ def _pubkey_from_x5c_leaf(x5c: List[str]):
     return _load_x5c_leaf(x5c).public_key()
 
 
+# 1.9.1 (SPEC §6 step 7): the purposes RFC 5280 gives a leaf for signing. keyUsage (§4.2.1.3): digitalSignature (bit 0) or
+# nonRepudiation / contentCommitment (bit 1), the two bits for "verifying digital signatures, other than signatures on
+# certificates ... and CRLs". extendedKeyUsage (§4.2.1.12, "the certificate MUST only be used for one of the purposes
+# indicated"): a closed list, this format's choice (RFC 5280 leaves it to the application) — anyExtendedKeyUsage (the CA
+# "does not wish to restrict usages of the key") and id-kp-documentSigning (RFC 9336). Every other KeyPurposeId, named or
+# not, is not a signing purpose here. Contents octets of the OBJECT IDENTIFIERs, compared byte for byte.
+_ID_CE_KEY_USAGE = bytes.fromhex("551d0f")                    # 2.5.29.15
+_ID_CE_EXT_KEY_USAGE = bytes.fromhex("551d25")                # 2.5.29.37
+_SIGNING_EKUS = (bytes.fromhex("551d2500"),                   # 2.5.29.37.0 anyExtendedKeyUsage (RFC 5280 §4.2.1.12)
+                 bytes.fromhex("2b06010505070324"))           # 1.3.6.1.5.5.7.3.36 id-kp-documentSigning (RFC 9336 §3.1)
+
+
+def _oid_ok(c: bytes) -> bool:
+    """DER contents of an OBJECT IDENTIFIER: base-128 sub-identifiers, the last octet of each with bit 8 clear, none
+    starting with 0x80 (X.690 §8.19.2)."""
+    if not c or c[-1] & 0x80:
+        return False
+    start = True
+    for b in c:
+        if start and b == 0x80:
+            return False
+        start = not (b & 0x80)
+    return True
+
+
+def leaf_key_purpose(der: bytes) -> Dict:
+    """1.9.1 (SPEC §6 step 7): `{"signing": bool, "reason": None | code}` for an x5c leaf, read from its DER the same way
+    in both verifiers. Codes: extensions_unreadable, duplicate_extension, key_usage_malformed, key_usage_not_signing,
+    extended_key_usage_malformed, extended_key_usage_not_signing. Both extensions absent: signing (RFC 5280 §4.2.1.12
+    lets an application require the EKU, MAY; this format does not)."""
+    def no(reason):
+        return {"signing": False, "reason": reason}
+    try:
+        t, s, e = _der_tlv(der, 0)
+        top = _der_children(der, s, e) if t == 0x30 else []
+        tbs = top[0] if top else None
+        if tbs is None or tbs[0] != 0x30:
+            return no("extensions_unreadable")
+        exts = [c for c in _der_children(der, tbs[1], tbs[2]) if c[0] == 0xA3]
+        found: Dict[bytes, bytes] = {}
+        if len(exts) > 1:
+            return no("extensions_unreadable")
+        if exts:
+            inner = _der_children(der, exts[0][1], exts[0][2])
+            if len(inner) != 1 or inner[0][0] != 0x30:
+                return no("extensions_unreadable")
+            for ext in _der_children(der, inner[0][1], inner[0][2]):
+                parts = _der_children(der, ext[1], ext[2]) if ext[0] == 0x30 else []
+                if not (2 <= len(parts) <= 3 and parts[0][0] == 0x06 and parts[-1][0] == 0x04
+                        and (len(parts) == 2 or parts[1][0] == 0x01)):
+                    return no("extensions_unreadable")
+                oid = der[parts[0][1]:parts[0][2]]
+                if oid in (_ID_CE_KEY_USAGE, _ID_CE_EXT_KEY_USAGE):
+                    if oid in found:   # RFC 5280 §4.2: "A certificate MUST NOT include more than one instance of a particular extension"
+                        return no("duplicate_extension")
+                    found[oid] = der[parts[-1][1]:parts[-1][2]]
+    except Ap2EvidenceError:
+        return no("extensions_unreadable")
+    ku = found.get(_ID_CE_KEY_USAGE)
+    if ku is not None:
+        try:
+            t, s, e = _der_tlv(ku, 0)
+        except Ap2EvidenceError:
+            return no("key_usage_malformed")
+        bits = ku[s:e]
+        if t != 0x03 or e != len(ku) or not bits or bits[0] > 7 or (len(bits) == 1 and bits[0] != 0) \
+                or (len(bits) > 1 and bits[-1] & ((1 << bits[0]) - 1)):
+            return no("key_usage_malformed")
+        if len(bits) < 2 or not bits[1] & 0xC0:   # digitalSignature (0x80) or nonRepudiation / contentCommitment (0x40)
+            return no("key_usage_not_signing")
+    eku = found.get(_ID_CE_EXT_KEY_USAGE)
+    if eku is not None:
+        try:
+            t, s, e = _der_tlv(eku, 0)
+            ids = _der_children(eku, s, e) if t == 0x30 and e == len(eku) else None
+        except Ap2EvidenceError:
+            ids = None
+        if not ids or any(c[0] != 0x06 or not _oid_ok(eku[c[1]:c[2]]) for c in ids):   # SEQUENCE SIZE (1..MAX) OF KeyPurposeId
+            return no("extended_key_usage_malformed")
+        if not any(eku[c[1]:c[2]] in _SIGNING_EKUS for c in ids):
+            return no("extended_key_usage_not_signing")
+    return {"signing": True, "reason": None}
+
+
 def _jwk_from_pubkey(pub) -> Dict:
     nums = pub.public_numbers()
     return {"kty": "EC", "crv": "P-256",
@@ -879,6 +963,11 @@ def _check_provenance(pc, parsed: Dict, key: Dict, trust_anchor: Optional[str] =
              "not_valid_after": cert.not_valid_after_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
              "sha256": hashlib.sha256(cert.public_bytes(_serialization().Encoding.DER)).hexdigest()}
     ident["chain_verified"] = None     # r11: always present, as in the JS receipt — None = not measured
+    # 1.9.1 (SPEC §6 step 7): whether the leaf was issued for signing (keyUsage / extendedKeyUsage, RFC 5280 §4.2.1.3,
+    # §4.2.1.12), reported with or without an anchor, the same object in both verifiers. Up to 1.9.0 neither extension was
+    # read: measured 2026-11-20, a leaf with keyUsage keyCertSign only and EKU serverAuth only, under the anchor, cleared
+    # self_asserted_only (`ca_certified`).
+    ident["key_purpose"] = leaf_key_purpose(_sigsuite._unb64(x5c[0]))   # the bytes the header carries, as the JS verifier reads them
     if trust_anchor is None:
         return True, ident   # no anchor: the certificate proves only that the key is in a blob the signer wrote
     diag: Dict = {}
@@ -890,7 +979,9 @@ def _check_provenance(pc, parsed: Dict, key: Dict, trust_anchor: Optional[str] =
         chain_ok = None
         ident["_not_run"] = str(e)
     ident["chain_verified"] = chain_ok
-    return (chain_ok is not True), ident   # only a chain that really validated clears it (None = openssl absent = unmeasurable)
+    # only a chain that really validated clears it (None = openssl absent = unmeasurable), and since 1.9.1 only to a leaf
+    # issued for signing (SPEC §6 step 7): `chain_verified` stays the chain's answer
+    return not (chain_ok is True and ident["key_purpose"]["signing"] is True), ident
 
 
 def _serialization():
@@ -2435,7 +2526,9 @@ def derive_states(*, digest_ok, art_results, binding_set_match, ts_block, rfc_bl
         else:
             leaf = r.get("x5c_leaf") or {}
             cv = leaf.get("chain_verified")
-            if cv is True:
+            if cv is True and (leaf.get("key_purpose") or {}).get("signing") is not True:   # 1.9.1 (SPEC §6 step 7, §6.9)
+                issuer.append(("contradicted", "key_purpose_not_signing", f"the leaf is not issued for signing: {(leaf.get('key_purpose') or {}).get('reason')} (RFC 5280 §4.2.1.3, §4.2.1.12)"))
+            elif cv is True:
                 issuer.append(("verified", "ca_certified"))
             elif cv is False:
                 issuer.append(("contradicted", "chain_broken", leaf.get("_broken")) if leaf.get("_broken") else ("not_evaluated", "chain_unresolved"))

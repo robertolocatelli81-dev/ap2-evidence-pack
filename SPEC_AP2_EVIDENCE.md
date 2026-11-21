@@ -5,8 +5,12 @@
 
 > Unreleased revision 1.9.1 (after 1.9.0, 2026-11-20): §6 step 2, the issuer signature is verified only under the
 > `alg` the signed header names (`issuer_alg_not_es256`); §3.2, an openssl that does not answer on the key-identifier
-> path, or a temporary file of that path that cannot be written, is a check not run (`null`), not a `false`. No vector
-> is added (the cases are in `test_ap2_issuer_alg.py` and `test_ap2_openssl_not_run_tsa.py`).
+> path, or a temporary file of that path that cannot be written, is a check not run (`null`), not a `false`; §6 step 7
+> and §6.9, a validated x5c chain clears `self_asserted_only` only when its leaf is issued for signing (keyUsage and
+> extendedKeyUsage, RFC 5280 §4.2.1.3 and §4.2.1.12), `x5c_leaf.key_purpose` in both verifiers, reason
+> `key_purpose_not_signing` (added to the reasons of `ap2-evidence-pack/states-1`, as 1.8.1 added
+> `signer_certificate_absent`). No vector is added (the cases are in `test_ap2_issuer_alg.py`,
+> `test_ap2_openssl_not_run_tsa.py` and `test_ap2_x5c_purpose.py`).
 
 > Revision 1.9.0 (2026-11-20; it contains 1.8.1, which was not released on its own): §2.1 (new), AP2 delegation chains
 > `<hop0>~~<hop1>...` are read in their native form — split into hops by `build`, every hop after the first verified with
@@ -794,6 +798,41 @@ flags: `require_producer`, `require_pq`, `require_anchor`, and `min_anchors` (1.
    its issuer, cleared it in both verifiers while the pack stayed `valid`. Two DN strings the
    forger writes are not an issuance: only a validated chain is.
    (flag, not a failure: the verdict names the weakness instead of hiding it).
+   1.9.1, the PURPOSE of the leaf: a validated chain clears the flag only when the leaf was issued for signing, read from
+   the leaf's DER by both verifiers with the same rule and reported, with or without an anchor, as `x5c_leaf.key_purpose`
+   = `{"signing": true|false, "reason": null|<code>}`. RFC 5280 (Proposed Standard, May 2008; its updates RFC 6818, 8398,
+   8399, 9549, 9598, 9608, 9618, 9925 and 10007 do not change §4.2.1.3 or §4.2.1.12; read on rfc-editor.org on
+   2026-11-20) ties the use of the key to two extensions, and both are checked, each on its own (§4.2.1.12: "If a
+   certificate contains both a key usage extension and an extended key usage extension, then both extensions MUST be
+   processed independently and the certificate MUST only be used for a purpose consistent with both extensions"):
+   - keyUsage present: it MUST assert digitalSignature (bit 0) or nonRepudiation, renamed contentCommitment (bit 1) —
+     the two bits §4.2.1.3 gives to "verifying digital signatures, other than signatures on certificates (bit 5) and CRLs
+     (bit 6)"; otherwise `key_usage_not_signing`;
+   - extendedKeyUsage present ("If the extension is present, then the certificate MUST only be used for one of the
+     purposes indicated"): it MUST list one of a closed set, this format's choice, since RFC 5280 leaves the purpose an
+     application requires to the application ("Certificate using applications MAY require ... that a particular purpose
+     be indicated"): `anyExtendedKeyUsage` (2.5.29.37.0 — the CA "does not wish to restrict usages of the key") or
+     `id-kp-documentSigning` (1.3.6.1.5.5.7.3.36, RFC 9336, Proposed Standard, December 2022, read the same day — the key
+     "has been certified to be used for cryptographic operations on contents that are consumed by people": a mandate is
+     content its user approves). Any other list is `extended_key_usage_not_signing`: `serverAuth` and `clientAuth` (TLS),
+     `codeSigning` ("Signing of downloadable executable code"), `emailProtection`, `timeStamping`, `OCSPSigning`, and
+     every KeyPurposeId this text does not name. RFC 9336 §1 records that `emailProtection` and `codeSigning` are used in
+     practice for signing documents and calls the use of their KeyPurposeIds outside their environment appropriation;
+     this format does not accept them. A relying party that refuses `anyExtendedKeyUsage` (RFC 9336 §1: "bad practice for
+     publicly trusted certificates") reads `x5c_leaf` and its own policy: this text accepts it, because RFC 5280 defines it
+     as "does not restrict";
+   - either extension twice (RFC 5280 §4.2: "A certificate MUST NOT include more than one instance of a particular
+     extension") → `duplicate_extension`; a keyUsage that is not one DER BIT STRING (unused bits 0–7 and zero) →
+     `key_usage_malformed`; an extendedKeyUsage that is not one DER SEQUENCE of one or more OBJECT IDENTIFIERs →
+     `extended_key_usage_malformed`; extensions that cannot be walked as `[3] SEQUENCE OF Extension` →
+     `extensions_unreadable`. The first that applies, in this order: unreadable, duplicate, keyUsage, extendedKeyUsage.
+   Both extensions absent: `signing: true` (this format does not require the EKU). A chain that validates to a leaf that
+   is not issued for signing keeps `chain_verified: true` (the chain did validate), leaves `self_asserted_only` true, and
+   makes `issuer_identity` `contradicted` with `key_purpose_not_signing` (§6.9) — the certificate itself says the key is
+   not for this use; like `chain_broken` it does not decide `valid`. The JS verifier reports `key_purpose` and, as it
+   validates no chain, never clears the flag. Up to 1.9.0 neither extension was read: measured 2026-11-20 on 1.9.0, a leaf
+   whose keyUsage is keyCertSign only and whose extendedKeyUsage is serverAuth only, under the relying party's anchor, gave
+   `chain_verified: true`, `self_asserted_only: false`, `issuer_identity` `verified / ca_certified`.
 8. `valid` = artifacts non-empty AND `digest_ok` AND every artifact verifies
    AND `bindings_ok` AND `rfc3161_verified` is not false AND producer block ok
    (when present) and trusted (when pinned) AND `policy_ok`.
@@ -864,7 +903,7 @@ element is `not_evaluated` with `not_present`.
 | `holder_binding` | each artifact that is not an error and carries a KB-JWT; since 1.9.0 also each `chain_cnf` artifact that is not an error (§2.1: `verified`) | its KB-JWT verifies under `cnf.jwk` | `kb_signature_invalid` (the signature does not verify, whatever `sd_hash`); `sd_hash_mismatch` (the signature verifies, `sd_hash` does not) | `holder_key_unknown` (no `cnf.jwk`: recorded, never fails the pack, §6 step 2 — except an `sd_hash` that does not match, an artifact error since 1.8.1); `not_present` |
 | `time_anchor` | the `rfc3161_timestamp` token when `anchored`; each `anchors` entry | binding verified (§3.2) AND, under `--tsa-cert`, the TSA signature verified | `binding_mismatch` (an imprint was read and is another digest, whatever else fails); `token_invalid` (otherwise: not a parseable, granted token); `token_missing` (`anchored` with no `tsr_b64`, §6 step 4) | `tsa_not_checked` (binding verified, no TSA certificate given: a self-issued token satisfies the binding, §3.2); `tsa_invalid` (the TSA signature does not verify under the certificate given: not counted, §3.3); `signer_certificate_absent` (1.8.1, §3.2: the signer certificate is not found, the signature not evaluated: not counted); `instrument_failure`; `not_present` |
 | `producer_signature` | each signature entry; the block itself | `PASS` with a key in the pinned set | `signature_invalid` (a `FAIL` entry; also a block with no entry, or whose `scheme` does not match its entries, §5, with a `detail`) | `self_asserted` (`PASS`, no pinned set: the key is carried by the pack — `valid` can be true without pins, a policy of this format, never a trust statement; krausz §5.4.2(a) has no resolved result without the relying party's trust material); `key_unresolved` (`PASS`, a pinned set that does not hold the key — not a failed signature); `backend_missing` (`SKIP`: no ML-DSA-65 backend, or a `sig_alg` this format does not define); `not_present` |
-| `issuer_identity` | the key of each artifact that is not an error | an `x5c_header` key whose chain validates to the relying party's trust anchor (§6 step 7) — qualifier `ca_certified`: a CA under YOUR anchor certified the key, never "this is the issuer" | `chain_broken` (openssl reports a certificate signature failure inside the chain, or an `x5c` entry is not strict base64) | `self_asserted` (`jwk_header`, `supplied`, `jwks_fetched`, and since 1.9.0 `chain_cnf`, §2.1); `no_trust_anchor` (`x5c_header`, no anchor given); `chain_unresolved` (the chain does not reach the anchor given: not resolved in the relying party's material, not a defect of the input); `instrument_failure`; `not_present` |
+| `issuer_identity` | the key of each artifact that is not an error | an `x5c_header` key whose chain validates to the relying party's trust anchor and whose leaf is issued for signing (§6 step 7, 1.9.1) — qualifier `ca_certified`: a CA under YOUR anchor certified the key, never "this is the issuer" | `chain_broken` (openssl reports a certificate signature failure inside the chain, or an `x5c` entry is not strict base64); `key_purpose_not_signing` (1.9.1: the chain validates, the leaf's keyUsage or extendedKeyUsage does not allow signing, §6 step 7) | `self_asserted` (`jwk_header`, `supplied`, `jwks_fetched`, and since 1.9.0 `chain_cnf`, §2.1); `no_trust_anchor` (`x5c_header`, no anchor given); `chain_unresolved` (the chain does not reach the anchor given: not resolved in the relying party's material, not a defect of the input); `instrument_failure`; `not_present` |
 
 An artifact that is an error is stated once, in `sealed_content` (`artifact_invalid`); `holder_binding` and
 `issuer_identity` are stated over the artifacts that are not errors, and say `not_present` with a `detail` when none is.

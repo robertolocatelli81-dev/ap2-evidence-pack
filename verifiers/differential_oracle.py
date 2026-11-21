@@ -230,6 +230,7 @@ def run(cmd, path, flags):
         out = subprocess.run(list(cmd) + [path] + flags, capture_output=True, text=True, timeout=120)
         r = json.loads(out.stdout); prod = r.get("producer_signatures") or {}; ts = r.get("rfc3161") or {}
         leaves = tuple(tuple((a.get("x5c_leaf") or {}).get(f) for f in ("subject", "issuer", "serial", "not_valid_before", "not_valid_after", "sha256"))
+                       + (json.dumps((a.get("x5c_leaf") or {}).get("key_purpose"), sort_keys=True),)   # 1.9.1 — SPEC §6 step 7
                        for a in (r.get("artifacts") or []) if a.get("x5c_leaf"))   # identity only: chain_verified is the declared divergence, compared at top level
         st = r.get("states")   # 1.6.0 — SPEC §6.9: admission, refusal_class, every subject's state and reasons (not `detail`, free text), policy
         new = (r.get("admission"), r.get("refusal_class"),

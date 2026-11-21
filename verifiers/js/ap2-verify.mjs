@@ -384,7 +384,8 @@ function checkProvenance(pc, parsed, key) {   // returns: is this key SELF-ASSER
     const isoZ = (t) => new Date(t).toISOString().replace(/\.\d{3}Z$/, "Z");
     ident = { subject: rfc4514(cert.subject), issuer: rfc4514(cert.issuer), serial: cert.serialNumber.toLowerCase().replace(/^0+/, ""),
               not_valid_before: isoZ(cert.validFrom), not_valid_after: isoZ(cert.validTo),
-              sha256: createHash("sha256").update(der).digest("hex"), chain_verified: null };
+              sha256: createHash("sha256").update(der).digest("hex"), chain_verified: null,
+              key_purpose: leafKeyPurpose(der) };   // 1.9.1 — SPEC §6 step 7: reported here too; this verifier never clears the flag
   } catch (e) { throw new Refused("provenance_class x5c_header but the x5c leaf is unusable"); }
   if (["kty", "crv", "x", "y"].some((f) => leaf[f] !== jwk[f])) throw new Refused("provenance_class x5c_header but the x5c leaf key differs from the snapshotted jwk");
   // r8: r7 read "issued by someone else" off `subject !== issuer` — two DN strings the forger writes himself (a leaf
@@ -503,6 +504,49 @@ function derTLV(buf, off) { if (off + 2 > buf.length) throw new Refused("der"); 
   if (len & 0x80) { const n = len & 0x7f; if (n === 0 || n > 4 || off + 2 + n > buf.length) throw new Refused("der len"); len = 0; for (let k = 0; k < n; k++) len = len * 256 + buf[off + 2 + k]; hl = 2 + n; }   // r3: `<<` is int32 — 0x84 80 00 00 00 went negative and passed the overrun check
   if (off + hl + len > buf.length) throw new Refused("der overrun"); return { tag, start: off + hl, end: off + hl + len, next: off + hl + len }; }
 function derChildren(buf, tlv) { const out = []; let o = tlv.start; while (o < tlv.end) { const c = derTLV(buf, o); out.push(c); o = c.next; } return out; }
+// 1.9.1 — SPEC §6 step 7: whether an x5c leaf was issued for signing, the same rule and the same object as the reference's
+// leaf_key_purpose. keyUsage (RFC 5280 §4.2.1.3): digitalSignature (bit 0) or nonRepudiation / contentCommitment (bit 1);
+// extendedKeyUsage (§4.2.1.12): one of a closed list, this format's choice — anyExtendedKeyUsage, id-kp-documentSigning
+// (RFC 9336). Both absent: signing. OBJECT IDENTIFIER contents compared byte for byte.
+const ID_CE_KEY_USAGE = "551d0f", ID_CE_EXT_KEY_USAGE = "551d25";
+const SIGNING_EKUS = ["551d2500", "2b06010505070324"];   // 2.5.29.37.0 anyExtendedKeyUsage; 1.3.6.1.5.5.7.3.36 id-kp-documentSigning
+function oidOk(c) {   // X.690 §8.19.2: last octet of each sub-identifier with bit 8 clear, none starting with 0x80
+  if (!c.length || c[c.length - 1] & 0x80) return false;
+  let start = true; for (const b of c) { if (start && b === 0x80) return false; start = !(b & 0x80); } return true; }
+export function leafKeyPurpose(der) {
+  const no = (reason) => ({ signing: false, reason });
+  const found = new Map();
+  try {
+    const cert = derTLV(der, 0); if (cert.tag !== 0x30) return no("extensions_unreadable");
+    const tbs = derChildren(der, cert)[0]; if (!tbs || tbs.tag !== 0x30) return no("extensions_unreadable");
+    const exts = derChildren(der, tbs).filter((c) => c.tag === 0xa3);
+    if (exts.length > 1) return no("extensions_unreadable");
+    if (exts.length) {
+      const inner = derChildren(der, exts[0]); if (inner.length !== 1 || inner[0].tag !== 0x30) return no("extensions_unreadable");
+      for (const ext of derChildren(der, inner[0])) {
+        const parts = ext.tag === 0x30 ? derChildren(der, ext) : [];
+        if (!(parts.length >= 2 && parts.length <= 3 && parts[0].tag === 0x06 && parts[parts.length - 1].tag === 0x04 && (parts.length === 2 || parts[1].tag === 0x01))) return no("extensions_unreadable");
+        const oid = der.subarray(parts[0].start, parts[0].end).toString("hex");
+        if (oid === ID_CE_KEY_USAGE || oid === ID_CE_EXT_KEY_USAGE) {
+          if (found.has(oid)) return no("duplicate_extension");   // RFC 5280 §4.2: not more than one instance of a particular extension
+          const v = parts[parts.length - 1]; found.set(oid, der.subarray(v.start, v.end)); } } }
+  } catch { return no("extensions_unreadable"); }
+  const ku = found.get(ID_CE_KEY_USAGE);
+  if (ku !== undefined) {
+    let t; try { t = derTLV(ku, 0); } catch { return no("key_usage_malformed"); }
+    const bits = ku.subarray(t.start, t.end);
+    if (t.tag !== 0x03 || t.end !== ku.length || !bits.length || bits[0] > 7 || (bits.length === 1 && bits[0] !== 0)
+        || (bits.length > 1 && (bits[bits.length - 1] & ((1 << bits[0]) - 1)))) return no("key_usage_malformed");
+    if (bits.length < 2 || !(bits[1] & 0xc0)) return no("key_usage_not_signing");   // digitalSignature 0x80, nonRepudiation 0x40
+  }
+  const eku = found.get(ID_CE_EXT_KEY_USAGE);
+  if (eku !== undefined) {
+    let ids = null; try { const t = derTLV(eku, 0); if (t.tag === 0x30 && t.end === eku.length) ids = derChildren(eku, t); } catch { ids = null; }
+    if (!ids || !ids.length || ids.some((c) => c.tag !== 0x06 || !oidOk(eku.subarray(c.start, c.end)))) return no("extended_key_usage_malformed");   // SEQUENCE SIZE (1..MAX) OF KeyPurposeId
+    if (!ids.some((c) => SIGNING_EKUS.includes(eku.subarray(c.start, c.end).toString("hex")))) return no("extended_key_usage_not_signing");
+  }
+  return { signing: true, reason: null };
+}
 function verifyRfc3161(tsrB64, expectedDigestHex) {
   // r11: granted null = no status was read (the bytes never decoded), not "the TSA refused" — a value the receipt never measured
   const raw = b64Strict(tsrB64); if (!raw) return { verified: false, granted: null, imprint_ok: null, gen_time: null, note: "tsr_b64 is not canonical base64" };   // r11: null = never read
