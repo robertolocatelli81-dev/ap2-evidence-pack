@@ -150,6 +150,7 @@ def _no_dup_pairs(pairs):
 # JSON implementation is refused, so a third-party verifier computes the same canonical bytes or refuses the same file.
 MAX_JSON_DEPTH = 512
 MAX_EVIDENCE_BYTES = 64 << 20
+MAX_TSA_REPLY_BYTES = 1 << 20   # 1.9.1: an RFC 3161 reply read by stamp/build --tsa-url, as the 1 MiB of a JWKS
 _SAFE_INT = (1 << 53) - 1
 
 
@@ -1399,7 +1400,10 @@ def _rfc3161_stamp(digest_hex: str, tsa_url: str, timeout: int = 20) -> Dict:
         http = urllib.request.Request(tsa_url, data=req, method="POST",
                                       headers={"Content-Type": "application/timestamp-query"})
         with urllib.request.urlopen(http, timeout=timeout) as rh:
-            resp = rh.read()
+            resp = rh.read(MAX_TSA_REPLY_BYTES + 1)   # 1.9.1: bounded, as the JWKS fetch is (up to 1.9.0 read whole: measured
+        if len(resp) > MAX_TSA_REPLY_BYTES:          # 2026-11-20, an 8 MiB reply was read to the last byte)
+            return {"anchored": False, "tsa_url": tsa_url,
+                    "note": f"TSA reply larger than {MAX_TSA_REPLY_BYTES} bytes: not read further, not anchored"}
         # anchored only on a token whose imprint is THIS digest (2026-10-03: any HTTP body — an error page, a rejection, a token
         # for another digest — was recorded as anchored: True)
         try:     # the DER walk reads an imprint even from a non-granted reply carrying a token: both checks are needed

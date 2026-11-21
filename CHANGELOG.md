@@ -14,7 +14,9 @@ test added fails on v1.9.0.
   subjectKeyIdentifier) openssl ran outside `_run_openssl`: an openssl killed by a signal in `cms -verify` or in
   `verify`, or one giving no answer within 30 s, made `tsa_verified` `false`. It is now `null`, a check not run here,
   with the reason in `tsa_note`, as on the `openssl ts -verify` path. A refusal of openssl stays `false`.
-  `test_ap2_openssl_not_run_tsa.py`: 5 tests.
+- `stamp` and `build --tsa-url` read the TSA reply whole: an 8 MiB reply was read to the last byte. At most
+  1 MiB + 1 byte is now read (`MAX_TSA_REPLY_BYTES`, the bound the JWKS fetch already had) and a larger reply is not
+  anchored, with a note. `test_ap2_openssl_not_run_tsa.py`: 8 tests.
 
 ## 1.9.0 — 2026-11-20 — AP2 chains in their native form; receipts bound to the closed mandate; a binding policy; false greens closed
 
