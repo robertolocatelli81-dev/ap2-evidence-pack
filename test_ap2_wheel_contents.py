@@ -5,7 +5,11 @@
 from an installed wheel. Measured on 2026-11-17: the 1.7.3 wheel on PyPI (sha256 109227df…) shipped
 ap2_pqcrypto/test_acvp_mldsa65.py without its vectors file (FileNotFoundError when run installed; the signature suite
 registered ML-DSA-65 all the same). Builds the wheel from a copy of the tracked files (needs the `build` and
-`setuptools` modules, else skipped); positive control: the same build without the package-data table lacks the file."""
+`setuptools` modules and a git work tree, else skipped); positive control: the same build without the package-data table
+lacks the file. 1.9.1: the work tree is asked of git (`rev-parse --is-inside-work-tree`) — measured 2026-11-21, on a
+`git archive` with `build` installed both tests ERRORED (`git ls-files` exit 128) instead of skipping; and ci.yml runs this
+file on the checkout after installing `build` and `setuptools`, so the positive control runs in CI (before, the jobs that
+run the suites have no `build` module and the file was skipped everywhere)."""
 import os
 import shutil
 import subprocess
@@ -50,7 +54,14 @@ def build_wheel(td, drop_package_data=False):
     return os.path.join(out, [n for n in os.listdir(out) if n.endswith(".whl")][0])
 
 
-@unittest.skipUnless(_can_build() and shutil.which("git"), "needs the build and setuptools modules, and git")
+def _in_work_tree():
+    if not shutil.which("git"):
+        return False
+    r = subprocess.run(["git", "-C", ROOT, "rev-parse", "--is-inside-work-tree"], capture_output=True, text=True)
+    return r.returncode == 0 and r.stdout.strip() == "true"
+
+
+@unittest.skipUnless(_can_build() and _in_work_tree(), "needs the build and setuptools modules, and a git work tree")
 class WheelContents(unittest.TestCase):
     def test_vectors_in_the_wheel_and_the_installed_test_passes(self):
         with tempfile.TemporaryDirectory() as td:

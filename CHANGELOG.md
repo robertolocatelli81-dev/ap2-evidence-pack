@@ -84,6 +84,12 @@ openssl staying `false`), which pass on both.
   only, under `trust_anchor` the CA that issued it — `valid`, `issuer_identity` `contradicted /
   key_purpose_not_signing`, `self_asserted_only` true; it needs openssl (the JS verifier reports it SKIP). On 2e2556b,
   before the rule: `verified / ca_certified`, `self_asserted_only` false, measured 2026-11-21. Fifty-nine vectors.
+- CI and `test_ap2_wheel_contents.py`: the file asks git for a work tree (`rev-parse --is-inside-work-tree`) before it
+  builds, and ci.yml runs it on the checkout after installing `build` and `setuptools`, failing if it skips. Up to 1.9.0
+  its positive control (a wheel built without the package-data table lacks the ACVP vectors) ran in no job: where the
+  suites run there is no `build` module, so the file skipped; and on a `git archive` with `build` present both tests
+  errored (`git ls-files` exit 128) instead of skipping, measured 2026-11-21. Now: on the work tree with `build` and
+  setuptools 84.2.1, OK (both tests ran); on a `git archive` with `build`, skipped; without `build`, skipped.
 
 ## 1.9.0 — 2026-11-20 — AP2 chains in their native form; receipts bound to the closed mandate; a binding policy; false greens closed
 
