@@ -414,6 +414,7 @@ class Identity(unittest.TestCase):
         cases = [
             (_name_value(0x0C, ' #a,b+c"d\\e<f>g;h='.encode()), "CN=\\ #a\\,b\\+c\\\"d\\\\e\\<f\\>g\\;h="),
             (_name_value(0x0C, b"a\nb\x7f "), "CN=a\\0Ab\\7F\\ "),
+            (_name_value(0x0C, b"#a#"), "CN=\\#a#"),   # a leading `#` only (RFC 4514 §2.4)
             (_name_value(0x1E, "Zo\u00eb".encode("utf-16-be")), "CN=Zo\u00eb"),
             (_name_value(0x1C, "\U0001F600".encode("utf-32-be")), "CN=\U0001F600"),
             (_rdn((bytes.fromhex("2a864886f70d010901"), [0x16, b"a@b.example"])), "emailAddress=a@b.example"),
@@ -453,7 +454,8 @@ class Identity(unittest.TestCase):
         ders = [leaf(multi), mutate(leaf(), _name_value(0x0C, ' #a,b+c"d\\e<f>g;h\n\x7f '.encode())),
                 mutate(leaf(), _name_value(0x1E, "Zo\u00eb".encode("utf-16-be"))), mutate(leaf(), _name_value(0x1C, "\U0001F600".encode("utf-32-be"))),
                 mutate(leaf(), _rdn((bytes.fromhex("550461"), [0x0C, b"VATIT-123"]))), mutate(leaf(), lambda t: node(t, TBS + (5,)).__setitem__(1, [])),
-                mutate(leaf(), _spki_point(b"\x04" + b"\x00" * 63 + b"\x01")), mutate(leaf(), _set(TBS + (1,), value=b"\x00\xff"))]
+                mutate(leaf(), _spki_point(b"\x04" + b"\x00" * 63 + b"\x01")), mutate(leaf(), _set(TBS + (1,), value=b"\x00\xff")),
+                mutate(leaf(), _name_value(0x0C, b"#a#")), mutate(leaf(), _validity(b"491231235959Z")), mutate(leaf(), _validity(b"500101000000Z"))]
         p = subprocess.run([NODE, "--input-type=module", "-e", _JS_CERT % json.dumps("file://" + quote(JS))],
                            input=json.dumps([d.hex() for d in ders]), capture_output=True, text=True, timeout=600)
         self.assertEqual(json.loads(p.stdout), [_py_cert(d) for d in ders])
