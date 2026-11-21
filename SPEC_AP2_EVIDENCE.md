@@ -253,6 +253,13 @@ in both. The rules are those of ITU-T X.690 (02/2021, in force with its Erratum 
   restricted character string types, the constructed form of encoding shall not be used"), SEQUENCE and SET in the
   constructed form, and the context tags `[0]` to `[3]` constructed and `[1]`, `[2]` primitive of RFC 5280 §4.1 (`rule`:
   `length`, `tag`);
+- nesting: no element inside more than sixteen constructed elements — `depth`. X.690 sets no bound: this one is a choice
+  of this format. The deepest element RFC 5280 §4.1 puts outside an extension value is inside seven (the hash of the
+  mask generation function in RSASSA-PSS parameters); measured 2026-11-21, five at most in the 148 certificates of the
+  system store and in the 32 of the TLS chains of ten public sites read for this measure. Measured the same day without the bound: a signature
+  AlgorithmIdentifier whose parameter is 1500 empty SEQUENCEs one inside the other — DER by every other rule, `valid:
+  true` in both verifiers on 1.9.0 — was `valid: true` for the JS verifier and an artifact error for the reference,
+  whose walk ended in a RecursionError;
 - BOOLEAN: one octet, `00` or `FF` (§8.2.1, §11.1) — `boolean`; INTEGER: one or more octets, the first nine bits not all
   ones nor all zero (§8.3.2) — `integer`; NULL: no contents — `null`; OBJECT IDENTIFIER: every subidentifier in the
   fewest octets, the last octet of each with bit 8 clear (§8.19.2) — `oid`; BIT STRING: the unused-bits octet 0 to 7, 0
@@ -281,6 +288,31 @@ in both. The rules are those of ITU-T X.690 (02/2021, in force with its Erratum 
 Not read by this walk: the contents of an OCTET STRING (an extension value: keyUsage and extendedKeyUsage are read by §6
 step 7, which also applies X.690 §11.2.2 to it) and of a BIT STRING (the public key, the signature). Up to 1.9.0 each verifier left the question to its library:
 cryptography (strict DER) for the reference, node:crypto (OpenSSL, which reads BER) for the JS verifier.
+
+What this walk does not decide, and 1.10.0 still leaves to the two libraries. Measured 2026-11-21 with a generator that
+changes the ASN.1 tree of five leaves — the tag or the contents of an element, a child added, removed, repeated or
+swapped — and writes it back with minimal lengths (12 000 changes and the five leaves as they are, seeds 1 to 3, each
+leaf given to the function of each verifier that reads the x5c leaf of a key): 989 leaves that pass the walk are a
+certificate for one verifier only, and 569 more are accepted by both with a different `x5c_leaf` — one of the five
+leaves as it is among them, its subject a multi-valued RDN with an emailAddress.
+- One verifier only: the parameters of an AlgorithmIdentifier, which cryptography reads by the type of each algorithm it
+  knows and node:crypto does not read (a signature `ecdsa-with-SHA256` followed by NULL: that artifact's error for the
+  reference, `valid: true` for the JS verifier); an empty RelativeDistinguishedName, one that holds the same
+  AttributeTypeAndValue twice, a TeletexString with an octet above `7F` (cryptography 50.0.2 refuses them when the name
+  is read); a BMPString with a surrogate pair (that artifact's error for the JS verifier on node 22.23.2, accepted by
+  the reference); a GeneralizedTime of year 0000 (the reference cannot write it as a date).
+- A different `x5c_leaf`: `subject` or `issuer` — the values of a multi-valued RDN joined by `+` (reference) or ` + `
+  (JS verifier); an attribute type outside CN, L, ST, O, OU, C, STREET, DC and UID, dotted by cryptography and named by
+  OpenSSL (`1.2.840.113549.1.9.1=` and `emailAddress=`: 6 of 175 real certificates — the 174 distinct ones of the system
+  store and of the TLS chains of ten public sites, and AP2's sample signer certificate — carry such a type in the
+  subject or the issuer, `organizationIdentifier`, `serialNumber` or `emailAddress` among them); a line feed in a value, as it is or `\0A`; an empty name,
+  `""` or `"undefined"` — and `not_valid_before` or `not_valid_after` for a GeneralizedTime before year 1000 (`1-01-01`
+  and `2001-01-01` for year 0001).
+Each of them is in 1.9.0 too (measured on v1.9.0 the same day) and none is in a vector of §7; a relying party that needs
+one answer from both verifiers on such a leaf does not have it yet. The JS verifier also refuses, before node:crypto is
+asked for the key, a subjectPublicKey of less than two octets: on a key that is the point at infinity (BIT STRING `00
+00`) node:crypto 22.23.2 aborts the process instead of throwing (measured on 1.9.0 the same day: no receipt from the JS
+verifier, that artifact's error from the reference); a node:crypto that aborts on another input is not excluded by this.
 
 ### 2.1 AP2 delegation chains (NORMATIVE, 1.9.0)
 
@@ -1019,7 +1051,11 @@ receipts of `producer_backend_missing` and two of `issuer_x5c_chain_broken` unde
 `issuer_x5c_chain_broken` under a pinned producer set that failed it up to 1.9.0 (7 on 1.9.0, measured the same day) are
 not `valid` since 1.10.0 (a pinned set without a producer block, §6 step 6), as both equations say. Measured on 2026-11-21 on the
 code of 0af8737, with the vector `issuer_x5c_key_purpose_not_signing` added: 6 314 files, 25 349 receipts, 0 violations,
-the same 5 failures of the pre-registered equation.
+the same 5 failures of the pre-registered equation. In that run the vector was never under its trust anchor, so no
+receipt carried `key_purpose_not_signing` (a derivation that ignores the key purpose left the run at 0 violations,
+measured the same day). With the vector also run under `issuer_purpose_ca.crt` and under `issuer_other_ca.crt`: 6 316
+files, 25 357 receipts, 0 violations, 7 failures of the pre-registered equation — the two more are that vector under
+its anchor, `valid` with `issuer_identity` contradicted — and the derivation that ignores the key purpose is 4 violations.
 
 **What no state can say.** A producer block that was removed and one that was never added give the same digest and
 the same states (`producer_signature: not_evaluated`, `not_present`): only the SHA-256 of the whole file, or

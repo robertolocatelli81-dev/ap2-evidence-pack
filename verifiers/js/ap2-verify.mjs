@@ -373,8 +373,9 @@ function checkProvenance(pc, parsed, key) {   // returns: is this key SELF-ASSER
   let leaf, ident;
   try {
     const der = b64Strict(x5c[0]); if (!der) throw new Error("leaf not base64");
-    const cert = new X509Certificate(der); if (!Buffer.from(cert.raw).equals(der)) throw new Error("bytes after the certificate"); { const why = x5cLeafDerProblem(der); if (why) throw new Error("x5c leaf is not DER: " + why); }   // 1.10.0 — SPEC §2 (d)   // 1.7.3: node:crypto parses a DER certificate followed by more bytes; the reference (strict DER) refuses it
-    leaf = createPublicKey({ key: cert.publicKey.export({ format: "jwk" }), format: "jwk" }).export({ format: "jwk" });
+    { const why = x5cLeafDerProblem(der); if (why) throw new Error("x5c leaf is not DER: " + why); }   // 1.10.0 — SPEC §2 (d): the walk first, then the library
+    const cert = new X509Certificate(der); if (!Buffer.from(cert.raw).equals(der)) throw new Error("bytes after the certificate");   // 1.7.3: node:crypto parses a DER certificate followed by more bytes; the reference (strict DER) refuses it
+    leaf = leafJwk(cert, der);
     // r9: the receipt names WHO the certificate was issued to — a cleared flag means "a CA under your anchor certified this key",
     // never "the key belongs to the mandate's issuer", and an auditor cannot tell CN=the-bank from CN=attacker without this
     // r10: RFC 4514 (most specific RDN first, comma-separated) in both verifiers — Node renders a DN as OpenSSL multi-line
@@ -410,8 +411,9 @@ function reconcileUnusedHeaderKeys(header, jwk, pc) {
     let leaf;
     try {
       const der = b64Strict(x5c[0]); if (!der) throw new Error("leaf not base64");
-      const cert = new X509Certificate(der); if (!Buffer.from(cert.raw).equals(der)) throw new Error("bytes after the certificate"); { const why = x5cLeafDerProblem(der); if (why) throw new Error("x5c leaf is not DER: " + why); }   // 1.10.0 — SPEC §2 (d)   // as in checkProvenance
-      leaf = createPublicKey({ key: cert.publicKey.export({ format: "jwk" }), format: "jwk" }).export({ format: "jwk" });
+      { const why = x5cLeafDerProblem(der); if (why) throw new Error("x5c leaf is not DER: " + why); }   // 1.10.0 — SPEC §2 (d): the walk first, then the library
+      const cert = new X509Certificate(der); if (!Buffer.from(cert.raw).equals(der)) throw new Error("bytes after the certificate");   // as in checkProvenance
+      leaf = leafJwk(cert, der);
     } catch (e) { throw new Refused("the header x5c leaf is unusable" + leafWhy(e) + " (SPEC §2 (d), RFC 7515 §4.1.6)"); }
     if (!sameKey(leaf, jwk)) throw new Refused("the header x5c leaf names another key than the one the artifact verifies under (SPEC §2 (d), RFC 7515 §4.1.6)");
   }
@@ -528,6 +530,7 @@ const LEAF_CONSTRUCTED = new Set([0x30, 0x31, 0xa0, 0xa1, 0xa2, 0xa3]);
 const ATTRIBUTE_VALUE = new Set([0x0c, 0x13, 0x14, 0x16, 0x1c, 0x1e]);
 const PRINTABLE = new Set(Buffer.from("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 '()+,-./:=?", "latin1"));
 const NUMERIC = new Set(Buffer.from("0123456789 ", "latin1"));
+const LEAF_MAX_DEPTH = 16;   // SPEC §2 (d), `depth`: no element inside more than 16 constructed elements — the reference's _LEAF_MAX_DEPTH
 class NotDer extends Error { constructor(rule) { super(rule); this.rule = rule; } }
 function derTimeOk(c, utc) {
   const n = utc ? 12 : 14;
@@ -561,12 +564,13 @@ function derSetOrderOk(buf, kids) {   // X.690 §11.6: ascending, the shorter pa
     if (Buffer.compare(a, b) > 0) return false; }
   return true;
 }
-function derWalk(buf, start, end) {
+function derWalk(buf, start, end, depth = 0) {
   const out = []; let o = start;
   while (o < end) {
+    if (depth > LEAF_MAX_DEPTH) throw new NotDer("depth");
     if ((buf[o] & 0x1f) === 0x1f) throw new NotDer("tag");
     let t; try { t = derStrictTLV(buf, o, end); } catch { throw new NotDer("length"); }
-    if (LEAF_CONSTRUCTED.has(t.tag)) { const kids = derWalk(buf, t.start, t.end); if (t.tag === 0x31 && !derSetOrderOk(buf, kids)) throw new NotDer("set_order"); }
+    if (LEAF_CONSTRUCTED.has(t.tag)) { const kids = derWalk(buf, t.start, t.end, depth + 1); if (t.tag === 0x31 && !derSetOrderOk(buf, kids)) throw new NotDer("set_order"); }
     else if (LEAF_PRIMITIVE.has(t.tag)) { const why = derPrimitiveOk(t.tag, buf.subarray(t.start, t.end)); if (why) throw new NotDer(why); }
     else throw new NotDer("tag");
     out.push({ tag: t.tag, start: t.start, end: t.end, at: o }); o = t.end;
@@ -594,6 +598,17 @@ function x5cLeafShape(buf) {
     for (const ext of derWalk(buf, inner[0].start, inner[0].end)) { const parts = ext.tag === 0x30 ? derWalk(buf, ext.start, ext.end) : [];
       const shape = parts.map((p) => p.tag).join(); if (shape !== "6,4" && shape !== "6,1,4") throw new NotDer("extension");
       if (parts.length === 3 && !(parts[1].end - parts[1].start === 1 && buf[parts[1].start] === 0xff)) throw new NotDer("extension"); } }   // critical FALSE is the DEFAULT (X.690 §11.5)
+}
+// The JWK of the leaf's key. node:crypto 22.23.2 does not throw on an EC subjectPublicKey that is the point at infinity
+// (BIT STRING `00 00`): `publicKey.export({ format: "jwk" })` aborts the process (ExportJWKEcKey, "Assertion failed:
+// (ec) != nullptr", SIGABRT) — measured 2026-11-21 on 1.9.0 and on this branch, a pack with such a leaf got no receipt
+// from this verifier (the reference: that artifact's error). Less than two octets is a key under no algorithm: refused here,
+// before node:crypto is asked. Called after x5cLeafDerProblem, which fixes the shape read below.
+function leafJwk(cert, der) {
+  const top = derStrictChildren(der, derStrictTLV(der, 0, der.length)), tbs = derStrictChildren(der, top[0]);
+  const bits = derStrictChildren(der, tbs[tbs[0].tag === 0xa0 ? 6 : 5])[1];
+  if (bits.end - bits.start < 3) throw new Error("x5c leaf public key of less than two octets");
+  return createPublicKey({ key: cert.publicKey.export({ format: "jwk" }), format: "jwk" }).export({ format: "jwk" });
 }
 // the rule of SPEC §2 (d) in an artifact's error, as the reference writes it (1.10.0)
 const leafWhy = (e) => (e instanceof Error && e.message.startsWith("x5c leaf is not DER: ") ? ": " + e.message : "");

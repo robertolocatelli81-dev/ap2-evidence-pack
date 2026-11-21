@@ -6,8 +6,10 @@ from an installed wheel. Measured on 2026-11-17: the 1.7.3 wheel on PyPI (sha256
 ap2_pqcrypto/test_acvp_mldsa65.py without its vectors file (FileNotFoundError when run installed; the signature suite
 registered ML-DSA-65 all the same). Builds the wheel from a copy of the tracked files (needs the `build` and
 `setuptools` modules and a git work tree, else skipped); positive control: the same build without the package-data table
-lacks the file. 1.10.0: the work tree is asked of git (`rev-parse --is-inside-work-tree`) — measured 2026-11-21, on a
-`git archive` with `build` installed both tests ERRORED (`git ls-files` exit 128) instead of skipping; and ci.yml runs this
+lacks the file. 1.10.0: git is asked whether it tracks this tree (`ls-files --error-unmatch pyproject.toml`) — measured
+2026-11-21, on a `git archive` with `build` installed both tests ERRORED (`git ls-files` exit 128) instead of skipping, and
+with `rev-parse --is-inside-work-tree` they still errored on an archive unpacked, untracked, inside the work tree of
+another repository; and ci.yml runs this
 file on the checkout after installing `build` and `setuptools`, so the positive control runs in CI (before, the jobs that
 run the suites have no `build` module and the file was skipped everywhere)."""
 import os
@@ -55,13 +57,32 @@ def build_wheel(td, drop_package_data=False):
 
 
 def _in_work_tree():
+    """git tracks this tree: not an archive, and not an archive unpacked inside another repository's work tree."""
     if not shutil.which("git"):
         return False
-    r = subprocess.run(["git", "-C", ROOT, "rev-parse", "--is-inside-work-tree"], capture_output=True, text=True)
-    return r.returncode == 0 and r.stdout.strip() == "true"
+    r = subprocess.run(["git", "-C", ROOT, "ls-files", "--error-unmatch", "pyproject.toml"], capture_output=True, text=True)
+    return r.returncode == 0
 
 
-@unittest.skipUnless(_can_build() and _in_work_tree(), "needs the build and setuptools modules, and a git work tree")
+@unittest.skipUnless(shutil.which("git"), "git absent")
+class SkipCondition(unittest.TestCase):
+    def test_untracked_copy_inside_another_work_tree_skips(self):
+        """This file and pyproject.toml copied, untracked, into a fresh repository: the two tests below are skipped,
+        with or without `build` (measured 2026-11-21 with `rev-parse --is-inside-work-tree` and `build` installed: both
+        errored, `git ls-files` listing nothing). Control: git tracks the tree this test runs from, or it is an archive."""
+        with tempfile.TemporaryDirectory() as td:
+            subprocess.run(["git", "init", "-q", td], check=True, capture_output=True)
+            sub = os.path.join(td, "unpacked")
+            os.makedirs(sub)
+            for f in (os.path.basename(__file__), "pyproject.toml"):
+                shutil.copy2(os.path.join(ROOT, f), os.path.join(sub, f))
+            r = subprocess.run([sys.executable, "-B", os.path.basename(__file__), "WheelContents"], cwd=sub,
+                               capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr[-600:])
+            self.assertIn("OK (skipped=2)", r.stderr)
+
+
+@unittest.skipUnless(_can_build() and _in_work_tree(), "needs the build and setuptools modules, and a git work tree that tracks them")
 class WheelContents(unittest.TestCase):
     def test_vectors_in_the_wheel_and_the_installed_test_passes(self):
         with tempfile.TemporaryDirectory() as td:

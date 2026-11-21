@@ -774,6 +774,11 @@ _LEAF_CONSTRUCTED = frozenset((0x30, 0x31, 0xA0, 0xA1, 0xA2, 0xA3))
 _ATTRIBUTE_VALUE = frozenset((0x0C, 0x13, 0x14, 0x16, 0x1C, 0x1E))
 _PRINTABLE = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 '()+,-./:=?")
 _NUMERIC = frozenset(b"0123456789 ")
+# No element inside more than this many constructed elements (SPEC §2 (d), `depth`). X.690 sets no bound; the deepest
+# element RFC 5280 §4.1 puts outside an extension value is inside 7 (the hash of the mask generation function of
+# RSASSA-PSS parameters). Measured 2026-11-21 without the bound: a signature AlgorithmIdentifier of 1500 nested empty
+# SEQUENCEs, DER by every other rule, was a RecursionError here and a certificate for the JS verifier.
+_LEAF_MAX_DEPTH = 16
 
 
 class _NotDer(Exception):
@@ -837,11 +842,13 @@ def _der_set_order_ok(buf: bytes, kids) -> bool:
     return True
 
 
-def _der_walk(buf: bytes, start: int, end: int):
+def _der_walk(buf: bytes, start: int, end: int, depth: int = 0):
     """The children of [start, end) as (tag, contents start, end, element start), each checked by the rules of SPEC
-    §2 (d); a constructed child is walked too."""
+    §2 (d); a constructed child is walked too. `depth`: the constructed elements these children are inside."""
     out, o = [], start
     while o < end:
+        if depth > _LEAF_MAX_DEPTH:
+            raise _NotDer("depth")
         if buf[o] & 0x1F == 0x1F:
             raise _NotDer("tag")
         try:
@@ -849,7 +856,7 @@ def _der_walk(buf: bytes, start: int, end: int):
         except Ap2EvidenceError:
             raise _NotDer("length") from None
         if t in _LEAF_CONSTRUCTED:
-            kids = _der_walk(buf, s, e)
+            kids = _der_walk(buf, s, e, depth + 1)
             if t == 0x31 and not _der_set_order_ok(buf, kids):
                 raise _NotDer("set_order")
         elif t in _LEAF_PRIMITIVE:
@@ -919,14 +926,14 @@ def _x5c_leaf_shape(buf: bytes) -> None:
 
 def _leaf_why(e: Exception) -> str:
     """The reason a leaf is unusable in an artifact's error: the rule of SPEC §2 (d) when the DER walk refused it (the same
-    text in both verifiers), else the exception's class name, as before 1.9.1."""
+    text in both verifiers), else the exception's class name, as up to 1.9.0."""
     return str(e) if isinstance(e, Ap2EvidenceError) and str(e).startswith("x5c leaf is not DER: ") else type(e).__name__
 
 
 def x5c_leaf_der_problem(der: bytes) -> Optional[str]:
     """1.10.0 (SPEC §2 (d)): None when the leaf is DER with the shape of RFC 5280 §4.1, else the name of the rule broken
-    (length, tag, boolean, integer, null, oid, bit_string, string, time, set_order, tbs, version, serial, extension,
-    attribute_value). The same function in the JS verifier: x5cLeafDerProblem."""
+    (length, tag, depth, boolean, integer, null, oid, bit_string, string, time, set_order, tbs, version, serial,
+    extension, attribute_value). The same function in the JS verifier: x5cLeafDerProblem."""
     try:
         _x5c_leaf_shape(der)
     except _NotDer as e:

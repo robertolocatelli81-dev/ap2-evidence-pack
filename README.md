@@ -326,7 +326,7 @@ from a copy of the reference, 2 520 miss their class (measured 2026-10-18). The 
 `verifiers/states_controls.py` (1.6.0) runs the same corpus through the controls of the states (SPEC §6.9): no
 `contradicted` without a check that ran and failed, no `verified` over a check that did not run, the `valid` equation,
 pinned sets that never create a contradiction — 22 967 receipts, 0 violations (24 651 receipts, 0 violations on
-2026-11-20; 25 349 receipts, 0 violations on 2026-11-21 with the 1.10.0 vectors); each of six deliberately broken rules of
+2026-11-20; 25 357 receipts, 0 violations on 2026-11-21 with the 1.10.0 vectors, the key-purpose one under its trust anchor too); each of six deliberately broken rules of
 the derivation turns it red.
 
 **Differential oracle** (`verifiers/differential_oracle.py`, 22/09/2026): the two verifiers must
@@ -620,7 +620,8 @@ Other people's work this repository uses or learned from, each under its own lic
   `spec/vectors/beacon/`; 15 NIST ACVP ML-DSA-65 sigVer cases in `pqcrypto/vectors/` (generated from NIST's JSON); the ISO 4217 minor units
   of five currencies (facts; no currency list is shipped); the 23 chain and 12 receipt vectors of goodmeta/ap2-conformance
   (Apache-2.0, minted from the AP2 SDK; copied verbatim with their NOTICE into `spec/vectors/ap2_chains/`) and chains
-  emitted with the AP2 SDK (Apache-2.0) in `spec/vectors/ap2_chains/`.
+  emitted with the AP2 SDK (Apache-2.0) in `spec/vectors/ap2_chains/`; the two sample certificates of
+  google-agentic-commerce/AP2 (`code/samples/certs/`, Apache-2.0, copied verbatim) in `spec/vectors/ap2_certs/`.
 - **Independent verifiers used as oracles**: the AP2 Python SDK of google-agentic-commerce/AP2 (Apache-2.0), run by
   `verifiers/sdk_crosscheck.py` from a checkout the user provides; OpenSSL (Apache-2.0) for `--tsa-cert` and
   `--trust-anchor`; pyca/cryptography (Apache-2.0 or BSD-3-Clause) for the signatures.

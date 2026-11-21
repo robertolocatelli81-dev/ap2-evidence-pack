@@ -14,8 +14,13 @@ error for the reference.
 What is measured here:
 - one case per rule, built on a fresh leaf, gives that rule in both verifiers (the same name);
 - a pack whose leaf breaks a rule is that artifact's error in both verifiers (and on 1.9.0 the JS verifier said valid);
-- 1500 generated changes of three leaves: the same answer from the two walks, and a leaf is a certificate for the
-  reference exactly when it is one for the JS verifier;
+- 1500 generated changes of three leaves (octets, bits, and the cases above): the same answer from the two walks, and
+  a leaf is a certificate for the reference exactly when it is one for the JS verifier — on these changes; what the
+  two libraries still decide differently after the walk is listed in SPEC §2 (d) and is not measured here;
+- the bound on nesting (`depth`): sixteen constructed elements pass, seventeen and 1500 do not, in both (without the
+  bound the reference ended in a RecursionError on 1500 and the JS verifier accepted the leaf);
+- a leaf that node:crypto refuses on its own names its rule in the JS receipt too (the walk runs first), and a leaf
+  whose public key is the point at infinity gets a receipt from the JS verifier (node:crypto 22.23.2 aborts on it);
 - controls: three well-formed leaves, and a leaf of each allowed string type, are certificates in both."""
 import base64
 import copy
@@ -171,8 +176,61 @@ def _long_length(der):   # the serial's length written 81 nn (X.690 §10.1)
     return bytes([0x30]) + _len(len(tbs) + len(rest)) + tbs + rest
 
 
+def _nested(n):
+    """A signature AlgorithmIdentifier parameter of `n` SEQUENCEs one inside the other, the innermost empty: that one is
+    inside n - 1 of them and inside Certificate, tbsCertificate and the AlgorithmIdentifier. The algorithm is renamed
+    1.2.3: cryptography types the parameters of the algorithms it knows and refuses any under ecdsa-with-SHA256, a
+    difference between the two libraries this walk does not decide (SPEC §2 (d)). Built with a loop: the tree helpers
+    above recurse."""
+    def f(tree):
+        body = b""
+        for _ in range(n - 1):
+            body = bytes([0x30]) + _len(len(body)) + body
+        alg = node(tree, TBS + (2,))[1]
+        alg[0][1] = b"\x2a\x03"
+        alg.append([0x30, body])
+    return f
+
+
+def _alg_param(param):
+    """One parameter under a signature algorithm renamed 1.2.3 (as in _nested: the libraries agree on an algorithm
+    neither knows)."""
+    def f(tree):
+        alg = node(tree, TBS + (2,))[1]
+        alg[0][1] = b"\x2a\x03"
+        alg.append(copy.deepcopy(param))
+    return f
+
+
+def _sig_unused_bit(tree):   # the signature BIT STRING says one unused bit (and that bit is zero)
+    n = node(tree, (0, 2)); n[1] = b"\x01" + n[1][1:-1] + b"\x00"
+
+
 # (name, base index, function of the DER, expected rule)
 CASES = [
+    # one case for each mutant of the walk that survived the cases below (a second review, 2026-11-21: 30 of 74)
+    ("unique_id_unused_bits_set", 0, lambda d: mutate(d, lambda t: node(t, TBS)[1].insert(7, [0x81, b"\x01\x03"])), "bit_string"),
+    ("printable_at_sign", 0, lambda d: mutate(d, _name_value(0x13, b"a@b")), "string"),
+    ("numeric_letter", 0, lambda d: mutate(d, _alg_param([0x12, b"12a"])), "string"),
+    ("numeric_control", 0, lambda d: mutate(d, _alg_param([0x12, b"12 3"])), None),
+    ("bmp_two_octets_control", 0, lambda d: mutate(d, _name_value(0x1E, b"\x00l")), None),
+    ("universal_six_octets", 0, lambda d: mutate(d, _name_value(0x1C, b"\x00\x00\x00l\x00\x00")), "string"),
+    ("utctime_day_00", 0, lambda d: mutate(d, _validity(b"261100000000Z")), "time"),
+    ("utctime_second_60", 0, lambda d: mutate(d, _validity(b"261121000060Z")), "time"),
+    ("generalized_feb_29_2000_control", 0, lambda d: mutate(d, _validity(b"20000229000000Z", 0x18)), None),
+    ("set_equal_elements_control", 0, lambda d: mutate(d, _alg_param([0x31, [[0x05, b""], [0x05, b""]]])), None),
+    ("spki_three_parts", 0, lambda d: mutate(d, lambda t: node(t, TBS + (6,))[1].append([0x05, b""])), "tbs"),
+    ("signature_unused_bit", 0, lambda d: mutate(d, _sig_unused_bit), "bit_string"),
+    ("validity_three_times", 0, lambda d: mutate(d, lambda t: node(t, TBS + (4,))[1].append([0x17, b"261121000000Z"])), "tbs"),
+    ("atv_three_parts", 0, lambda d: mutate(d, lambda t: node(t, TBS + (5, 0, 0))[1].append([0x0C, b"x"])), "tbs"),
+    ("attribute_numeric_string", 0, lambda d: mutate(d, _name_value(0x12, b"123")), "attribute_value"),
+    ("extensions_two_sequences", 0, lambda d: mutate(d, lambda t: node(t, TBS + (7,))[1].append([0x30, []])), "extension"),
+    ("extension_without_value", 0, lambda d: mutate(d, lambda t: node(t, TBS + (7, 0, 0))[1].pop()), "extension"),
+    ("tag_context_4_constructed", 0, lambda d: mutate(d, _alg_param([0xA4, []])), "tag"),
+    ("tag_visible_string", 0, lambda d: mutate(d, _name_value(0x1A)), "tag"),
+    ("depth_16_control", 0, lambda d: mutate(d, _nested(14)), None),     # the innermost inside 16 constructed elements
+    ("depth_17", 0, lambda d: mutate(d, _nested(15)), "depth"),
+    ("depth_1500", 0, lambda d: mutate(d, _nested(1498)), "depth"),      # a RecursionError in the reference before the bound
     ("boolean_01", 0, lambda d: mutate(d, _crit(b"\x01")), "boolean"),
     ("boolean_two_octets", 0, lambda d: mutate(d, _crit(b"\xff\xff")), "boolean"),
     ("critical_false_encoded", 0, lambda d: mutate(d, _crit(b"\x00")), "extension"),
@@ -342,6 +400,31 @@ class WholePack(unittest.TestCase):
             p = subprocess.run([NODE, JS, path], capture_output=True, text=True, timeout=120)
             js = json.loads(p.stdout); out.append((js["valid"], json.dumps(js["artifacts"])))
         return out
+
+    def test_rule_named_when_the_library_refuses_too(self):
+        """A leaf that breaks a rule AND that node:crypto refuses on its own (an INTEGER with a leading 00, X.690
+        §8.3.2): the rule is named in both receipts. Measured 2026-11-21 on d44ca04, where the JS verifier asked its
+        library first: `...the x5c leaf is unusable`, no rule, while the reference said `x5c leaf is not DER: integer`."""
+        bad = self._both(self._pack(mutate(leaf(), _set(TBS + (1,), value=b"\x00\x01\x23\x45\x67")), "lib_refuses"))
+        self.assertEqual([v for v, _ in bad], [False] * len(bad))
+        for _, arts in bad:
+            self.assertIn("x5c leaf is not DER: integer", arts)
+
+    @unittest.skipUnless(NODE, "node absent: the JS verifier cannot be measured")
+    def test_point_at_infinity_gets_a_receipt_from_js(self):
+        """An EC subjectPublicKey that is the point at infinity (BIT STRING `00 00`): node:crypto 22.23.2 aborts the
+        process when asked for its JWK (measured 2026-11-21 on 1.9.0 and on d44ca04: no receipt, SIGABRT). The JS
+        verifier refuses a public key of less than two octets before asking: exit 1, a receipt, that artifact's
+        error, as the reference. Control: the well-formed leaf through the same assembly is exit 0."""
+        ok = subprocess.run([NODE, JS, self._pack(leaf(), "inf_control")], capture_output=True, text=True, timeout=120)
+        self.assertEqual(ok.returncode, 0, ok.stderr[-500:])
+        path = self._pack(mutate(leaf(), _set(TBS + (6, 1), value=b"\x00\x00")), "inf")
+        p = subprocess.run([NODE, JS, path], capture_output=True, text=True, timeout=120)
+        self.assertEqual(p.returncode, 1, p.stderr[-500:])
+        r = json.loads(p.stdout)
+        self.assertIs(r["valid"], False)
+        self.assertIn("the x5c leaf is unusable", json.dumps(r["artifacts"]))
+        self.assertIs(A.verify_evidence(path)["valid"], False)
 
     def test_controls_and_bad_leaf(self):
         good = leaf()

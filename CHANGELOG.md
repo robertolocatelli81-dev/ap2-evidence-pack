@@ -8,10 +8,11 @@ pack that was `valid` under a pinned producer set without a producer block is no
 was released.
 
 Each item below was reproduced on the tag v1.9.0 (de28c3a) and on v1.8.0 (d5601e4) with a script made for it. Of the
-40 tests added, the 31 that state the new behaviour fail on v1.9.0, as a failure or as an error (a constant or a
-function they read does not exist there; the six of `test_ap2_x5c_leaf_der.py`, its control included, read a function
-that 1.9.0 does not have); the other 9 are the seven controls and the unchanged direction (`build` refusing, a refusal of
-openssl staying `false`), which pass on both.
+42 tests added, the 33 that state the new behaviour fail on v1.9.0, as a failure or as an error (a constant or a
+function they read does not exist there; the eight of `test_ap2_x5c_leaf_der.py`, its control included, read a function
+that 1.9.0 does not have); the other 9 are seven controls (one is the chain of AP2's sample certificate, which this
+version does not change) and the unchanged direction (`build` refusing, a refusal of openssl staying `false`), which
+pass on both. Measured on Python 3.9, 3.11 and 3.13, one result per test method.
 
 - SPEC §6 step 2, both verifiers: the issuer signature is verified only under the `alg` the signed header names, ES256.
   Up to 1.9.0 `verify` checked ES256 whatever the header said (`build` refused it): a pack whose issuer header, signed
@@ -64,24 +65,36 @@ openssl staying `false`), which pass on both.
   of the version INTEGER, a UTF8String retagged, a constructed OCTET STRING, a SET retagged primitive — and 3 for the
   reference only, a UTF8String retagged OCTET STRING or GeneralizedTime. Now both walk the whole leaf
   (`x5c_leaf_der_problem`, `x5cLeafDerProblem`) under ITU-T X.690 (02/2021, in force) and the shape of RFC 5280 §4.1 —
-  one-octet tags from a closed list, minimal definite lengths, BOOLEAN `00`/`FF`, minimal INTEGERs, valid OIDs, BIT
+  one-octet tags from a closed list, minimal definite lengths, at most sixteen constructed elements around an element,
+  BOOLEAN `00`/`FF`, minimal INTEGERs, valid OIDs, BIT
   STRING unused bits, strings in their alphabets, UTCTime and GeneralizedTime as RFC 5280 §4.1.2.5 writes them, SET OF
   in order, the fields of tbsCertificate in order, version v3, a positive serial, `critical` never FALSE, name values of a
   closed list of string types, no unused bit in the public key and the signature — and a leaf that breaks one is that
   artifact's error, `x5c leaf is not DER: <rule>`, the same rule named in both. Measured after, the same day: 0 such
-  differences on those 12 000 cases and on 128 000 more (`fuzz_leaf_der.py`, four seeds of 20 000 over three leaves —
+  differences on those 12 000 cases and on 128 000 more (a generator kept outside this repository, four seeds of 20 000 over three leaves —
   byte, bit, inserted and removed octets, long forms, and changes rebuilt on the tree: tags, BOOLEAN, INTEGER, strings,
   times, version, `critical`, SET order, constructed and primitive forms, OIDs — and the reviewer's generator, four seeds
-  of 12 000); positive control, the same generator with the walk switched off: 956 differences on 3000 cases. Stricter
+  of 12 000); positive control, the same generator with the walk switched off: 956 differences on 3000 cases. Those
+  generators change octets and break rules; one that changes the tree and keeps the lengths minimal (a second review,
+  the same day, 12 000 changes of five leaves) still finds 989 leaves that pass the walk and are a certificate for one verifier
+  only, and 569 accepted by both with a different `x5c_leaf` — what each library decides after the walk: the
+  parameters of an AlgorithmIdentifier, an empty or repeated RDN value, a TeletexString above `7F`, a BMPString with a
+  surrogate pair, a GeneralizedTime of year 0000, and how a name or an early date is written. They are in 1.9.0 too,
+  SPEC §2 (d) lists them, and this release does not close them. Found by that generator and corrected here: the walk
+  of the reference ended in a RecursionError on a leaf with 1500 nested SEQUENCEs that the JS verifier accepted (now
+  `depth` in both); the JS verifier asked node:crypto before the walk, so a leaf refused by both named its rule in the
+  reference only; and node:crypto 22.23.2 aborts the process on a leaf whose public key is the point at infinity (no
+  receipt from the JS verifier, also on 1.9.0), which the JS verifier now refuses before asking. Stricter
   than cryptography 50 by choice (each counted on those runs): a serial that is negative or zero, a PrintableString or
   IA5String outside its alphabet, a time or a name value of a type outside the lists. Real certificates, the same day: the
   33 of the TLS chains of ten public sites pass; of the 148 of the system store, 140 pass and 8 are root CAs whose
   serial is 0. keyUsage also follows X.690 §11.2.2 (trailing 0 bits removed): `03 02 00 80` is now `key_usage_malformed`
   (2 of 170 real certificates with keyUsage break it, two root CAs of one issuer). No vector changes.
-  `test_ap2_x5c_leaf_der.py`: 6 tests (one case per rule in both verifiers, 1500 generated changes, a pack whose leaf
-  has `critical` `01`: `valid: true` for the JS verifier on 1.9.0, an artifact error in both now; an anchor with serial
-  0 that still anchors a chain while a leaf with serial 0 is refused: the serial rule is the leaf's only); all 6 fail on
-  1.9.0.
+  `test_ap2_x5c_leaf_der.py`: 8 tests (one case per rule in both verifiers, 1500 generated changes, a pack whose leaf
+  has `critical` `01`: `valid: true` for the JS verifier on 1.9.0, an artifact error in both now; a leaf that both
+  libraries refuse, its rule named in both receipts; a leaf whose key is the point at infinity, a receipt from the JS
+  verifier; an anchor with serial 0 that still anchors a chain while a leaf with serial 0 is refused: the serial rule is
+  the leaf's only); all 8 fail on 1.9.0.
 - SPEC §6 step 6, §5, §6.9, both verifiers: a pinned producer set (`--trusted-producer-key`, `trusted_producer_keys`)
   implies `require_producer`. Up to 1.9.0 the set was applied only to a block that was present: the producer block
   removed from a pack whose key was pinned gave `valid: true`, `policy.unmet: []`. Now `policy_ok` and `valid` are
@@ -97,12 +110,15 @@ openssl staying `false`), which pass on both.
   only, under `trust_anchor` the CA that issued it — `valid`, `issuer_identity` `contradicted /
   key_purpose_not_signing`, `self_asserted_only` true; it needs openssl (the JS verifier reports it SKIP). On eade795,
   before the rule: `verified / ca_certified`, `self_asserted_only` false, measured 2026-11-21. Fifty-nine vectors.
-- CI and `test_ap2_wheel_contents.py`: the file asks git for a work tree (`rev-parse --is-inside-work-tree`) before it
-  builds, and ci.yml runs it on the checkout after installing `build` and `setuptools`, failing if it skips. Up to 1.9.0
+- CI and `test_ap2_wheel_contents.py`: the file asks git whether it tracks the tree (`ls-files --error-unmatch
+  pyproject.toml`) before it builds, and ci.yml runs it on the checkout after installing `build` and `setuptools`, failing if it skips. Up to 1.9.0
   its positive control (a wheel built without the package-data table lacks the ACVP vectors) ran in no job: where the
   suites run there is no `build` module, so the file skipped; and on a `git archive` with `build` present both tests
   errored (`git ls-files` exit 128) instead of skipping, measured 2026-11-21. Now: on the work tree with `build` and
-  setuptools 84.2.1, OK (both tests ran); on a `git archive` with `build`, skipped; without `build`, skipped.
+  setuptools 84.2.1, OK (no test skipped; also on Python 3.9 with setuptools 79.0.1 and on 3.13); on a `git archive`
+  with `build`, skipped; without `build`, skipped; on an archive unpacked, untracked, inside the work tree of another
+  repository, skipped (with `rev-parse --is-inside-work-tree`, the first form of this check, both tests errored there:
+  a third test of the file measures it).
 
 ## 1.9.0 — 2026-11-20 — AP2 chains in their native form; receipts bound to the closed mandate; a binding policy; false greens closed
 

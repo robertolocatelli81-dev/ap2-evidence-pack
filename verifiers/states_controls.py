@@ -197,8 +197,12 @@ def run(quick=True, py_root=ROOT, old_root=None, sabotage=None, baselines_only=F
             ev["bindings"] = [{"in": ev["artifacts"][0]["name"], "claim": "items[0]", "commits_to": ev["artifacts"][0]["name"], "encoding": "hex"}]
             c.recs.append({"name": f"extra/{name}/wrong-binding", "path": c.write(M.rehash(ev)), "flags": [], "kind": "extra"})
         extra_kw = {}
-        for name in ("issuer_x5c_no_anchor", "issuer_x5c_chain_broken"):
-            for ca in ("issuer_ca.crt", "issuer_other_ca.crt"):
+        # 1.10.0: the key-purpose vector under the CA that issued its leaf (the only input here whose receipt carries
+        # key_purpose_not_signing: without it that reason and its C1/C2 clauses were never reached) and under another CA
+        for name, cas in (("issuer_x5c_no_anchor", ("issuer_ca.crt", "issuer_other_ca.crt")),
+                          ("issuer_x5c_chain_broken", ("issuer_ca.crt", "issuer_other_ca.crt")),
+                          ("issuer_x5c_key_purpose_not_signing", ("issuer_purpose_ca.crt", "issuer_other_ca.crt"))):
+            for ca in cas:
                 nm = f"extra/{name}/trust-anchor-{ca}"
                 c.recs.append({"name": nm, "path": os.path.join(vd, name + ".json"), "flags": [], "kind": "extra"})
                 extra_kw[nm] = {"trust_anchor": os.path.join(vd, ca)}
