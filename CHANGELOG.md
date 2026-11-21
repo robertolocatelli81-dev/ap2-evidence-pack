@@ -8,8 +8,8 @@ pack that was `valid` under a pinned producer set without a producer block is no
 was released.
 
 Each item below was reproduced on the tag v1.9.0 (de28c3a) and on v1.8.0 (d5601e4) with a script made for it. Of the
-42 tests added, the 33 that state the new behaviour fail on v1.9.0, as a failure or as an error (a constant or a
-function they read does not exist there; the eight of `test_ap2_x5c_leaf_der.py`, its control included, read a function
+46 tests added, the 37 that state the new behaviour fail on v1.9.0, as a failure or as an error (a constant or a
+function they read does not exist there; the twelve of `test_ap2_x5c_leaf_der.py`, its controls included, read functions
 that 1.9.0 does not have); the other 9 are seven controls (one is the chain of AP2's sample certificate, which this
 version does not change) and the unchanged direction (`build` refusing, a refusal of openssl staying `false`), which
 pass on both. Measured on Python 3.9, 3.11 and 3.13, one result per test method.
@@ -75,26 +75,43 @@ pass on both. Measured on Python 3.9, 3.11 and 3.13, one result per test method.
   byte, bit, inserted and removed octets, long forms, and changes rebuilt on the tree: tags, BOOLEAN, INTEGER, strings,
   times, version, `critical`, SET order, constructed and primitive forms, OIDs — and the reviewer's generator, four seeds
   of 12 000); positive control, the same generator with the walk switched off: 956 differences on 3000 cases. Those
-  generators change octets and break rules; one that changes the tree and keeps the lengths minimal (a second review,
-  the same day, 12 000 changes of five leaves) still finds 989 leaves that pass the walk and are a certificate for one verifier
-  only, and 569 accepted by both with a different `x5c_leaf` — what each library decides after the walk: the
-  parameters of an AlgorithmIdentifier, an empty or repeated RDN value, a TeletexString above `7F`, a BMPString with a
-  surrogate pair, a GeneralizedTime of year 0000, and how a name or an early date is written. They are in 1.9.0 too,
-  SPEC §2 (d) lists them, and this release does not close them. Found by that generator and corrected here: the walk
-  of the reference ended in a RecursionError on a leaf with 1500 nested SEQUENCEs that the JS verifier accepted (now
-  `depth` in both); the JS verifier asked node:crypto before the walk, so a leaf refused by both named its rule in the
-  reference only; and node:crypto 22.23.2 aborts the process on a leaf whose public key is the point at infinity (no
-  receipt from the JS verifier, also on 1.9.0), which the JS verifier now refuses before asking. Stricter
-  than cryptography 50 by choice (each counted on those runs): a serial that is negative or zero, a PrintableString or
-  IA5String outside its alphabet, a time or a name value of a type outside the lists. Real certificates, the same day: the
-  33 of the TLS chains of ten public sites pass; of the 148 of the system store, 140 pass and 8 are root CAs whose
-  serial is 0. keyUsage also follows X.690 §11.2.2 (trailing 0 bits removed): `03 02 00 80` is now `key_usage_malformed`
+  generators change octets and break rules; the reviewer's structural one, which changes the tree of five leaves and
+  writes it back with minimal lengths, found on d76b66c (the branch before this entry was closed; 12 000 changes, seeds 1
+  to 3) 989 leaves that passed the walk and were a certificate for one verifier only and 569 accepted by both with a
+  different `x5c_leaf`: what each library still decided and wrote after the walk (AlgorithmIdentifier parameters, an
+  empty or repeated RDN value, a TeletexString above `7F`, a BMPString surrogate pair, a GeneralizedTime of year 0000,
+  how a multi-valued RDN, an unknown attribute type, a control character, an empty name or an early date was written),
+  all of it in 1.9.0 too. Closed here: no library reads the leaf any more. Both verifiers read subject, issuer, serial
+  and validity from the walk with the rendering SPEC §2 (d) writes (RFC 4514 §2; short names of RFC 4514 §3 and of the
+  string attribute types of the IANA LDAP Descriptors registry, the others dotted with `#` and the hexadecimal of the
+  value), and ask their library only whether the public key, read from the walk, is a point of P-256. New rules, each a
+  refusal named in both: `name` (an empty RDN, an attribute type twice in an RDN), `algorithm` (the two signature
+  AlgorithmIdentifiers equal and one of ecdsa-with-SHA256/384/512 without parameters, sha256/384/512WithRSAEncryption
+  with NULL or none, Ed25519), `key` (EC P-256, uncompressed point), `string` also for a TeletexString above `7F`, a
+  BMPString surrogate and a UniversalString code point above `10FFFF` or a surrogate, `time` also for a GeneralizedTime
+  before 2050 (RFC 5280 §4.1.2.5). Measured after, 2026-11-21, with the same structural generator (seeds 1 to 4, 16 020
+  leaves): 0 certificates for one verifier only, 0 accepted with a different `x5c_leaf` (on d76b66c, seeds 1 to 3: 989 and
+  569). node:crypto is no longer asked to read the certificate, so it no longer aborts on a key that is the point at
+  infinity: that leaf is `key` in both (the abort, reproduced the same day on node 22.23.2 and 22.23.5, the latest 22,
+  with SIGABRT; node 24.22.3 throws instead). Stricter than cryptography 50 by choice (each counted on those runs): a
+  serial that is negative or zero, a PrintableString or IA5String outside its alphabet, a time or a name value of a type
+  outside the lists, the algorithms and the key form above. Real certificates, the same day (174 distinct: 148 of the
+  system store, 25 of the TLS chains of ten public sites, AP2's sample signer certificate), read as a leaf: 14 pass (4
+  of the store, 9 TLS, AP2's sample); 129 are `key` (RSA and P-384 keys: an ES256 leaf is P-256), 22 `algorithm` (root
+  CAs signed with SHA-1), 8 `serial` (root CAs with serial 0) and 1 `time` (a root CA whose validity is a
+  GeneralizedTime before 2050); the reference and the JS verifier give the same rule and the same names on each.
+  `x5c_leaf` changes on real names, measured on those 174: 6 differ from what cryptography wrote (a dotted type now
+  written `#` and hexadecimal — `2.5.4.97=VATES-…` is now `2.5.4.97=#0c0f…`, `organizationIdentifier` being outside the
+  registry — and `1.2.840.113549.1.9.1=` now `emailAddress=`), 4 from what node:crypto wrote (OpenSSL's names of types
+  outside the registry, now dotted). keyUsage also follows X.690 §11.2.2 (trailing 0 bits removed): `03 02 00 80` is now
+  `key_usage_malformed`
   (2 of 170 real certificates with keyUsage break it, two root CAs of one issuer). No vector changes.
-  `test_ap2_x5c_leaf_der.py`: 8 tests (one case per rule in both verifiers, 1500 generated changes, a pack whose leaf
+  `test_ap2_x5c_leaf_der.py`: 12 tests (one case per rule in both verifiers, 1500 generated changes compared on the
+  whole identity of the leaf, the rendering of names, serials and times in both verifiers, a pack whose leaf
   has `critical` `01`: `valid: true` for the JS verifier on 1.9.0, an artifact error in both now; a leaf that both
   libraries refuse, its rule named in both receipts; a leaf whose key is the point at infinity, a receipt from the JS
   verifier; an anchor with serial 0 that still anchors a chain while a leaf with serial 0 is refused: the serial rule is
-  the leaf's only); all 8 fail on 1.9.0.
+  the leaf's only); all 12 fail on 1.9.0, Python 3.9, 3.11 and 3.13.
 - SPEC §6 step 6, §5, §6.9, both verifiers: a pinned producer set (`--trusted-producer-key`, `trusted_producer_keys`)
   implies `require_producer`. Up to 1.9.0 the set was applied only to a block that was present: the producer block
   removed from a pack whose key was pinned gave `valid: true`, `policy.unmet: []`. Now `policy_ok` and `valid` are

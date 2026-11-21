@@ -242,9 +242,10 @@ unless its policy binds them to that identity"; it does not make them an error);
 of a `jwks_fetched` key (a capture-time fact).
 
 1.10.0, what DER means for the leaf `x5c[0]`, wherever it is read (an `x5c_header` key, an `x5c` beside another key
-source, the key purpose of §6 step 7). Both verifiers walk the whole certificate with the same rules BEFORE handing it to
-their library, and a leaf that breaks one is not a certificate here: that artifact's error, `x5c leaf is not DER: <rule>`,
-in both. The rules are those of ITU-T X.690 (02/2021, in force with its Erratum 1 of 09/2021, read on itu.int on
+source, the key purpose of §6 step 7). Both verifiers walk the whole certificate with the same rules, and a leaf that
+breaks one is not a certificate here: that artifact's error, `x5c leaf is not DER: <rule>`, in both. Since 1.10.0 no
+library reads the leaf: what a receipt says of it (`x5c_leaf`: subject, issuer, serial, validity) is read from the walk
+by the rules below, and the library is asked only whether the public key, read from the walk too, is a point of P-256. The rules are those of ITU-T X.690 (02/2021, in force with its Erratum 1 of 09/2021, read on itu.int on
 2026-11-21) and of RFC 5280 §4.1 for the shape of a certificate:
 - every element: a one-octet tag (no tag number above 30, X.690 §8.1.2.4), the definite length in the fewest octets
   (§10.1), inside its parent, nothing after the certificate; the tags are a closed list — universal BOOLEAN, INTEGER, BIT
@@ -265,9 +266,14 @@ in both. The rules are those of ITU-T X.690 (02/2021, in force with its Erratum 
   fewest octets, the last octet of each with bit 8 clear (§8.19.2) — `oid`; BIT STRING: the unused-bits octet 0 to 7, 0
   when there is no other octet, and the unused bits zero (§11.2.1) — `bit_string`;
 - the character strings: UTF8String valid UTF-8 (no overlong form, no surrogate), PrintableString in `A-Z a-z 0-9`,
-  space and `'()+,-./:=?`, NumericString in `0-9` and space, IA5String in 7 bits, BMPString an even number of octets, UniversalString a multiple of four — `string`; UTCTime
-  `YYMMDDHHMMSSZ` and GeneralizedTime `YYYYMMDDHHMMSSZ`, a date that exists (§11.7, §11.8; RFC 5280 §4.1.2.5 allows no
-  fractional seconds and no other zone) — `time`;
+  space and `'()+,-./:=?`, NumericString in `0-9` and space, IA5String in 7 bits, TeletexString in 7 bits (1.10.0: this
+  format does not read the T.61 repertoire; cryptography 50.0.2 refused an octet above `7F` and node:crypto read it),
+  BMPString an even number of octets and no surrogate code unit `D800`–`DFFF` (1.10.0: BMPString is UCS-2), UniversalString
+  a multiple of four, each code point at most `10FFFF` and not a surrogate — `string`; UTCTime `YYMMDDHHMMSSZ` and
+  GeneralizedTime `YYYYMMDDHHMMSSZ`, a date that exists (§11.7, §11.8; RFC 5280 §4.1.2.5 allows no fractional seconds and
+  no other zone), and since 1.10.0 a GeneralizedTime from year 2050 on (RFC 5280 §4.1.2.5: "CAs conforming to this
+  profile MUST always encode certificate validity dates through the year 2049 as UTCTime") — `time`; a UTCTime `YY` is
+  19YY when `YY` ≥ 50 and 20YY otherwise (the same section);
 - SET OF: the components in ascending order (§11.6) — `set_order`;
 - the shape of RFC 5280 §4.1: Certificate = tbsCertificate, signatureAlgorithm, signature; tbsCertificate = version
   `[0]`, serialNumber, signature, issuer, validity (two times), subject, subjectPublicKeyInfo, then `[1]`, `[2]`, `[3]` in
@@ -284,35 +290,57 @@ in both. The rules are those of ITU-T X.690 (02/2021, in force with its Erratum 
   updated by RFC 8813 only, read the same day) — `bit_string`; an Extension is
   `extnID`, an optional `critical`, `extnValue`, and `critical`, when present, is TRUE (FALSE is the DEFAULT, §11.5) —
   `extension`; an AttributeValue of issuer and subject is a UTF8String, PrintableString, TeletexString, IA5String,
-  UniversalString or BMPString (DirectoryString of RFC 5280 §4.1.2.4 and IA5String of its Appendix A) — `attribute_value`.
+  UniversalString or BMPString (DirectoryString of RFC 5280 §4.1.2.4 and IA5String of its Appendix A) — `attribute_value`;
+  1.10.0: a RelativeDistinguishedName holds at least one AttributeTypeAndValue (`SET SIZE (1..MAX)`, RFC 5280 §4.1.2.4)
+  and no attribute type twice — `name`; the signature AlgorithmIdentifier of tbsCertificate is the same, octet for octet,
+  as signatureAlgorithm (RFC 5280 §4.1.1.2: "This field MUST contain the same algorithm identifier as the signature field
+  in the sequence tbsCertificate") and one of a closed list, with the parameters its specification asks —
+  ecdsa-with-SHA256, -SHA384, -SHA512 with no parameters (RFC 5758 §3.2: "the encoding MUST omit the parameters field"),
+  sha256-, sha384-, sha512WithRSAEncryption with NULL or no parameters (RFC 4055 §5: "the parameters MUST be NULL.
+  Implementations MUST accept the parameters being absent as well as present"), Ed25519 with no parameters (RFC 8410 §3:
+  "the parameters MUST be absent"); RSASSA-PSS, SHA-1 and every other algorithm are refused — `algorithm`; the
+  subjectPublicKeyInfo of the leaf is an EC key on the named curve P-256 with an uncompressed point (`30 59 30 13 06 07
+  2a 86 48 ce 3d 02 01 06 08 2a 86 48 ce 3d 03 01 07 03 42 00 04` and 64 octets: RFC 5480 §2.1.1 namedCurve and §2.2,
+  ES256 only) — `key`. RFC 4514, 4055, 5758, 8410 were read on rfc-editor.org on 2026-11-21 (Proposed Standards, none
+  obsoleted).
 Not read by this walk: the contents of an OCTET STRING (an extension value: keyUsage and extendedKeyUsage are read by §6
 step 7, which also applies X.690 §11.2.2 to it) and of a BIT STRING (the public key, the signature). Up to 1.9.0 each verifier left the question to its library:
 cryptography (strict DER) for the reference, node:crypto (OpenSSL, which reads BER) for the JS verifier.
 
-What this walk does not decide, and 1.10.0 still leaves to the two libraries. Measured 2026-11-21 with a generator that
-changes the ASN.1 tree of five leaves — the tag or the contents of an element, a child added, removed, repeated or
-swapped — and writes it back with minimal lengths (12 000 changes and the five leaves as they are, seeds 1 to 3, each
-leaf given to the function of each verifier that reads the x5c leaf of a key): 989 leaves that pass the walk are a
-certificate for one verifier only, and 569 more are accepted by both with a different `x5c_leaf` — one of the five
-leaves as it is among them, its subject a multi-valued RDN with an emailAddress.
-- One verifier only: the parameters of an AlgorithmIdentifier, which cryptography reads by the type of each algorithm it
-  knows and node:crypto does not read (a signature `ecdsa-with-SHA256` followed by NULL: that artifact's error for the
-  reference, `valid: true` for the JS verifier); an empty RelativeDistinguishedName, one that holds the same
-  AttributeTypeAndValue twice, a TeletexString with an octet above `7F` (cryptography 50.0.2 refuses them when the name
-  is read); a BMPString with a surrogate pair (that artifact's error for the JS verifier on node 22.23.2, accepted by
-  the reference); a GeneralizedTime of year 0000 (the reference cannot write it as a date).
-- A different `x5c_leaf`: `subject` or `issuer` — the values of a multi-valued RDN joined by `+` (reference) or ` + `
-  (JS verifier); an attribute type outside CN, L, ST, O, OU, C, STREET, DC and UID, dotted by cryptography and named by
-  OpenSSL (`1.2.840.113549.1.9.1=` and `emailAddress=`: 6 of 175 real certificates — the 174 distinct ones of the system
-  store and of the TLS chains of ten public sites, and AP2's sample signer certificate — carry such a type in the
-  subject or the issuer, `organizationIdentifier`, `serialNumber` or `emailAddress` among them); a line feed in a value, as it is or `\0A`; an empty name,
-  `""` or `"undefined"` — and `not_valid_before` or `not_valid_after` for a GeneralizedTime before year 1000 (`1-01-01`
-  and `2001-01-01` for year 0001).
-Each of them is in 1.9.0 too (measured on v1.9.0 the same day) and none is in a vector of §7; a relying party that needs
-one answer from both verifiers on such a leaf does not have it yet. The JS verifier also refuses, before node:crypto is
-asked for the key, a subjectPublicKey of less than two octets: on a key that is the point at infinity (BIT STRING `00
-00`) node:crypto 22.23.2 aborts the process instead of throwing (measured on 1.9.0 the same day: no receipt from the JS
-verifier, that artifact's error from the reference); a node:crypto that aborts on another input is not excluded by this.
+1.10.0, what a receipt says of the leaf, read from the walk the same way in both verifiers:
+- `serial`: the contents of serialNumber as an unsigned number, in lowercase hexadecimal without leading zeros;
+- `not_valid_before`, `not_valid_after`: the two times of validity as `YYYY-MM-DDTHH:MM:SSZ`, from their digits;
+- `subject`, `issuer`: the name as RFC 4514 §2 writes it (Proposed Standard, June 2006, read 2026-11-21): the
+  RelativeDistinguishedNames from the last to the first, joined by `,`; the AttributeTypeAndValues of one RDN in their
+  DER order, joined by `+`; each as `type=value`. `type` is the short name of RFC 4514 §3 (CN, L, ST, O, OU, C, STREET,
+  DC, UID) or the descriptor of an attribute type with a string syntax registered in the IANA LDAP Descriptors registry
+  (served by iana.org on 2026-11-21, last updated 2017-12-04): the RFC 4519 ones whose syntax is Directory, Printable,
+  IA5, Numeric or Telephone String — businessCategory 2.5.4.15, description 2.5.4.13, destinationIndicator 2.5.4.27,
+  dnQualifier 2.5.4.46, generationQualifier 2.5.4.44, givenName 2.5.4.42, houseIdentifier 2.5.4.51, initials 2.5.4.43,
+  internationalISDNNumber 2.5.4.25, name 2.5.4.41, physicalDeliveryOfficeName 2.5.4.19, postalCode 2.5.4.17,
+  postOfficeBox 2.5.4.18, serialNumber 2.5.4.5, sn 2.5.4.4, telephoneNumber 2.5.4.20, title 2.5.4.12, x121Address
+  2.5.4.24 — and pseudonym 2.5.4.65 and emailAddress 1.2.840.113549.1.9.1 (registered with RFC 3280); the dotted OID
+  otherwise. For a named type `value` is the string
+  of the AttributeValue — UTF8String as UTF-8, BMPString as UTF-16BE, UniversalString as UTF-32BE, the others as ASCII —
+  with, as RFC 4514 §2.4 asks, a `\` before `"`, `+`, `,`, `;`, `<`, `>`, `\`, before a leading space or `#` and before
+  a trailing space, and every other character below U+0020 and U+007F written `\` and two uppercase hexadecimal
+  digits (§2.4: "Other characters may be escaped"); for a dotted type `value` is `#` and the lowercase hexadecimal of the
+  whole AttributeValue element (§2.4: "If the AttributeType is of the dotted-decimal form, the AttributeValue is
+  represented by an number sign … followed by the hexadecimal encoding of each of the octets of the BER encoding"). An
+  empty name is the empty string. `organizationIdentifier` (2.5.4.97, the attribute of the PSD2 qualified seals) is not
+  in that registry, so it is written dotted: `2.5.4.97=#0c…`.
+- the public key: the 64 octets after `04`, as `x` and `y`; the verifier's library is asked whether that is a point of
+  P-256 (cryptography's `EllipticCurvePublicNumbers`, node:crypto's `createPublicKey` from a JWK), and a point that is
+  not is that artifact's error.
+Up to the branch head before this (d76b66c) the reference took these from cryptography and the JS verifier from
+node:crypto, and they differed: measured 2026-11-21 with the reviewer's structural generator (12 000 changes of five
+leaves written back with minimal lengths, seeds 1 to 3), 989 leaves that passed the walk were a certificate for one
+verifier only and 569 were accepted by both with a different `x5c_leaf` — AlgorithmIdentifier parameters (`ecdsa-with-
+SHA256` followed by NULL: an artifact error for the reference, `valid: true` for the JS verifier), an empty or a
+repeated RDN value, a TeletexString above `7F`, a BMPString surrogate pair, a GeneralizedTime of year 0000, a
+multi-valued RDN joined by `+` or ` + `, an attribute type dotted or named by OpenSSL, a line feed as it is or `\0A`, an
+empty name `""` or `"undefined"`; 6 of 175 real certificates were written differently. Each of them is in 1.9.0 too.
+The verdicts and receipts this changes are listed in CHANGELOG (1.10.0).
 
 ### 2.1 AP2 delegation chains (NORMATIVE, 1.9.0)
 

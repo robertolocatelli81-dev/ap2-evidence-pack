@@ -222,7 +222,9 @@ that `matched`, SPEC §6 step 7)
 expired signing certificate still counts years later); the Node verifier cannot validate chains and,
 since 1.6.0, refuses `--trust-anchor` as a usage error (exit 2) instead of accepting it and reporting `chain_verified: null`. A cleared flag says a CA under your anchor certified that key — not
 that the key belongs to the mandate's issuer; read `artifacts[].x5c_leaf` for the subject and issuer
-DN of the certificate that was validated.
+DN of the certificate that was validated. Since 1.10.0 both verifiers read the leaf with the same DER walk and write its
+names as RFC 4514 does (SPEC §2 (d)); no library decides what the leaf says, so the two receipts carry the same
+`x5c_leaf` for the same certificate.
 
 ## Producer signatures (post-quantum hybrid)
 

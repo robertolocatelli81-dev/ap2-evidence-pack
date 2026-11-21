@@ -12,7 +12,7 @@
 // closes the window (declared, as tsa_verified).
 // Usage: ap2-verify.mjs <evidence.json> [--trusted-producer-key ALG=B64]... [--require-producer] [--require-pq] [--require-anchor] [--min-anchors N] [--tsa-cert PEM] [--trust-set-complete] [--accept-integral-floats]
 import { statSync, accessSync, openSync, fstatSync, readSync, closeSync, writeSync, constants as FS } from "node:fs";
-import { createHash, createPublicKey, verify as cryptoVerify, X509Certificate } from "node:crypto";
+import { createHash, createPublicKey, verify as cryptoVerify } from "node:crypto";
 
 const MAX_DEPTH = 512, MAX_BYTES = 64 * 1024 * 1024, SAFE = 2 ** 53 - 1;
 const UTF8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
@@ -373,18 +373,13 @@ function checkProvenance(pc, parsed, key) {   // returns: is this key SELF-ASSER
   let leaf, ident;
   try {
     const der = b64Strict(x5c[0]); if (!der) throw new Error("leaf not base64");
-    { const why = x5cLeafDerProblem(der); if (why) throw new Error("x5c leaf is not DER: " + why); }   // 1.10.0 — SPEC §2 (d): the walk first, then the library
-    const cert = new X509Certificate(der); if (!Buffer.from(cert.raw).equals(der)) throw new Error("bytes after the certificate");   // 1.7.3: node:crypto parses a DER certificate followed by more bytes; the reference (strict DER) refuses it
-    leaf = leafJwk(cert, der);
+    const cert = readLeaf(der);   // 1.10.0 — SPEC §2 (d): read by the walk, the same way as the reference
+    leaf = cert.jwk;
     // r9: the receipt names WHO the certificate was issued to — a cleared flag means "a CA under your anchor certified this key",
     // never "the key belongs to the mandate's issuer", and an auditor cannot tell CN=the-bank from CN=attacker without this
-    // r10: RFC 4514 (most specific RDN first, comma-separated) in both verifiers — Node renders a DN as OpenSSL multi-line
-    // in the opposite order, so the same certificate produced two different receipts in the field §6.7 asks for precisely
-    // to tell CN=the-bank from CN=attacker. Validity too: it is a MUST of §6.7 and it was missing here.
-    const rfc4514 = (dn) => String(dn).split("\n").filter(Boolean).reverse().join(",");
-    const isoZ = (t) => new Date(t).toISOString().replace(/\.\d{3}Z$/, "Z");
-    ident = { subject: rfc4514(cert.subject), issuer: rfc4514(cert.issuer), serial: cert.serialNumber.toLowerCase().replace(/^0+/, ""),
-              not_valid_before: isoZ(cert.validFrom), not_valid_after: isoZ(cert.validTo),
+    // r10: RFC 4514 (most specific RDN first, comma-separated) in both verifiers; 1.10.0: written by the walk (SPEC §2 (d))
+    ident = { subject: cert.subject, issuer: cert.issuer, serial: cert.serial,
+              not_valid_before: cert.not_valid_before, not_valid_after: cert.not_valid_after,
               sha256: createHash("sha256").update(der).digest("hex"), chain_verified: null,
               key_purpose: leafKeyPurpose(der) };   // 1.10.0 — SPEC §6 step 7: reported here too; this verifier never clears the flag
   } catch (e) { throw new Refused("provenance_class x5c_header but the x5c leaf is unusable" + leafWhy(e)); }
@@ -411,9 +406,7 @@ function reconcileUnusedHeaderKeys(header, jwk, pc) {
     let leaf;
     try {
       const der = b64Strict(x5c[0]); if (!der) throw new Error("leaf not base64");
-      { const why = x5cLeafDerProblem(der); if (why) throw new Error("x5c leaf is not DER: " + why); }   // 1.10.0 — SPEC §2 (d): the walk first, then the library
-      const cert = new X509Certificate(der); if (!Buffer.from(cert.raw).equals(der)) throw new Error("bytes after the certificate");   // as in checkProvenance
-      leaf = leafJwk(cert, der);
+      leaf = readLeaf(der).jwk;   // as in checkProvenance
     } catch (e) { throw new Refused("the header x5c leaf is unusable" + leafWhy(e) + " (SPEC §2 (d), RFC 7515 §4.1.6)"); }
     if (!sameKey(leaf, jwk)) throw new Refused("the header x5c leaf names another key than the one the artifact verifies under (SPEC §2 (d), RFC 7515 §4.1.6)");
   }
@@ -539,6 +532,7 @@ function derTimeOk(c, utc) {
   const y = utc ? two(0) + (two(0) >= 50 ? 1900 : 2000) : Number(d.slice(0, 4));
   const [mo, dd, hh, mi, ss] = [0, 1, 2, 3, 4].map((k) => two(n - 10 + 2 * k));
   if (!(mo >= 1 && mo <= 12 && hh <= 23 && mi <= 59 && ss <= 59 && dd >= 1)) return false;
+  if (!utc && y < 2050) return false;   // 1.10.0: RFC 5280 §4.1.2.5, dates through 2049 are UTCTime
   const leap = y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0);
   return dd <= [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][mo - 1];
 }
@@ -552,10 +546,11 @@ function derPrimitiveOk(tag, c) {
   if (tag === 0x13) return [...c].every((b) => PRINTABLE.has(b)) ? null : "string";
   if (tag === 0x12) return [...c].every((b) => NUMERIC.has(b)) ? null : "string";
   if (tag === 0x16) return [...c].every((b) => b < 0x80) ? null : "string";
-  if (tag === 0x1e) return c.length % 2 === 0 ? null : "string";
-  if (tag === 0x1c) return c.length % 4 === 0 ? null : "string";
+  if (tag === 0x14) return [...c].every((b) => b < 0x80) ? null : "string";   // 1.10.0: TeletexString in 7 bits
+  if (tag === 0x1e) { if (c.length % 2) return "string"; for (let k = 0; k < c.length; k += 2) if (c[k] >= 0xd8 && c[k] <= 0xdf) return "string"; return null; }   // 1.10.0: UCS-2, no surrogate
+  if (tag === 0x1c) { if (c.length % 4) return "string"; for (let k = 0; k < c.length; k += 4) { const v = c.readUInt32BE(k); if (v > 0x10ffff || (v >= 0xd800 && v <= 0xdfff)) return "string"; } return null; }   // 1.10.0: UCS-4
   if (tag === 0x17 || tag === 0x18) return derTimeOk(c, tag === 0x17) ? null : "time";
-  return null;   // OCTET STRING, TeletexString: any contents
+  return null;   // OCTET STRING: any contents
 }
 function derSetOrderOk(buf, kids) {   // X.690 §11.6: ascending, the shorter padded with 0-octets
   const enc = kids.map((k) => buf.subarray(k.at, k.end));
@@ -577,6 +572,62 @@ function derWalk(buf, start, end, depth = 0) {
   }
   return out;
 }
+const SIGNATURE_ALGORITHMS = new Set(["300a06082a8648ce3d040302", "300a06082a8648ce3d040303", "300a06082a8648ce3d040304",   // ecdsa-with-SHA256/384/512, RFC 5758 §3.2
+  "300d06092a864886f70d01010b0500", "300d06092a864886f70d01010c0500", "300d06092a864886f70d01010d0500",   // sha2WithRSA, NULL
+  "300b06092a864886f70d01010b", "300b06092a864886f70d01010c", "300b06092a864886f70d01010d",   // the same, absent (RFC 4055 §5)
+  "300506032b6570"]);   // Ed25519, RFC 8410 §3
+const P256_SPKI_PREFIX = "3059301306072a8648ce3d020106082a8648ce3d030107034200" + "04";   // RFC 5480 §2.1.1, §2.2
+// RFC 4514 §3 and the string attribute types of the IANA LDAP Descriptors registry (SPEC §2 (d), 1.10.0)
+const NAME_TYPES = new Map([["2.5.4.3", "CN"], ["2.5.4.7", "L"], ["2.5.4.8", "ST"], ["2.5.4.10", "O"], ["2.5.4.11", "OU"], ["2.5.4.6", "C"],
+  ["2.5.4.9", "STREET"], ["0.9.2342.19200300.100.1.25", "DC"], ["0.9.2342.19200300.100.1.1", "UID"], ["2.5.4.15", "businessCategory"],
+  ["2.5.4.13", "description"], ["2.5.4.27", "destinationIndicator"], ["2.5.4.46", "dnQualifier"], ["2.5.4.44", "generationQualifier"],
+  ["2.5.4.42", "givenName"], ["2.5.4.51", "houseIdentifier"], ["2.5.4.43", "initials"], ["2.5.4.25", "internationalISDNNumber"],
+  ["2.5.4.41", "name"], ["2.5.4.19", "physicalDeliveryOfficeName"], ["2.5.4.17", "postalCode"], ["2.5.4.18", "postOfficeBox"], ["2.5.4.5",
+  "serialNumber"], ["2.5.4.4", "sn"], ["2.5.4.20", "telephoneNumber"], ["2.5.4.12", "title"], ["2.5.4.24", "x121Address"], ["2.5.4.65",
+  "pseudonym"], ["1.2.840.113549.1.9.1", "emailAddress"]]);
+function oidDotted(c) {
+  const out = []; let v = 0n;
+  for (const b of c) { v = (v << 7n) | BigInt(b & 0x7f); if (!(b & 0x80)) { out.push(v); v = 0n; } }
+  const first = out[0]; const head = first < 40n ? [0n, first] : first < 80n ? [1n, first - 40n] : [2n, first - 80n];
+  return head.concat(out.slice(1)).map(String).join(".");
+}
+function nameValue(tag, c) {
+  let text;
+  if (tag === 0x0c) text = UTF8.decode(c);
+  else if (tag === 0x1e) { text = ""; for (let k = 0; k < c.length; k += 2) text += String.fromCharCode(c.readUInt16BE(k)); }
+  else if (tag === 0x1c) { text = ""; for (let k = 0; k < c.length; k += 4) text += String.fromCodePoint(c.readUInt32BE(k)); }
+  else text = c.toString("latin1");
+  const chars = [...text]; let out = "";
+  chars.forEach((ch, k) => {
+    const cp = ch.codePointAt(0);
+    if ('"+,;<>\\'.includes(ch) || (" #".includes(ch) && k === 0) || (ch === " " && k === chars.length - 1)) out += "\\" + ch;
+    else if (cp < 0x20 || cp === 0x7f) out += "\\" + cp.toString(16).toUpperCase().padStart(2, "0");
+    else out += ch;
+  });
+  return out;
+}
+function nameRender(buf, name) {   // RFC 4514 §2 as SPEC §2 (d) writes it: RDNs last to first, ","; the values of one RDN in DER order, "+"
+  const rdns = [];
+  for (const rdn of derWalk(buf, name.start, name.end)) {
+    const parts = [];
+    for (const atv of derWalk(buf, rdn.start, rdn.end)) {
+      const [oidEl, val] = derWalk(buf, atv.start, atv.end);
+      const dotted = oidDotted(buf.subarray(oidEl.start, oidEl.end)); const short = NAME_TYPES.get(dotted);
+      parts.push(short ? short + "=" + nameValue(val.tag, buf.subarray(val.start, val.end)) : dotted + "=#" + buf.subarray(val.at, val.end).toString("hex"));
+    }
+    rdns.push(parts.join("+"));
+  }
+  return rdns.reverse().join(",");
+}
+export function leafNames(der) {   // [subject, issuer] as SPEC §2 (d) writes them: the reference's leaf_names
+  const top = derWalk(der, 0, der.length); let tbs = derWalk(der, top[0].start, top[0].end); tbs = derWalk(der, tbs[0].start, tbs[0].end);
+  const i = tbs[0].tag === 0xa0 ? 1 : 0; return [nameRender(der, tbs[i + 4]), nameRender(der, tbs[i + 2])];
+}
+function timeRender(tag, c) {
+  let d = c.subarray(0, c.length - 1).toString("latin1");
+  if (tag === 0x17) d = (Number(d.slice(0, 2)) >= 50 ? "19" : "20") + d;
+  return `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}T${d.slice(8, 10)}:${d.slice(10, 12)}:${d.slice(12, 14)}Z`;
+}
 function x5cLeafShape(buf) {
   const top = derWalk(buf, 0, buf.length); if (top.length !== 1 || top[0].tag !== 0x30) throw new NotDer("tbs");
   const cert = derWalk(buf, top[0].start, top[0].end); if (cert.map((k) => k.tag).join() !== [0x30, 0x30, 0x03].join()) throw new NotDer("tbs");
@@ -592,23 +643,36 @@ function x5cLeafShape(buf) {
   for (const name of [tbs[i + 2], tbs[i + 4]]) for (const rdn of derWalk(buf, name.start, name.end)) {   // SEQUENCE OF SET OF SEQUENCE { OID, AttributeValue }
     if (rdn.tag !== 0x31) throw new NotDer("tbs");
     for (const atv of derWalk(buf, rdn.start, rdn.end)) { const parts = atv.tag === 0x30 ? derWalk(buf, atv.start, atv.end) : [];
-      if (parts.length !== 2 || parts[0].tag !== 0x06) throw new NotDer("tbs"); if (!ATTRIBUTE_VALUE.has(parts[1].tag)) throw new NotDer("attribute_value"); } }
+      if (parts.length !== 2 || parts[0].tag !== 0x06) throw new NotDer("tbs"); if (!ATTRIBUTE_VALUE.has(parts[1].tag)) throw new NotDer("attribute_value"); }
+    const types = derWalk(buf, rdn.start, rdn.end).map((atv) => { const o = derWalk(buf, atv.start, atv.end)[0]; return buf.subarray(o.start, o.end).toString("hex"); });
+    if (!types.length || new Set(types).size !== types.length) throw new NotDer("name"); }   // 1.10.0: SET SIZE (1..MAX), no attribute type twice
   for (const k of tbs.slice(i + 6)) { if (k.tag !== 0xa3) continue;
     const inner = derWalk(buf, k.start, k.end); if (inner.length !== 1 || inner[0].tag !== 0x30) throw new NotDer("extension");
     for (const ext of derWalk(buf, inner[0].start, inner[0].end)) { const parts = ext.tag === 0x30 ? derWalk(buf, ext.start, ext.end) : [];
       const shape = parts.map((p) => p.tag).join(); if (shape !== "6,4" && shape !== "6,1,4") throw new NotDer("extension");
       if (parts.length === 3 && !(parts[1].end - parts[1].start === 1 && buf[parts[1].start] === 0xff)) throw new NotDer("extension"); } }   // critical FALSE is the DEFAULT (X.690 §11.5)
+  const sigIn = buf.subarray(tbs[i + 1].at, tbs[i + 1].end).toString("hex");   // 1.10.0: RFC 5280 §4.1.1.2, and a closed list of algorithms
+  if (sigIn !== buf.subarray(cert[1].at, cert[1].end).toString("hex") || !SIGNATURE_ALGORITHMS.has(sigIn)) throw new NotDer("algorithm");
+  const key = buf.subarray(tbs[i + 5].at, tbs[i + 5].end);
+  if (key.length !== P256_SPKI_PREFIX.length / 2 + 64 || !key.toString("hex").startsWith(P256_SPKI_PREFIX)) throw new NotDer("key");   // 1.10.0: EC P-256, uncompressed
+  return { subject: nameRender(buf, tbs[i + 4]), issuer: nameRender(buf, tbs[i + 2]),
+    serial: BigInt("0x" + buf.subarray(tbs[i].start, tbs[i].end).toString("hex")).toString(16),
+    not_valid_before: timeRender(validity[0].tag, buf.subarray(validity[0].start, validity[0].end)),
+    not_valid_after: timeRender(validity[1].tag, buf.subarray(validity[1].start, validity[1].end)),
+    x: key.subarray(key.length - 64, key.length - 32), y: key.subarray(key.length - 32) };
 }
-// The JWK of the leaf's key. node:crypto 22.23.2 does not throw on an EC subjectPublicKey that is the point at infinity
-// (BIT STRING `00 00`): `publicKey.export({ format: "jwk" })` aborts the process (ExportJWKEcKey, "Assertion failed:
-// (ec) != nullptr", SIGABRT) — measured 2026-11-21 on 1.9.0 and on this branch, a pack with such a leaf got no receipt
-// from this verifier (the reference: that artifact's error). Less than two octets is a key under no algorithm: refused here,
-// before node:crypto is asked. Called after x5cLeafDerProblem, which fixes the shape read below.
-function leafJwk(cert, der) {
-  const top = derStrictChildren(der, derStrictTLV(der, 0, der.length)), tbs = derStrictChildren(der, top[0]);
-  const bits = derStrictChildren(der, tbs[tbs[0].tag === 0xa0 ? 6 : 5])[1];
-  if (bits.end - bits.start < 3) throw new Error("x5c leaf public key of less than two octets");
-  return createPublicKey({ key: cert.publicKey.export({ format: "jwk" }), format: "jwk" }).export({ format: "jwk" });
+// 1.10.0 — SPEC §2 (d): the leaf as the walk reads it; node:crypto is asked only whether the key is a point of P-256 (a JWK
+// import). Up to the branch head d76b66c node:crypto read the certificate (X509Certificate): it aborted the process on a
+// key that is the point at infinity, and it decided and wrote some leaves otherwise than the reference (SPEC §2 (d)).
+function readLeaf(der) {
+  let r; try { r = x5cLeafShape(der); } catch (e) { if (e instanceof NotDer) throw new Error("x5c leaf is not DER: " + e.rule); throw e; }
+  let jwk; try { jwk = createPublicKey({ key: { kty: "EC", crv: "P-256", x: b64u(r.x), y: b64u(r.y) }, format: "jwk" }).export({ format: "jwk" }); }
+  catch { throw new Error("x5c leaf is not DER: key"); }   // not a point of P-256
+  return { ...r, jwk };
+}
+export function x5cLeafIdentity(der) {   // the reference's x5c_leaf_identity: what a receipt says of the leaf, and its key
+  const r = readLeaf(der); return { subject: r.subject, issuer: r.issuer, serial: r.serial, not_valid_before: r.not_valid_before, not_valid_after: r.not_valid_after,
+    jwk: { kty: r.jwk.kty, crv: r.jwk.crv, x: r.jwk.x, y: r.jwk.y } };
 }
 // the rule of SPEC §2 (d) in an artifact's error, as the reference writes it (1.10.0)
 const leafWhy = (e) => (e instanceof Error && e.message.startsWith("x5c leaf is not DER: ") ? ": " + e.message : "");

@@ -695,25 +695,45 @@ def _pubkey_from_jwk(jwk: Dict):
         raise Ap2EvidenceError("JWK x/y is not a point of P-256") from e
 
 
-def _load_x5c_leaf(x5c: List[str]):
+class _Leaf:
+    """1.10.0 (SPEC §2 (d)): an x5c leaf as the walk reads it — no library reads the certificate; the public key is a P-256
+    point checked by cryptography."""
+
+    def __init__(self, der: bytes, read: Dict):
+        self.der, self.subject, self.issuer, self.serial = der, read["subject"], read["issuer"], read["serial"]
+        self.not_valid_before, self.not_valid_after = read["not_valid_before"], read["not_valid_after"]
+        self._x, self._y = int.from_bytes(read["x"], "big"), int.from_bytes(read["y"], "big")
+
+    def public_key(self):
+        from cryptography.hazmat.primitives.asymmetric import ec
+        try:
+            return ec.EllipticCurvePublicNumbers(self._x, self._y, ec.SECP256R1()).public_key()
+        except ValueError:
+            raise Ap2EvidenceError("x5c leaf is not DER: key") from None   # SPEC §2 (d): not a point of P-256
+
+
+def x5c_leaf_identity(der: bytes) -> Dict:
+    """1.10.0 (SPEC §2 (d)): what a receipt says of a leaf and its key as a JWK, read by the walk; raises Ap2EvidenceError
+    `x5c leaf is not DER: <rule>`. The same as the JS verifier's x5cLeafIdentity."""
+    try:
+        leaf = _Leaf(der, _x5c_leaf_read(der))
+    except _NotDer as e:
+        raise Ap2EvidenceError(f"x5c leaf is not DER: {e.rule}") from None
+    return {"subject": leaf.subject, "issuer": leaf.issuer, "serial": leaf.serial, "not_valid_before": leaf.not_valid_before,
+            "not_valid_after": leaf.not_valid_after, "jwk": _jwk_from_pubkey(leaf.public_key())}
+
+
+def _load_x5c_leaf(x5c: List[str]) -> "_Leaf":
     """The leaf CERTIFICATE (not just its key): r7 also reads subject/issuer, to tell a self-signed leaf (still self-asserted)
-    from one someone else issued."""
-    from cryptography import x509
-    from cryptography.hazmat.primitives.asymmetric import ec
+    from one someone else issued. 1.10.0: read by the walk of SPEC §2 (d) only, the same way as the JS verifier."""
     try:   # r7: a leaf wrapped at 76 columns, not a certificate, or not a string used to be a bare ValueError -> traceback out of `build`
         der = _sigsuite._unb64(x5c[0])   # r6: strict RFC 4648 — b64decode() dropped a space/newline, the JS verifier refused it
-        why = x5c_leaf_der_problem(der)
-        if why:   # 1.10.0 (SPEC §2 (d)): the rules of both verifiers, not the library's
-            raise Ap2EvidenceError(f"x5c leaf is not DER: {why}")
-        leaf = x509.load_der_x509_certificate(der)
-    except Ap2EvidenceError:
-        raise
     except Exception as e:  # noqa: BLE001
         raise Ap2EvidenceError(f"x5c leaf is not a strict-base64 DER certificate: {type(e).__name__}") from e
-    pub = leaf.public_key()
-    if not isinstance(pub, ec.EllipticCurvePublicKey) or pub.curve.name != "secp256r1":
-        raise Ap2EvidenceError("x5c leaf key is not EC P-256 (ES256 only, declared)")
-    return leaf
+    try:
+        return _Leaf(der, _x5c_leaf_read(der))
+    except _NotDer as e:
+        raise Ap2EvidenceError(f"x5c leaf is not DER: {e.rule}") from None
 
 
 def _pubkey_from_x5c_leaf(x5c: List[str]):
@@ -796,6 +816,8 @@ def _der_time_ok(c: bytes, utc: bool) -> bool:
     mo, dd, hh, mi, ss = (int(d[i:i + 2]) for i in range(n - 10, n, 2))
     if not (1 <= mo <= 12 and 0 <= hh <= 23 and 0 <= mi <= 59 and 0 <= ss <= 59 and dd >= 1):
         return False
+    if not utc and y < 2050:   # 1.10.0: RFC 5280 §4.1.2.5, dates through 2049 are UTCTime
+        return False
     days = (31, 29 if (y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)) else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
     return dd <= days[mo - 1]
 
@@ -824,13 +846,16 @@ def _der_primitive_ok(tag: int, c: bytes) -> Optional[str]:
         return None if all(b in _NUMERIC for b in c) else "string"
     if tag == 0x16:
         return None if all(b < 0x80 for b in c) else "string"
-    if tag == 0x1E:
-        return None if len(c) % 2 == 0 else "string"
-    if tag == 0x1C:
-        return None if len(c) % 4 == 0 else "string"
+    if tag == 0x14:   # 1.10.0: TeletexString in 7 bits (the T.61 repertoire is not read)
+        return None if all(b < 0x80 for b in c) else "string"
+    if tag == 0x1E:   # 1.10.0: UCS-2, no surrogate code unit
+        return None if len(c) % 2 == 0 and not any(0xD8 <= c[i] <= 0xDF for i in range(0, len(c), 2)) else "string"
+    if tag == 0x1C:   # 1.10.0: UCS-4 code points up to 10FFFF, no surrogate
+        cps = [int.from_bytes(c[i:i + 4], "big") for i in range(0, len(c) - len(c) % 4, 4)]
+        return None if len(c) % 4 == 0 and all(v <= 0x10FFFF and not 0xD800 <= v <= 0xDFFF for v in cps) else "string"
     if tag in (0x17, 0x18):
         return None if _der_time_ok(c, tag == 0x17) else "time"
-    return None   # OCTET STRING, TeletexString: any contents
+    return None   # OCTET STRING: any contents
 
 
 def _der_set_order_ok(buf: bytes, kids) -> bool:
@@ -869,7 +894,88 @@ def _der_walk(buf: bytes, start: int, end: int, depth: int = 0):
     return out
 
 
-def _x5c_leaf_shape(buf: bytes) -> None:
+_SIGNATURE_ALGORITHMS = frozenset(bytes.fromhex(h) for h in (
+    "300a06082a8648ce3d040302", "300a06082a8648ce3d040303", "300a06082a8648ce3d040304",   # ecdsa-with-SHA256/384/512, RFC 5758 §3.2
+    "300d06092a864886f70d01010b0500", "300d06092a864886f70d01010c0500", "300d06092a864886f70d01010d0500",   # sha2WithRSA, NULL
+    "300b06092a864886f70d01010b", "300b06092a864886f70d01010c", "300b06092a864886f70d01010d",   # the same, absent (RFC 4055 §5)
+    "300506032b6570"))   # Ed25519, RFC 8410 §3
+_P256_SPKI_PREFIX = bytes.fromhex("3059301306072a8648ce3d020106082a8648ce3d030107034200" "04")   # RFC 5480 §2.1.1, §2.2
+# RFC 4514 §3 and the string attribute types of the IANA LDAP Descriptors registry (SPEC §2 (d), 1.10.0)
+_NAME_TYPES = {"2.5.4.3": "CN", "2.5.4.7": "L", "2.5.4.8": "ST", "2.5.4.10": "O", "2.5.4.11": "OU", "2.5.4.6": "C",
+               "2.5.4.9": "STREET", "0.9.2342.19200300.100.1.25": "DC", "0.9.2342.19200300.100.1.1": "UID",
+               "2.5.4.15": "businessCategory", "2.5.4.13": "description", "2.5.4.27": "destinationIndicator",
+               "2.5.4.46": "dnQualifier", "2.5.4.44": "generationQualifier", "2.5.4.42": "givenName", "2.5.4.51":
+               "houseIdentifier", "2.5.4.43": "initials", "2.5.4.25": "internationalISDNNumber", "2.5.4.41": "name",
+               "2.5.4.19": "physicalDeliveryOfficeName", "2.5.4.17": "postalCode", "2.5.4.18": "postOfficeBox",
+               "2.5.4.5": "serialNumber", "2.5.4.4": "sn", "2.5.4.20": "telephoneNumber", "2.5.4.12": "title",
+               "2.5.4.24": "x121Address", "2.5.4.65": "pseudonym", "1.2.840.113549.1.9.1": "emailAddress"}
+
+
+def _oid_dotted(c: bytes) -> str:
+    out, v = [], 0
+    for b in c:
+        v = v << 7 | (b & 0x7F)
+        if not b & 0x80:
+            out.append(v); v = 0
+    first = out[0]
+    head = [0, first] if first < 40 else [1, first - 40] if first < 80 else [2, first - 80]
+    return ".".join(str(x) for x in head + out[1:])
+
+
+def _name_value(tag: int, c: bytes) -> str:
+    if tag == 0x0C:
+        text = c.decode("utf-8")
+    elif tag == 0x1E:
+        text = c.decode("utf-16-be")
+    elif tag == 0x1C:
+        text = c.decode("utf-32-be")
+    else:
+        text = c.decode("ascii")
+    out = []
+    for i, ch in enumerate(text):
+        if ch in '"+,;<>\\' or (ch in " #" and i == 0) or (ch == " " and i == len(text) - 1):
+            out.append("\\" + ch)
+        elif ord(ch) < 0x20 or ord(ch) == 0x7F:
+            out.append("\\%02X" % ord(ch))
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def _name_render(buf: bytes, name) -> str:
+    """RFC 4514 §2 as SPEC §2 (d) writes it: RDNs last to first, `,`; the values of one RDN in DER order, `+`."""
+    rdns = []
+    for rdn in _der_walk(buf, name[1], name[2]):
+        parts = []
+        for atv in _der_walk(buf, rdn[1], rdn[2]):
+            oid_el, val = _der_walk(buf, atv[1], atv[2])
+            dotted = _oid_dotted(buf[oid_el[1]:oid_el[2]])
+            short = _NAME_TYPES.get(dotted)
+            parts.append(short + "=" + _name_value(val[0], buf[val[1]:val[2]]) if short
+                         else dotted + "=#" + buf[val[3]:val[2]].hex())
+        rdns.append("+".join(parts))
+    return ",".join(reversed(rdns))
+
+
+def leaf_names(der: bytes):
+    """(subject, issuer) of a certificate as SPEC §2 (d) writes them, for any certificate the walk reads up to the names
+    (whatever its key and signature algorithm): the measure of real certificates and the JS comparison use it."""
+    top = _der_walk(der, 0, len(der))
+    tbs = _der_walk(der, top[0][1], top[0][2])
+    tbs = _der_walk(der, tbs[0][1], tbs[0][2])
+    i = 1 if tbs[0][0] == 0xA0 else 0
+    return _name_render(der, tbs[i + 4]), _name_render(der, tbs[i + 2])
+
+
+def _time_render(tag: int, c: bytes) -> str:
+    d = c[:-1].decode("ascii")
+    if tag == 0x17:
+        d = ("19" if int(d[:2]) >= 50 else "20") + d
+    return "%s-%s-%sT%s:%s:%sZ" % (d[:4], d[4:6], d[6:8], d[8:10], d[10:12], d[12:14])
+
+
+def _x5c_leaf_read(buf: bytes) -> Dict:
+    """SPEC §2 (d): every rule of the walk, then what a receipt says of the leaf, read from the walk only (1.10.0)."""
     top = _der_walk(buf, 0, len(buf))
     if len(top) != 1 or top[0][0] != 0x30:
         raise _NotDer("tbs")
@@ -908,6 +1014,9 @@ def _x5c_leaf_shape(buf: bytes) -> None:
                     raise _NotDer("tbs")
                 if parts[1][0] not in _ATTRIBUTE_VALUE:
                     raise _NotDer("attribute_value")
+            types = [buf[a[1]:a[2]] for a in (_der_walk(buf, atv[1], atv[2])[0] for atv in _der_walk(buf, rdn[1], rdn[2]))]
+            if not types or len(set(types)) != len(types):   # 1.10.0: SET SIZE (1..MAX), no attribute type twice
+                raise _NotDer("name")
     for k in tbs[i + 6:]:
         if k[0] != 0xA3:
             continue
@@ -922,6 +1031,17 @@ def _x5c_leaf_shape(buf: bytes) -> None:
                 crit = _der_walk(buf, ext[1], ext[2])[1]
                 if buf[crit[1]:crit[2]] != b"\xff":   # critical FALSE is the DEFAULT (X.690 §11.5)
                     raise _NotDer("extension")
+    sig_in = buf[tbs[i + 1][3]:tbs[i + 1][2]]   # 1.10.0: RFC 5280 §4.1.1.2, and a closed list of algorithms
+    if sig_in != buf[cert[1][3]:cert[1][2]] or sig_in not in _SIGNATURE_ALGORITHMS:
+        raise _NotDer("algorithm")
+    key = buf[tbs[i + 5][3]:tbs[i + 5][2]]
+    if len(key) != len(_P256_SPKI_PREFIX) + 64 or not key.startswith(_P256_SPKI_PREFIX):   # 1.10.0: EC P-256, uncompressed
+        raise _NotDer("key")
+    return {"subject": _name_render(buf, tbs[i + 4]), "issuer": _name_render(buf, tbs[i + 2]),
+            "serial": format(int.from_bytes(buf[tbs[i][1]:tbs[i][2]], "big"), "x"),
+            "not_valid_before": _time_render(validity[0][0], buf[validity[0][1]:validity[0][2]]),
+            "not_valid_after": _time_render(validity[1][0], buf[validity[1][1]:validity[1][2]]),
+            "x": key[-64:-32], "y": key[-32:]}
 
 
 def _leaf_why(e: Exception) -> str:
@@ -935,7 +1055,7 @@ def x5c_leaf_der_problem(der: bytes) -> Optional[str]:
     (length, tag, depth, boolean, integer, null, oid, bit_string, string, time, set_order, tbs, version, serial,
     extension, attribute_value). The same function in the JS verifier: x5cLeafDerProblem."""
     try:
-        _x5c_leaf_shape(der)
+        _x5c_leaf_read(der)
     except _NotDer as e:
         return e.rule
     return None
@@ -1161,11 +1281,9 @@ def _check_provenance(pc, parsed: Dict, key: Dict, trust_anchor: Optional[str] =
         raise Ap2EvidenceError("provenance_class x5c_header but the x5c leaf key differs from the snapshotted jwk")
     # r9: the receipt names WHO the certificate was issued to. A cleared flag means "a CA under your anchor certified this
     # key", never "the key belongs to the mandate's issuer" — an auditor cannot tell CN=the-bank from CN=attacker without this.
-    ident = {"subject": cert.subject.rfc4514_string(), "issuer": cert.issuer.rfc4514_string(),
-             "serial": format(cert.serial_number, "x"),
-             "not_valid_before": cert.not_valid_before_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
-             "not_valid_after": cert.not_valid_after_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
-             "sha256": hashlib.sha256(cert.public_bytes(_serialization().Encoding.DER)).hexdigest()}
+    ident = {"subject": cert.subject, "issuer": cert.issuer, "serial": cert.serial,   # 1.10.0: read by the walk (SPEC §2 (d))
+             "not_valid_before": cert.not_valid_before, "not_valid_after": cert.not_valid_after,
+             "sha256": hashlib.sha256(cert.der).hexdigest()}
     ident["chain_verified"] = None     # r11: always present, as in the JS receipt — None = not measured
     # 1.10.0 (SPEC §6 step 7): whether the leaf was issued for signing (keyUsage / extendedKeyUsage, RFC 5280 §4.2.1.3,
     # §4.2.1.12), reported with or without an anchor, the same object in both verifiers. Up to 1.9.0 neither extension was

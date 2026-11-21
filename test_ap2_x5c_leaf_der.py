@@ -207,18 +207,41 @@ def _sig_unused_bit(tree):   # the signature BIT STRING says one unused bit (and
 
 
 # (name, base index, function of the DER, expected rule)
+def _both_algs(value):   # the signature AlgorithmIdentifier of tbsCertificate and signatureAlgorithm, both set to `value`
+    def f(tree):
+        node(tree, TBS)[1][2] = copy.deepcopy(value); tree[0][1][1] = copy.deepcopy(value)
+    return f
+
+
+def _spki_point(point):
+    def f(tree):
+        node(tree, TBS + (6, 1))[1] = b"\x00" + point
+    return f
+
+
+def _rdn(*atvs):   # one RDN in the subject, replacing the first: SET of SEQUENCE { OID, value }
+    def f(tree):
+        node(tree, TBS + (5,))[1][0] = [0x31, [[0x30, [[0x06, o], v]] for o, v in atvs]]
+    return f
+
+
+_OID_CN, _OID_O = bytes.fromhex("550403"), bytes.fromhex("55040a")
+_EC_SHA256 = [0x30, [[0x06, bytes.fromhex("2a8648ce3d040302")]]]
+
 CASES = [
     # one case for each mutant of the walk that survived the cases below (a second review, 2026-11-21: 30 of 74)
     ("unique_id_unused_bits_set", 0, lambda d: mutate(d, lambda t: node(t, TBS)[1].insert(7, [0x81, b"\x01\x03"])), "bit_string"),
     ("printable_at_sign", 0, lambda d: mutate(d, _name_value(0x13, b"a@b")), "string"),
     ("numeric_letter", 0, lambda d: mutate(d, _alg_param([0x12, b"12a"])), "string"),
-    ("numeric_control", 0, lambda d: mutate(d, _alg_param([0x12, b"12 3"])), None),
+    ("numeric_control", 0, lambda d: mutate(d, _alg_param([0x12, b"12 3"])), "algorithm"),   # 1.10.0: the walk passes it, the algorithm list does not
     ("bmp_two_octets_control", 0, lambda d: mutate(d, _name_value(0x1E, b"\x00l")), None),
     ("universal_six_octets", 0, lambda d: mutate(d, _name_value(0x1C, b"\x00\x00\x00l\x00\x00")), "string"),
     ("utctime_day_00", 0, lambda d: mutate(d, _validity(b"261100000000Z")), "time"),
     ("utctime_second_60", 0, lambda d: mutate(d, _validity(b"261121000060Z")), "time"),
-    ("generalized_feb_29_2000_control", 0, lambda d: mutate(d, _validity(b"20000229000000Z", 0x18)), None),
-    ("set_equal_elements_control", 0, lambda d: mutate(d, _alg_param([0x31, [[0x05, b""], [0x05, b""]]])), None),
+    ("generalized_feb_29_2400_control", 0, lambda d: mutate(d, _validity(b"24000229000000Z", 0x18)), None),
+    ("generalized_before_2050", 0, lambda d: mutate(d, _validity(b"20491231235959Z", 0x18)), "time"),   # 1.10.0: RFC 5280 §4.1.2.5
+    ("generalized_2050_control", 0, lambda d: mutate(d, _validity(b"20500101000000Z", 0x18)), None),
+    ("set_equal_elements_control", 0, lambda d: mutate(d, _alg_param([0x31, [[0x05, b""], [0x05, b""]]])), "algorithm"),
     ("spki_three_parts", 0, lambda d: mutate(d, lambda t: node(t, TBS + (6,))[1].append([0x05, b""])), "tbs"),
     ("signature_unused_bit", 0, lambda d: mutate(d, _sig_unused_bit), "bit_string"),
     ("validity_three_times", 0, lambda d: mutate(d, lambda t: node(t, TBS + (4,))[1].append([0x17, b"261121000000Z"])), "tbs"),
@@ -228,7 +251,7 @@ CASES = [
     ("extension_without_value", 0, lambda d: mutate(d, lambda t: node(t, TBS + (7, 0, 0))[1].pop()), "extension"),
     ("tag_context_4_constructed", 0, lambda d: mutate(d, _alg_param([0xA4, []])), "tag"),
     ("tag_visible_string", 0, lambda d: mutate(d, _name_value(0x1A)), "tag"),
-    ("depth_16_control", 0, lambda d: mutate(d, _nested(14)), None),     # the innermost inside 16 constructed elements
+    ("depth_16_control", 0, lambda d: mutate(d, _nested(14)), "algorithm"),     # the innermost inside 16 constructed elements
     ("depth_17", 0, lambda d: mutate(d, _nested(15)), "depth"),
     ("depth_1500", 0, lambda d: mutate(d, _nested(1498)), "depth"),      # a RecursionError in the reference before the bound
     ("boolean_01", 0, lambda d: mutate(d, _crit(b"\x01")), "boolean"),
@@ -251,9 +274,26 @@ CASES = [
     ("tag_high_number_long_length", 0, lambda d: d.replace(bytes.fromhex("0c046c656166"), bytes.fromhex("1f8500000000"), 1), "tag"),
     ("unique_id_unused_8", 0, lambda d: mutate(d, lambda t: node(t, TBS)[1].insert(7, [0x81, b"\x08\x00"])), "bit_string"),
     ("unique_id_control", 0, lambda d: mutate(d, lambda t: node(t, TBS)[1].insert(7, [0x81, b"\x00\xff"])), None),
+    # 1.10.0: the leaf read from the walk only — rules that cryptography and node:crypto decided otherwise
+    ("algorithm_ecdsa_with_null", 0, lambda d: mutate(d, _both_algs([0x30, [[0x06, bytes.fromhex("2a8648ce3d040302")], [0x05, b""]]])), "algorithm"),
+    ("algorithm_sha1_rsa", 0, lambda d: mutate(d, _both_algs([0x30, [[0x06, bytes.fromhex("2a864886f70d010105")], [0x05, b""]]])), "algorithm"),
+    ("algorithm_pss", 0, lambda d: mutate(d, _both_algs([0x30, [[0x06, bytes.fromhex("2a864886f70d01010a")], [0x30, []]]])), "algorithm"),
+    ("algorithm_tbs_differs", 0, lambda d: mutate(d, lambda t: t[0][1].__setitem__(1, [0x30, [[0x06, bytes.fromhex("2a8648ce3d040303")]]])), "algorithm"),
+    ("algorithm_rsa_null_control", 0, lambda d: mutate(d, _both_algs([0x30, [[0x06, bytes.fromhex("2a864886f70d01010b")], [0x05, b""]]])), None),
+    ("algorithm_rsa_absent_control", 0, lambda d: mutate(d, _both_algs([0x30, [[0x06, bytes.fromhex("2a864886f70d01010b")]]])), None),
+    ("algorithm_ed25519_control", 0, lambda d: mutate(d, _both_algs([0x30, [[0x06, bytes.fromhex("2b6570")]]])), None),
+    ("key_compressed_point", 0, lambda d: mutate(d, _spki_point(b"\x02" + b"\x11" * 32)), "key"),
+    ("key_p384_curve", 0, lambda d: mutate(d, lambda t: node(t, TBS + (6, 0))[1].__setitem__(1, [0x06, bytes.fromhex("2b81040022")])), "key"),
+    ("name_empty_rdn", 0, lambda d: mutate(d, lambda t: node(t, TBS + (5,))[1].__setitem__(0, [0x31, []])), "name"),
+    ("name_type_twice", 0, lambda d: mutate(d, _rdn((_OID_CN, [0x0C, b"a"]), (_OID_CN, [0x0C, b"b"]))), "name"),
+    ("name_two_types_control", 0, lambda d: mutate(d, _rdn((_OID_CN, [0x0C, b"a"]), (_OID_O, [0x0C, b"b"]))), None),
+    ("teletex_8bit", 0, lambda d: mutate(d, _name_value(0x14, b"caf\xe9")), "string"),
+    ("bmp_surrogate_pair", 0, lambda d: mutate(d, _name_value(0x1E, "\U0001F600".encode("utf-16-be"))), "string"),
+    ("universal_above_10ffff", 0, lambda d: mutate(d, _name_value(0x1C, b"\x00\x11\x00\x00")), "string"),
+    ("universal_surrogate", 0, lambda d: mutate(d, _name_value(0x1C, b"\x00\x00\xd8\x00")), "string"),
     ("tag_unknown_universal", 0, lambda d: mutate(d, _name_value(0x0E)), "tag"),
     ("attribute_octet_string", 0, lambda d: mutate(d, _name_value(0x04)), "attribute_value"),
-    ("attribute_generalized_time", 0, lambda d: mutate(d, _name_value(0x18, b"20261121000000Z")), "attribute_value"),
+    ("attribute_generalized_time", 0, lambda d: mutate(d, _name_value(0x18, b"20501121000000Z")), "attribute_value"),
     ("utf8_invalid", 0, lambda d: mutate(d, _name_value(0x0C, b"le\xffaf")), "string"),
     ("utf8_overlong", 0, lambda d: mutate(d, _name_value(0x0C, b"\xc0\xaf")), "string"),
     ("utf8_surrogate", 0, lambda d: mutate(d, _name_value(0x0C, b"\xed\xa0\x80")), "string"),
@@ -318,26 +358,18 @@ class Rules(unittest.TestCase):
         self.assertEqual(js_problems(ders), [A.x5c_leaf_der_problem(d) for d in ders])
 
 
-def _py_cert(der):
+def _py_cert(der):   # 1.10.0: what a receipt says of the leaf and its key, or the error — the same object in both verifiers
     try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            c = A._load_x5c_leaf([base64.b64encode(der).decode()])
-            c.subject.rfc4514_string(); c.issuer.rfc4514_string(); c.not_valid_before_utc; c.not_valid_after_utc
-            A._jwk_from_pubkey(c.public_key())
-        return True
-    except Exception:  # noqa: BLE001
-        return False
+        return A.x5c_leaf_identity(der)
+    except A.Ap2EvidenceError as e:
+        return str(e)
 
 
 _JS_CERT = """
-import { X509Certificate, createPublicKey } from "node:crypto"; import { readFileSync } from "node:fs";
-import { x5cLeafDerProblem } from %s;
+import { readFileSync } from "node:fs";
+import { x5cLeafIdentity } from %s;
 process.stdout.write(JSON.stringify(JSON.parse(readFileSync(0, "utf8")).map((h) => { const d = Buffer.from(h, "hex");
-  try { const c = new X509Certificate(d); if (!Buffer.from(c.raw).equals(d) || x5cLeafDerProblem(d)) return false;
-    const j = createPublicKey({ key: c.publicKey.export({ format: "jwk" }), format: "jwk" }).export({ format: "jwk" });
-    String(c.subject); String(c.issuer); new Date(c.validFrom).toISOString(); new Date(c.validTo).toISOString();
-    return j.kty === "EC" && j.crv === "P-256"; } catch { return false; } })));
+  try { return x5cLeafIdentity(d); } catch (e) { return String(e.message); } })));
 """
 
 
@@ -360,8 +392,71 @@ class Generated(unittest.TestCase):
         p = subprocess.run([NODE, "--input-type=module", "-e", _JS_CERT % json.dumps("file://" + quote(JS))],
                            input=json.dumps([d.hex() for d in ders]), capture_output=True, text=True, timeout=600)
         js = json.loads(p.stdout); py = [_py_cert(d) for d in ders]
-        self.assertEqual([i for i in range(len(ders)) if py[i] != js[i]], [])
-        self.assertGreater(sum(py), 100); self.assertGreater(len(py) - sum(py), 100)   # both answers are reached
+        self.assertEqual([i for i in range(len(ders)) if py[i] != js[i]], [])   # 1.10.0: the same leaf, or the same error
+        ok = sum(isinstance(x, dict) for x in py)
+        self.assertGreater(ok, 100); self.assertGreater(len(py) - ok, 100)   # both answers are reached
+
+
+class Identity(unittest.TestCase):
+    """1.10.0 (SPEC §2 (d)): what a receipt says of the leaf is read from the walk, the same in both verifiers, by the
+    rendering the SPEC writes (RFC 4514 §2). Up to d76b66c the reference wrote it with cryptography and the JS verifier
+    with node:crypto: a multi-valued RDN was `CN=a+O=b` and `CN=a + O=b`, an emailAddress dotted and named, an empty
+    name `""` and `"undefined"`, a line feed as it is and `\\0A` (measured 2026-11-21)."""
+
+    def _id(self, der):
+        return A.x5c_leaf_identity(der)
+
+    def test_rendering(self):
+        multi = x509.Name([x509.RelativeDistinguishedName([x509.NameAttribute(NameOID.COMMON_NAME, "a"),
+                                                           x509.NameAttribute(NameOID.ORGANIZATION_NAME, "b")]),
+                           x509.RelativeDistinguishedName([x509.NameAttribute(NameOID.COUNTRY_NAME, "IT")])])
+        self.assertEqual(self._id(leaf(multi))["subject"], "C=IT,CN=a+O=b")   # last RDN first; DER order inside an RDN
+        cases = [
+            (_name_value(0x0C, ' #a,b+c"d\\e<f>g;h='.encode()), "CN=\\ #a\\,b\\+c\\\"d\\\\e\\<f\\>g\\;h="),
+            (_name_value(0x0C, b"a\nb\x7f "), "CN=a\\0Ab\\7F\\ "),
+            (_name_value(0x1E, "Zo\u00eb".encode("utf-16-be")), "CN=Zo\u00eb"),
+            (_name_value(0x1C, "\U0001F600".encode("utf-32-be")), "CN=\U0001F600"),
+            (_rdn((bytes.fromhex("2a864886f70d010901"), [0x16, b"a@b.example"])), "emailAddress=a@b.example"),
+            (_rdn((bytes.fromhex("550461"), [0x0C, b"VATIT-123"])), "2.5.4.97=#0c0956415449542d313233"),
+            (_rdn((bytes.fromhex("550405"), [0x13, b"C0806592"])), "serialNumber=C0806592"),
+            (lambda t: node(t, TBS + (5,)).__setitem__(1, []), ""),
+        ]
+        for fn, want in cases:
+            with self.subTest(want):
+                self.assertEqual(self._id(mutate(leaf(), fn))["subject"], want)
+
+    def test_serial_and_times(self):
+        d = mutate(leaf(), _set(TBS + (1,), value=b"\x00\xff"))
+        self.assertEqual(self._id(d)["serial"], "ff")
+        for val, tag, want in ((b"491231235959Z", 0x17, "2049-12-31T23:59:59Z"), (b"500101000000Z", 0x17, "1950-01-01T00:00:00Z"),
+                               (b"20500101000000Z", 0x18, "2050-01-01T00:00:00Z")):
+            with self.subTest(want):
+                self.assertEqual(self._id(mutate(leaf(), _validity(val, tag)))["not_valid_before"], want)
+
+    def test_ap2_sample_and_key(self):
+        with open(os.path.join(ROOT, "spec", "vectors", "ap2_certs", "ds_cert_sdjwt.pem"), "rb") as f:
+            c = x509.load_pem_x509_certificate(f.read())
+        got = self._id(c.public_bytes(serialization.Encoding.DER))
+        self.assertEqual(got["subject"], "CN=digital-credentials.dev,O=Digital Credentials,L=Mountain View,ST=California,C=US")
+        self.assertEqual((got["serial"], got["not_valid_before"], got["not_valid_after"]),
+                         (format(c.serial_number, "x"), "2025-04-25T14:12:26Z", "2026-04-25T14:12:26Z"))
+        self.assertEqual(got["jwk"], A._jwk_from_pubkey(c.public_key()))
+        off = mutate(leaf(), _spki_point(b"\x04" + b"\x00" * 63 + b"\x01"))   # 64 octets, not a point of P-256
+        with self.assertRaisesRegex(A.Ap2EvidenceError, "x5c leaf is not DER: key"):
+            self._id(off)
+
+    @unittest.skipUnless(NODE, "node absent: the JS verifier cannot be measured")
+    def test_same_in_js(self):
+        from urllib.parse import quote
+        multi = x509.Name([x509.RelativeDistinguishedName([x509.NameAttribute(NameOID.COMMON_NAME, "a"),
+                                                           x509.NameAttribute(NameOID.ORGANIZATION_NAME, "b")])])
+        ders = [leaf(multi), mutate(leaf(), _name_value(0x0C, ' #a,b+c"d\\e<f>g;h\n\x7f '.encode())),
+                mutate(leaf(), _name_value(0x1E, "Zo\u00eb".encode("utf-16-be"))), mutate(leaf(), _name_value(0x1C, "\U0001F600".encode("utf-32-be"))),
+                mutate(leaf(), _rdn((bytes.fromhex("550461"), [0x0C, b"VATIT-123"]))), mutate(leaf(), lambda t: node(t, TBS + (5,)).__setitem__(1, [])),
+                mutate(leaf(), _spki_point(b"\x04" + b"\x00" * 63 + b"\x01")), mutate(leaf(), _set(TBS + (1,), value=b"\x00\xff"))]
+        p = subprocess.run([NODE, "--input-type=module", "-e", _JS_CERT % json.dumps("file://" + quote(JS))],
+                           input=json.dumps([d.hex() for d in ders]), capture_output=True, text=True, timeout=600)
+        self.assertEqual(json.loads(p.stdout), [_py_cert(d) for d in ders])
 
 
 class WholePack(unittest.TestCase):
