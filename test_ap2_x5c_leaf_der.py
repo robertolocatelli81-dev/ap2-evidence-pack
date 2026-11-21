@@ -397,6 +397,13 @@ class Generated(unittest.TestCase):
         self.assertGreater(ok, 100); self.assertGreater(len(py) - ok, 100)   # both answers are reached
 
 
+def _qseal():
+    return leaf(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Banca Esempio seal"),
+                           x509.NameAttribute(ObjectIdentifier("2.5.4.97"), "PSDIT-BI-12345"),
+                           x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Banca Esempio S.p.A."),
+                           x509.NameAttribute(NameOID.COUNTRY_NAME, "IT")]))
+
+
 class Identity(unittest.TestCase):
     """1.10.0 (SPEC §2 (d)): what a receipt says of the leaf is read from the walk, the same in both verifiers, by the
     rendering the SPEC writes (RFC 4514 §2). Up to d76b66c the reference wrote it with cryptography and the JS verifier
@@ -418,13 +425,19 @@ class Identity(unittest.TestCase):
             (_name_value(0x1E, "Zo\u00eb".encode("utf-16-be")), "CN=Zo\u00eb"),
             (_name_value(0x1C, "\U0001F600".encode("utf-32-be")), "CN=\U0001F600"),
             (_rdn((bytes.fromhex("2a864886f70d010901"), [0x16, b"a@b.example"])), "emailAddress=a@b.example"),
-            (_rdn((bytes.fromhex("550461"), [0x0C, b"VATIT-123"])), "2.5.4.97=#0c0956415449542d313233"),
+            (_rdn((bytes.fromhex("550461"), [0x0C, b"VATIT-123"])), "organizationIdentifier=VATIT-123"),   # X.520 §6.4.4
+            (_rdn((bytes.fromhex("550462"), [0x0C, b"x"])), "2.5.4.98=#0c0178"),   # a type outside the table, dotted
             (_rdn((bytes.fromhex("550405"), [0x13, b"C0806592"])), "serialNumber=C0806592"),
             (lambda t: node(t, TBS + (5,)).__setitem__(1, []), ""),
         ]
         for fn, want in cases:
             with self.subTest(want):
                 self.assertEqual(self._id(mutate(leaf(), fn))["subject"], want)
+
+    def test_qualified_seal_subject(self):
+        """A synthetic PSD2 qualified seal subject (EN 319 412-1 §5.1.4: organizationIdentifier `PSD` + country + `-` +
+        identifier): organizationIdentifier by name, in both verifiers (test_same_in_js holds the same leaf)."""
+        self.assertEqual(self._id(_qseal())["subject"], "C=IT,O=Banca Esempio S.p.A.,organizationIdentifier=PSDIT-BI-12345,CN=Banca Esempio seal")
 
     def test_serial_and_times(self):
         d = mutate(leaf(), _set(TBS + (1,), value=b"\x00\xff"))
@@ -455,7 +468,8 @@ class Identity(unittest.TestCase):
                 mutate(leaf(), _name_value(0x1E, "Zo\u00eb".encode("utf-16-be"))), mutate(leaf(), _name_value(0x1C, "\U0001F600".encode("utf-32-be"))),
                 mutate(leaf(), _rdn((bytes.fromhex("550461"), [0x0C, b"VATIT-123"]))), mutate(leaf(), lambda t: node(t, TBS + (5,)).__setitem__(1, [])),
                 mutate(leaf(), _spki_point(b"\x04" + b"\x00" * 63 + b"\x01")), mutate(leaf(), _set(TBS + (1,), value=b"\x00\xff")),
-                mutate(leaf(), _name_value(0x0C, b"#a#")), mutate(leaf(), _validity(b"491231235959Z")), mutate(leaf(), _validity(b"500101000000Z"))]
+                mutate(leaf(), _name_value(0x0C, b"#a#")), mutate(leaf(), _validity(b"491231235959Z")), mutate(leaf(), _validity(b"500101000000Z")),
+                _qseal(), mutate(leaf(), _rdn((bytes.fromhex("550462"), [0x0C, b"x"])))]
         p = subprocess.run([NODE, "--input-type=module", "-e", _JS_CERT % json.dumps("file://" + quote(JS))],
                            input=json.dumps([d.hex() for d in ders]), capture_output=True, text=True, timeout=600)
         self.assertEqual(json.loads(p.stdout), [_py_cert(d) for d in ders])

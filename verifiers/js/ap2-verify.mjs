@@ -584,7 +584,8 @@ const NAME_TYPES = new Map([["2.5.4.3", "CN"], ["2.5.4.7", "L"], ["2.5.4.8", "ST
   ["2.5.4.42", "givenName"], ["2.5.4.51", "houseIdentifier"], ["2.5.4.43", "initials"], ["2.5.4.25", "internationalISDNNumber"],
   ["2.5.4.41", "name"], ["2.5.4.19", "physicalDeliveryOfficeName"], ["2.5.4.17", "postalCode"], ["2.5.4.18", "postOfficeBox"], ["2.5.4.5",
   "serialNumber"], ["2.5.4.4", "sn"], ["2.5.4.20", "telephoneNumber"], ["2.5.4.12", "title"], ["2.5.4.24", "x121Address"], ["2.5.4.65",
-  "pseudonym"], ["1.2.840.113549.1.9.1", "emailAddress"]]);
+  "pseudonym"], ["1.2.840.113549.1.9.1", "emailAddress"],
+  ["2.5.4.97", "organizationIdentifier"]]);   // not in the IANA registry: this format's addition (SPEC §2 (d), X.520 §6.4.4)
 function oidDotted(c) {
   const out = []; let v = 0n;
   for (const b of c) { v = (v << 7n) | BigInt(b & 0x7f); if (!(b & 0x80)) { out.push(v); v = 0n; } }

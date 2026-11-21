@@ -908,7 +908,8 @@ _NAME_TYPES = {"2.5.4.3": "CN", "2.5.4.7": "L", "2.5.4.8": "ST", "2.5.4.10": "O"
                "houseIdentifier", "2.5.4.43": "initials", "2.5.4.25": "internationalISDNNumber", "2.5.4.41": "name",
                "2.5.4.19": "physicalDeliveryOfficeName", "2.5.4.17": "postalCode", "2.5.4.18": "postOfficeBox",
                "2.5.4.5": "serialNumber", "2.5.4.4": "sn", "2.5.4.20": "telephoneNumber", "2.5.4.12": "title",
-               "2.5.4.24": "x121Address", "2.5.4.65": "pseudonym", "1.2.840.113549.1.9.1": "emailAddress"}
+               "2.5.4.24": "x121Address", "2.5.4.65": "pseudonym", "1.2.840.113549.1.9.1": "emailAddress",
+               "2.5.4.97": "organizationIdentifier"}   # not in the IANA registry: this format's addition (SPEC §2 (d), X.520 §6.4.4)
 
 
 def _oid_dotted(c: bytes) -> str:

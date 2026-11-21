@@ -100,10 +100,14 @@ pass on both. Measured on Python 3.9, 3.11 and 3.13, one result per test method.
   of the store, 9 TLS, AP2's sample); 129 are `key` (RSA and P-384 keys: an ES256 leaf is P-256), 22 `algorithm` (root
   CAs signed with SHA-1), 8 `serial` (root CAs with serial 0) and 1 `time` (a root CA whose validity is a
   GeneralizedTime before 2050); the reference and the JS verifier give the same rule and the same names on each.
-  `x5c_leaf` changes on real names, measured on those 174: 6 differ from what cryptography wrote (a dotted type now
-  written `#` and hexadecimal — `2.5.4.97=VATES-…` is now `2.5.4.97=#0c0f…`, `organizationIdentifier` being outside the
-  registry — and `1.2.840.113549.1.9.1=` now `emailAddress=`), 4 from what node:crypto wrote (OpenSSL's names of types
-  outside the registry, now dotted). keyUsage also follows X.690 §11.2.2 (trailing 0 bits removed): `03 02 00 80` is now
+  `organizationIdentifier` (2.5.4.97: ITU-T X.520 (10/2019) §6.4.4, UnboundedDirectoryString; ETSI EN 319 412-1 V1.7.1
+  §5.1.4, the legal person identifier of qualified seals, `VAT…`, `NTR…`, `PSD…`) is written by name, this format's
+  addition to the registry's names, as OpenSSL writes it. `x5c_leaf` changes on real names, measured on those 174: 6
+  differ from what cryptography wrote (types it wrote dotted are now named — `2.5.4.97=VATES-…` is now
+  `organizationIdentifier=VATES-…`, `2.5.4.5=` `serialNumber=`, `1.2.840.113549.1.9.1=` `emailAddress=`, `2.5.4.15=`
+  `businessCategory=` — and the two jurisdiction types of an EV certificate, outside the table, are now `#` and
+  hexadecimal), 1 from what node:crypto wrote (that EV certificate: OpenSSL's `jurisdictionST=`, `jurisdictionC=` now
+  dotted). keyUsage also follows X.690 §11.2.2 (trailing 0 bits removed): `03 02 00 80` is now
   `key_usage_malformed`
   (2 of 170 real certificates with keyUsage break it, two root CAs of one issuer). No vector changes.
   `test_ap2_x5c_leaf_der.py`: 12 tests (one case per rule in both verifiers, 1500 generated changes compared on the

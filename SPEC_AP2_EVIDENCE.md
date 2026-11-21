@@ -319,16 +319,24 @@ cryptography (strict DER) for the reference, node:crypto (OpenSSL, which reads B
   dnQualifier 2.5.4.46, generationQualifier 2.5.4.44, givenName 2.5.4.42, houseIdentifier 2.5.4.51, initials 2.5.4.43,
   internationalISDNNumber 2.5.4.25, name 2.5.4.41, physicalDeliveryOfficeName 2.5.4.19, postalCode 2.5.4.17,
   postOfficeBox 2.5.4.18, serialNumber 2.5.4.5, sn 2.5.4.4, telephoneNumber 2.5.4.20, title 2.5.4.12, x121Address
-  2.5.4.24 — and pseudonym 2.5.4.65 and emailAddress 1.2.840.113549.1.9.1 (registered with RFC 3280); the dotted OID
-  otherwise. For a named type `value` is the string
+  2.5.4.24 — and pseudonym 2.5.4.65 and emailAddress 1.2.840.113549.1.9.1 (registered with RFC 3280); and, this
+  format's addition to that table, `organizationIdentifier` 2.5.4.97, which the registry does not hold: ITU-T X.520
+  (10/2019, in force with its Amendment 1 of 10/2024, read on itu.int on 2026-11-21) §6.4.4 defines it ("holds an
+  identification of an organization different from the organization name") with the syntax UnboundedDirectoryString
+  and the LDAP name "organizationIdentifier"; ETSI EN 319 412-1 V1.7.1 (2026-05, the last published version on etsi.org
+  on 2026-11-21) §5.1.4 makes it the legal person identifier of qualified certificates — "3 character legal person
+  identity type reference" (`VAT`, `NTR`, `PSD` for a payment service provider under PSD2, `LEI`, `EOR`, `EXC`, or two
+  characters and `:`), a country code, `-`, the identifier — so a PSD2 qualified seal names its holder there; OpenSSL
+  3.0.22 prints it under that name (measured the same day). Its value is written as the other string types. The
+  dotted OID otherwise. For a named type `value` is the string
   of the AttributeValue — UTF8String as UTF-8, BMPString as UTF-16BE, UniversalString as UTF-32BE, the others as ASCII —
   with, as RFC 4514 §2.4 asks, a `\` before `"`, `+`, `,`, `;`, `<`, `>`, `\`, before a leading space or `#` and before
   a trailing space, and every other character below U+0020 and U+007F written `\` and two uppercase hexadecimal
   digits (§2.4: "Other characters may be escaped"); for a dotted type `value` is `#` and the lowercase hexadecimal of the
   whole AttributeValue element (§2.4: "If the AttributeType is of the dotted-decimal form, the AttributeValue is
   represented by an number sign … followed by the hexadecimal encoding of each of the octets of the BER encoding"). An
-  empty name is the empty string. `organizationIdentifier` (2.5.4.97, the attribute of the PSD2 qualified seals) is not
-  in that registry, so it is written dotted: `2.5.4.97=#0c…`.
+  empty name is the empty string. A qualified seal subject reads `…,organizationIdentifier=VATBE-0876866142,…` (the identifier of
+  EN 319 412-1 EXAMPLE 1).
 - the public key: the 64 octets after `04`, as `x` and `y`; the verifier's library is asked whether that is a point of
   P-256 (cryptography's `EllipticCurvePublicNumbers`, node:crypto's `createPublicKey` from a JWK), and a point that is
   not is that artifact's error.
