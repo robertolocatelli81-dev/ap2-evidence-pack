@@ -38,7 +38,7 @@ openssl staying `false`), which pass on both.
   Requirements for TLS, S/MIME and code signing forbid it in the certificates they profile; pyca/cryptography 50.0.2 and
   openssl refuse it in a leaf, measured 2026-11-21); beside an accepted purpose the leaf is accepted for that purpose.
   The mDL purpose is the one of AP2's sample SD-JWT signer certificate (`code/samples/certs/ds_cert_sdjwt.pem`, copied in
-  `spec/vectors/ap2_certs/` with its source): on the branch before this choice (b37d904) that certificate was
+  `spec/vectors/ap2_certs/` with its source): on the branch before this choice (95a8c30) that certificate was
   `extended_key_usage_not_signing`, now it is a signing purpose in both verifiers. Up to 1.9.0 neither extension was read: a leaf with keyUsage keyCertSign only and extendedKeyUsage serverAuth
   only, under the anchor, gave `chain_verified: true`, `self_asserted_only: false`, `issuer_identity` `verified /
   ca_certified`. Now `chain_verified` stays `true`, the flag stays set and `issuer_identity` is `contradicted /
@@ -95,7 +95,7 @@ openssl staying `false`), which pass on both.
 - SPEC §7: one conformance vector, `issuer_x5c_key_purpose_not_signing` (`make_vectors_191.py purpose`, with
   `issuer_purpose_ca.crt`): an x5c leaf whose keyUsage is keyCertSign only and whose extendedKeyUsage is serverAuth
   only, under `trust_anchor` the CA that issued it — `valid`, `issuer_identity` `contradicted /
-  key_purpose_not_signing`, `self_asserted_only` true; it needs openssl (the JS verifier reports it SKIP). On 2e2556b,
+  key_purpose_not_signing`, `self_asserted_only` true; it needs openssl (the JS verifier reports it SKIP). On eade795,
   before the rule: `verified / ca_certified`, `self_asserted_only` false, measured 2026-11-21. Fifty-nine vectors.
 - CI and `test_ap2_wheel_contents.py`: the file asks git for a work tree (`rev-parse --is-inside-work-tree`) before it
   builds, and ci.yml runs it on the checkout after installing `build` and `setuptools`, failing if it skips. Up to 1.9.0

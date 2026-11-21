@@ -869,7 +869,7 @@ flags: `require_producer`, `require_pq`, `require_anchor`, and `min_anchors` (1.
      oid-base.com, "Mobile Driving Licence (mDL) Document Signer (DS)", read on 2026-11-21; ISO/IEC 18013-5, which
      defines it, is sold and was not read): the sample certificate AP2 ships for SD-JWT signers,
      `code/samples/certs/ds_cert_sdjwt.pem` of google-agentic-commerce/AP2 (Apache-2.0, sha256 `a4b92cd6…`, unchanged at
-     `e1ea56db`, read on 2026-11-21), carries exactly that EKU, critical, and before this change (branch head b37d904) this format called it
+     `e1ea56db`, read on 2026-11-21), carries exactly that EKU, critical, and before this change (branch head 95a8c30) this format called it
      `extended_key_usage_not_signing` (measured 2026-11-21). `anyExtendedKeyUsage` (2.5.29.37.0) is not a
      purpose here since 1.10.0: alone it is `extended_key_usage_not_signing`; beside an accepted purpose the leaf is
      accepted for that purpose. The certificate rules of 2026 forbid it in the certificates a signer holds — CA/Browser
@@ -879,7 +879,7 @@ flags: `require_producer`, `require_pq`, `require_anchor`, and `min_anchors` (1.
      trusted certificates"; pyca/cryptography 50.0.2 (its verifier, for end-entity certificates: "**must not** be the
      explicit `anyExtendedKeyUsage` EKU") and openssl 3.0.22 (`verify -purpose smimesign`, measured 2026-11-21) refuse it
      in the leaf; Go `crypto/x509` (`verify.go` read the same day: "The presence of anyExtendedKeyUsage overrides any other key
-     usage") accepts it. Before this change (b37d904) this format accepted it alone. Any other
+     usage") accepts it. Before this change (95a8c30) this format accepted it alone. Any other
      list is `extended_key_usage_not_signing`: `serverAuth` and `clientAuth` (TLS), `codeSigning` ("Signing of
      downloadable executable code"), `emailProtection`, `timeStamping`, `OCSPSigning`, and every KeyPurposeId this text
      does not name. RFC 9336 §1 records that `id-kp-emailProtection`, `id-kp-codeSigning` or a vendor-defined
@@ -1018,7 +1018,7 @@ on revision 1.10.0 (24 651 receipts): the equation above holds on every receipt;
 receipts of `producer_backend_missing` and two of `issuer_x5c_chain_broken` under `trust_anchor` — the two receipts of
 `issuer_x5c_chain_broken` under a pinned producer set that failed it up to 1.9.0 (7 on 1.9.0, measured the same day) are
 not `valid` since 1.10.0 (a pinned set without a producer block, §6 step 6), as both equations say. Measured on 2026-11-21 on the
-code of 4e8740e, with the vector `issuer_x5c_key_purpose_not_signing` added: 6 314 files, 25 349 receipts, 0 violations,
+code of 0af8737, with the vector `issuer_x5c_key_purpose_not_signing` added: 6 314 files, 25 349 receipts, 0 violations,
 the same 5 failures of the pre-registered equation.
 
 **What no state can say.** A producer block that was removed and one that was never added give the same digest and
@@ -1052,7 +1052,7 @@ Run every `spec/vectors/ap2/<name>.json` under the policy in
 The set contains fifty-nine vectors (1.10.0: + 2 — `issuer_x5c_key_purpose_not_signing`, the key purpose of §6 step 7:
 an x5c leaf with keyUsage keyCertSign only and extendedKeyUsage serverAuth only under `trust_anchor`
 `issuer_purpose_ca.crt`, `valid`, `issuer_identity` `contradicted` `key_purpose_not_signing`, `self_asserted_only`
-true, needs openssl; on 2e2556b, before the rule, `verified` `ca_certified` and `self_asserted_only` false, measured
+true, needs openssl; on eade795, before the rule, `verified` `ca_certified` and `self_asserted_only` false, measured
 2026-11-21 — and `issuer_alg_not_es256`, the `alg` rule of §6 step 2 — an ES256
 signature of the issuer under a signed header that says `"alg": "none"`, `valid: true` under 1.9.0 in both verifiers,
 measured 2026-11-20; an artifact error, `sealed_content` `contradicted` `artifact_invalid`, no producer block; 1.8.1: + 4, the grammar of §6 step 2 — `sd_jwt_no_separator` and

@@ -20,7 +20,7 @@ is not in the normative block; the `states` block is the SPEC §6.9 row of an ar
   python3 make_vectors_191.py alg        write issuer_alg_not_es256 (a fresh key: rebuild only deliberately)
   python3 make_vectors_191.py purpose    write issuer_x5c_key_purpose_not_signing and issuer_purpose_ca.crt (fresh keys)
 
-The second is measured on 2026-11-21: on 2e2556b (before 1.10.0's key-purpose rule) the reference gives issuer_identity
+The second is measured on 2026-11-21: on eade795 (before 1.10.0's key-purpose rule) the reference gives issuer_identity
 verified / ca_certified and self_asserted_only false on it.
 """
 import base64
@@ -95,7 +95,7 @@ def purpose() -> int:
         "extendedKeyUsage serverAuth only, under --trust-anchor issuer_purpose_ca.crt: the chain validates, the leaf is not "
         "issued for signing (RFC 5280 §4.2.1.3, §4.2.1.12) — issuer_identity contradicted/key_purpose_not_signing, "
         "self_asserted_only true; the pack stays valid, as for chain_broken (SPEC §6 step 7, §6.9). Measured 2026-11-21 "
-        "on 2e2556b: verified/ca_certified and self_asserted_only false. Needs openssl.",
+        "on eade795: verified/ca_certified and self_asserted_only false. Needs openssl.",
         {"trust_anchor": "issuer_purpose_ca.crt"}, dict(cs.ACCEPT_PLAIN, valid=True, self_asserted_only=True))
     exp["states"] = {"admission": "admitted", "refusal_class": None,
                      "subjects": {"sealed_content": {"state": "verified", "reasons": []},

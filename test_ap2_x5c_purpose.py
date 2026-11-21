@@ -370,7 +370,7 @@ def _pack_with_leaf(leaf: bytes, path: str, beside_jwk: bool = False) -> str:
 
 @unittest.skipUnless(NODE, "node absent: the JS verifier cannot be measured")
 class LeafIsDer(unittest.TestCase):
-    """SPEC §2 (d): the x5c leaf is strict base64 DER, for both verifiers. Measured 2026-11-21 on 1.9.0 and on 190303f: a
+    """SPEC §2 (d): the x5c leaf is strict base64 DER, for both verifiers. Measured 2026-11-21 on 1.9.0 and on 1a0fd9a: a
     leaf whose serial has the length 81 nn was `valid: true` for the JS verifier (node:crypto parses BER) and that
     artifact's error for the reference (cryptography refuses it)."""
 
@@ -490,7 +490,7 @@ class WholePath(unittest.TestCase):
 class Ap2SampleCertificate(unittest.TestCase):
     """1.10.0: the sample SD-JWT signer certificate of google-agentic-commerce/AP2 (spec/vectors/ap2_certs/, Apache-2.0)
     carries the extendedKeyUsage 1.0.18013.5.1.2 (mDL Document Signer), critical. Measured on 2026-11-21 on the branch
-    head b37d904, before this change: {"signing": false, "reason": "extended_key_usage_not_signing"}; now a signing
+    head 95a8c30, before this change: {"signing": false, "reason": "extended_key_usage_not_signing"}; now a signing
     purpose, the same in both verifiers. The certificate expired on 2026-04-25: its chain is checked at a time inside
     its validity (the TSA time a pack would carry), and refused at today's clock (control)."""
     DIR = os.path.join(ROOT, "spec", "vectors", "ap2_certs")
