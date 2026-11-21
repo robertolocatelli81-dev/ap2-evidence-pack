@@ -373,7 +373,7 @@ function checkProvenance(pc, parsed, key) {   // returns: is this key SELF-ASSER
   let leaf, ident;
   try {
     const der = b64Strict(x5c[0]); if (!der) throw new Error("leaf not base64");
-    const cert = new X509Certificate(der); if (!Buffer.from(cert.raw).equals(der)) throw new Error("bytes after the certificate"); if (!derLengthsAreStrict(der)) throw new Error("not DER: a length that is not minimal");   // 1.7.3: node:crypto parses a DER certificate followed by more bytes; the reference (strict DER) refuses it
+    const cert = new X509Certificate(der); if (!Buffer.from(cert.raw).equals(der)) throw new Error("bytes after the certificate"); { const why = x5cLeafDerProblem(der); if (why) throw new Error("x5c leaf is not DER: " + why); }   // 1.9.1 — SPEC §2 (d)   // 1.7.3: node:crypto parses a DER certificate followed by more bytes; the reference (strict DER) refuses it
     leaf = createPublicKey({ key: cert.publicKey.export({ format: "jwk" }), format: "jwk" }).export({ format: "jwk" });
     // r9: the receipt names WHO the certificate was issued to — a cleared flag means "a CA under your anchor certified this key",
     // never "the key belongs to the mandate's issuer", and an auditor cannot tell CN=the-bank from CN=attacker without this
@@ -386,7 +386,7 @@ function checkProvenance(pc, parsed, key) {   // returns: is this key SELF-ASSER
               not_valid_before: isoZ(cert.validFrom), not_valid_after: isoZ(cert.validTo),
               sha256: createHash("sha256").update(der).digest("hex"), chain_verified: null,
               key_purpose: leafKeyPurpose(der) };   // 1.9.1 — SPEC §6 step 7: reported here too; this verifier never clears the flag
-  } catch (e) { throw new Refused("provenance_class x5c_header but the x5c leaf is unusable"); }
+  } catch (e) { throw new Refused("provenance_class x5c_header but the x5c leaf is unusable" + leafWhy(e)); }
   if (["kty", "crv", "x", "y"].some((f) => leaf[f] !== jwk[f])) throw new Refused("provenance_class x5c_header but the x5c leaf key differs from the snapshotted jwk");
   // r8: r7 read "issued by someone else" off `subject !== issuer` — two DN strings the forger writes himself (a leaf
   // self-signed with its own key, declaring CN=DigiCert Global Root CA, cleared the flag). Offline that is not
@@ -410,9 +410,9 @@ function reconcileUnusedHeaderKeys(header, jwk, pc) {
     let leaf;
     try {
       const der = b64Strict(x5c[0]); if (!der) throw new Error("leaf not base64");
-      const cert = new X509Certificate(der); if (!Buffer.from(cert.raw).equals(der)) throw new Error("bytes after the certificate"); if (!derLengthsAreStrict(der)) throw new Error("not DER: a length that is not minimal");   // as in checkProvenance
+      const cert = new X509Certificate(der); if (!Buffer.from(cert.raw).equals(der)) throw new Error("bytes after the certificate"); { const why = x5cLeafDerProblem(der); if (why) throw new Error("x5c leaf is not DER: " + why); }   // 1.9.1 — SPEC §2 (d)   // as in checkProvenance
       leaf = createPublicKey({ key: cert.publicKey.export({ format: "jwk" }), format: "jwk" }).export({ format: "jwk" });
-    } catch (e) { throw new Refused("the header x5c leaf is unusable (SPEC §2 (d), RFC 7515 §4.1.6)"); }
+    } catch (e) { throw new Refused("the header x5c leaf is unusable" + leafWhy(e) + " (SPEC §2 (d), RFC 7515 §4.1.6)"); }
     if (!sameKey(leaf, jwk)) throw new Refused("the header x5c leaf names another key than the one the artifact verifies under (SPEC §2 (d), RFC 7515 §4.1.6)");
   }
 }
@@ -518,14 +518,85 @@ function oidOk(c) {   // X.690 §8.19.2: last octet of each sub-identifier with 
 function derStrictTLV(buf, off, end) { const t = derTLV(buf, off);
   if (t.end > end || (t.start - off > 2 && (buf[off + 2] === 0 || t.end - t.start < 128))) throw new Refused("der: not DER"); return t; }
 function derStrictChildren(buf, tlv) { const out = []; let o = tlv.start; while (o < tlv.end) { const c = derStrictTLV(buf, o, tlv.end); out.push(c); o = c.next; } return out; }
-// SPEC §2 (d): the leaf is "strict base64 DER". node:crypto (OpenSSL) parses BER: measured 2026-11-21, a leaf whose serial
-// had the length 81 14 for 14 was a certificate here and `valid: true`, and not a certificate for the reference
-// (cryptography refuses it) — `valid: false` there. Every constructed element is walked: minimal definite lengths, each
-// element inside its parent. The contents of primitive elements are not read here (an OCTET STRING holds an extension),
-// nor what follows the certificate (the callers compare `raw` with the bytes given).
-export function derLengthsAreStrict(der) {
-  const walk = (tlv) => { for (const c of derStrictChildren(der, tlv)) if (c.tag & 0x20) walk(c); };
-  try { const top = derStrictTLV(der, 0, der.length); if (top.tag & 0x20) walk(top); return true; } catch { return false; } }
+// 1.9.1 — SPEC §2 (d): the x5c leaf walked as DER (ITU-T X.690 02/2021) with the shape of RFC 5280 §4.1, the same rules
+// as the reference's x5c_leaf_der_problem, before node:crypto (OpenSSL reads BER) sees it. Measured 2026-11-21: 52 of
+// 5205 one-bit and one-byte changes of one leaf were a certificate for one verifier only.
+const LEAF_PRIMITIVE = new Set([0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x0c, 0x12, 0x13, 0x14, 0x16, 0x17, 0x18, 0x1c, 0x1e, 0x81, 0x82]);
+const LEAF_CONSTRUCTED = new Set([0x30, 0x31, 0xa0, 0xa1, 0xa2, 0xa3]);
+const ATTRIBUTE_VALUE = new Set([0x0c, 0x13, 0x14, 0x16, 0x1c, 0x1e]);
+const PRINTABLE = new Set(Buffer.from("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 '()+,-./:=?", "latin1"));
+const NUMERIC = new Set(Buffer.from("0123456789 ", "latin1"));
+class NotDer extends Error { constructor(rule) { super(rule); this.rule = rule; } }
+function derTimeOk(c, utc) {
+  const n = utc ? 12 : 14;
+  if (c.length !== n + 1 || c[n] !== 0x5a || ![...c.subarray(0, n)].every((b) => b >= 0x30 && b <= 0x39)) return false;
+  const d = c.subarray(0, n).toString("latin1"); const two = (i) => Number(d.slice(i, i + 2));
+  const y = utc ? two(0) + (two(0) >= 50 ? 1900 : 2000) : Number(d.slice(0, 4));
+  const [mo, dd, hh, mi, ss] = [0, 1, 2, 3, 4].map((k) => two(n - 10 + 2 * k));
+  if (!(mo >= 1 && mo <= 12 && hh <= 23 && mi <= 59 && ss <= 59 && dd >= 1)) return false;
+  const leap = y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0);
+  return dd <= [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][mo - 1];
+}
+function derPrimitiveOk(tag, c) {
+  if (tag === 0x01) return c.length === 1 && (c[0] === 0x00 || c[0] === 0xff) ? null : "boolean";
+  if (tag === 0x02) return c.length && !(c.length > 1 && ((c[0] === 0 && c[1] < 0x80) || (c[0] === 0xff && c[1] >= 0x80))) ? null : "integer";
+  if (tag === 0x03 || tag === 0x81 || tag === 0x82) return c.length && c[0] <= 7 && (c.length > 1 || c[0] === 0) && !(c.length > 1 && (c[c.length - 1] & ((1 << c[0]) - 1))) ? null : "bit_string";
+  if (tag === 0x05) return c.length ? "null" : null;
+  if (tag === 0x06) return oidOk(c) ? null : "oid";
+  if (tag === 0x0c) { try { UTF8.decode(c); return null; } catch { return "string"; } }
+  if (tag === 0x13) return [...c].every((b) => PRINTABLE.has(b)) ? null : "string";
+  if (tag === 0x12) return [...c].every((b) => NUMERIC.has(b)) ? null : "string";
+  if (tag === 0x16) return [...c].every((b) => b < 0x80) ? null : "string";
+  if (tag === 0x1e) return c.length % 2 === 0 ? null : "string";
+  if (tag === 0x1c) return c.length % 4 === 0 ? null : "string";
+  if (tag === 0x17 || tag === 0x18) return derTimeOk(c, tag === 0x17) ? null : "time";
+  return null;   // OCTET STRING, TeletexString: any contents
+}
+function derSetOrderOk(buf, kids) {   // X.690 §11.6: ascending, the shorter padded with 0-octets
+  const enc = kids.map((k) => buf.subarray(k.at, k.end));
+  for (let i = 0; i + 1 < enc.length; i++) { const n = Math.max(enc[i].length, enc[i + 1].length);
+    const a = Buffer.concat([enc[i], Buffer.alloc(n - enc[i].length)]), b = Buffer.concat([enc[i + 1], Buffer.alloc(n - enc[i + 1].length)]);
+    if (Buffer.compare(a, b) > 0) return false; }
+  return true;
+}
+function derWalk(buf, start, end) {
+  const out = []; let o = start;
+  while (o < end) {
+    if ((buf[o] & 0x1f) === 0x1f) throw new NotDer("tag");
+    let t; try { t = derStrictTLV(buf, o, end); } catch { throw new NotDer("length"); }
+    if (LEAF_CONSTRUCTED.has(t.tag)) { const kids = derWalk(buf, t.start, t.end); if (t.tag === 0x31 && !derSetOrderOk(buf, kids)) throw new NotDer("set_order"); }
+    else if (LEAF_PRIMITIVE.has(t.tag)) { const why = derPrimitiveOk(t.tag, buf.subarray(t.start, t.end)); if (why) throw new NotDer(why); }
+    else throw new NotDer("tag");
+    out.push({ tag: t.tag, start: t.start, end: t.end, at: o }); o = t.end;
+  }
+  return out;
+}
+function x5cLeafShape(buf) {
+  const top = derWalk(buf, 0, buf.length); if (top.length !== 1 || top[0].tag !== 0x30) throw new NotDer("tbs");
+  const cert = derWalk(buf, top[0].start, top[0].end); if (cert.map((k) => k.tag).join() !== [0x30, 0x30, 0x03].join()) throw new NotDer("tbs");
+  const tbs = derWalk(buf, cert[0].start, cert[0].end); let i = 0;
+  if (tbs.length && tbs[0].tag === 0xa0) { if (buf.subarray(tbs[0].at, tbs[0].end).toString("hex") !== "a003020102") throw new NotDer("version"); i = 1; }   // v3; v1 is the DEFAULT (X.690 §11.5)
+  const body = tbs.slice(i, i + 6).map((k) => k.tag), rest = tbs.slice(i + 6).map((k) => k.tag);
+  const restOk = rest.every((x, j) => [0x81, 0x82, 0xa3].includes(x) && (j === 0 || rest[j - 1] < x));
+  if (body.join() !== [0x02, 0x30, 0x30, 0x30, 0x30, 0x30].join() || !restOk) throw new NotDer("tbs");
+  const spki = derWalk(buf, tbs[i + 5].start, tbs[i + 5].end); if (spki.map((k) => k.tag).join() !== [0x30, 0x03].join()) throw new NotDer("tbs");
+  for (const bits of [spki[1], cert[2]]) if (buf[bits.start] !== 0) throw new NotDer("bit_string");   // subjectPublicKey (an ECPoint, octets: RFC 5480 §2.2) and signature: no unused bit
+  const serial = buf.subarray(tbs[i].start, tbs[i].end); if ((serial[0] & 0x80) || serial.every((b) => b === 0)) throw new NotDer("serial");   // RFC 5280 §4.1.2.2: positive
+  const validity = derWalk(buf, tbs[i + 3].start, tbs[i + 3].end); if (validity.length !== 2 || !validity.every((k) => k.tag === 0x17 || k.tag === 0x18)) throw new NotDer("tbs");
+  for (const name of [tbs[i + 2], tbs[i + 4]]) for (const rdn of derWalk(buf, name.start, name.end)) {   // SEQUENCE OF SET OF SEQUENCE { OID, AttributeValue }
+    if (rdn.tag !== 0x31) throw new NotDer("tbs");
+    for (const atv of derWalk(buf, rdn.start, rdn.end)) { const parts = atv.tag === 0x30 ? derWalk(buf, atv.start, atv.end) : [];
+      if (parts.length !== 2 || parts[0].tag !== 0x06) throw new NotDer("tbs"); if (!ATTRIBUTE_VALUE.has(parts[1].tag)) throw new NotDer("attribute_value"); } }
+  for (const k of tbs.slice(i + 6)) { if (k.tag !== 0xa3) continue;
+    const inner = derWalk(buf, k.start, k.end); if (inner.length !== 1 || inner[0].tag !== 0x30) throw new NotDer("extension");
+    for (const ext of derWalk(buf, inner[0].start, inner[0].end)) { const parts = ext.tag === 0x30 ? derWalk(buf, ext.start, ext.end) : [];
+      const shape = parts.map((p) => p.tag).join(); if (shape !== "6,4" && shape !== "6,1,4") throw new NotDer("extension");
+      if (parts.length === 3 && !(parts[1].end - parts[1].start === 1 && buf[parts[1].start] === 0xff)) throw new NotDer("extension"); } }   // critical FALSE is the DEFAULT (X.690 §11.5)
+}
+// the rule of SPEC §2 (d) in an artifact's error, as the reference writes it (1.9.1)
+const leafWhy = (e) => (e instanceof Error && e.message.startsWith("x5c leaf is not DER: ") ? ": " + e.message : "");
+export function x5cLeafDerProblem(der) {   // null, or the rule broken (SPEC §2 (d)) — the reference's x5c_leaf_der_problem
+  try { x5cLeafShape(der); return null; } catch (e) { if (e instanceof NotDer) return e.rule; throw e; } }
 export function leafKeyPurpose(der) {
   const no = (reason) => ({ signing: false, reason });
   const found = new Map();
@@ -549,7 +620,8 @@ export function leafKeyPurpose(der) {
     let t; try { t = derStrictTLV(ku, 0, ku.length); } catch { return no("key_usage_malformed"); }
     const bits = ku.subarray(t.start, t.end);
     if (t.tag !== 0x03 || t.end !== ku.length || !bits.length || bits[0] > 7 || (bits.length === 1 && bits[0] !== 0)
-        || (bits.length > 1 && (bits[bits.length - 1] & ((1 << bits[0]) - 1)))) return no("key_usage_malformed");
+        || (bits.length > 1 && (bits[bits.length - 1] & ((1 << bits[0]) - 1)))
+        || (bits.length > 1 && (bits[bits.length - 1] & -bits[bits.length - 1]) !== 1 << bits[0])) return no("key_usage_malformed");   // X.690 §11.2.2: trailing 0 bits removed (1.9.1)
     if (bits.length < 2 || !(bits[1] & 0xc0)) return no("key_usage_not_signing");   // digitalSignature 0x80, nonRepudiation 0x40
   }
   const eku = found.get(ID_CE_EXT_KEY_USAGE);

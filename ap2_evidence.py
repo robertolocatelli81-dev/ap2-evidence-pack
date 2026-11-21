@@ -701,7 +701,11 @@ def _load_x5c_leaf(x5c: List[str]):
     from cryptography import x509
     from cryptography.hazmat.primitives.asymmetric import ec
     try:   # r7: a leaf wrapped at 76 columns, not a certificate, or not a string used to be a bare ValueError -> traceback out of `build`
-        leaf = x509.load_der_x509_certificate(_sigsuite._unb64(x5c[0]))   # r6: strict RFC 4648 — b64decode() dropped a space/newline, the JS verifier refused it
+        der = _sigsuite._unb64(x5c[0])   # r6: strict RFC 4648 — b64decode() dropped a space/newline, the JS verifier refused it
+        why = x5c_leaf_der_problem(der)
+        if why:   # 1.9.1 (SPEC §2 (d)): the rules of both verifiers, not the library's
+            raise Ap2EvidenceError(f"x5c leaf is not DER: {why}")
+        leaf = x509.load_der_x509_certificate(der)
     except Ap2EvidenceError:
         raise
     except Exception as e:  # noqa: BLE001
@@ -758,6 +762,176 @@ def _der_strict_children(buf: bytes, start: int, end: int) -> List[Tuple[int, in
     return out
 
 
+# 1.9.1 (SPEC §2 (d)): the x5c leaf walked as DER (ITU-T X.690 02/2021) with the shape of RFC 5280 §4.1, the same rules
+# in both verifiers, before the library reads it. Up to 1.9.0 each verifier left it to its library (cryptography: strict
+# DER; node:crypto / OpenSSL: BER): measured 2026-11-21, 52 of 5205 one-bit and one-byte changes of one leaf were a
+# certificate for one verifier only.
+_LEAF_PRIMITIVE = frozenset((0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x0C, 0x12, 0x13, 0x14, 0x16, 0x17, 0x18, 0x1C, 0x1E,
+                             0x81, 0x82))
+_LEAF_CONSTRUCTED = frozenset((0x30, 0x31, 0xA0, 0xA1, 0xA2, 0xA3))
+_ATTRIBUTE_VALUE = frozenset((0x0C, 0x13, 0x14, 0x16, 0x1C, 0x1E))
+_PRINTABLE = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 '()+,-./:=?")
+_NUMERIC = frozenset(b"0123456789 ")
+
+
+class _NotDer(Exception):
+    def __init__(self, rule: str):
+        super().__init__(rule)
+        self.rule = rule
+
+
+def _der_time_ok(c: bytes, utc: bool) -> bool:
+    n = 12 if utc else 14
+    if len(c) != n + 1 or c[-1:] != b"Z" or not all(0x30 <= b <= 0x39 for b in c[:n]):
+        return False
+    d = c[:n].decode("ascii")
+    y = (int(d[:2]) + (1900 if int(d[:2]) >= 50 else 2000)) if utc else int(d[:4])
+    mo, dd, hh, mi, ss = (int(d[i:i + 2]) for i in range(n - 10, n, 2))
+    if not (1 <= mo <= 12 and 0 <= hh <= 23 and 0 <= mi <= 59 and 0 <= ss <= 59 and dd >= 1):
+        return False
+    days = (31, 29 if (y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)) else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+    return dd <= days[mo - 1]
+
+
+def _der_primitive_ok(tag: int, c: bytes) -> Optional[str]:
+    if tag == 0x01:
+        return None if len(c) == 1 and c[0] in (0x00, 0xFF) else "boolean"
+    if tag == 0x02:
+        return None if c and not (len(c) > 1 and ((c[0] == 0 and c[1] < 0x80) or (c[0] == 0xFF and c[1] >= 0x80))) else "integer"
+    if tag in (0x03, 0x81, 0x82):
+        ok = bool(c) and c[0] <= 7 and (len(c) > 1 or c[0] == 0) and not (len(c) > 1 and c[-1] & ((1 << c[0]) - 1))
+        return None if ok else "bit_string"
+    if tag == 0x05:
+        return None if not c else "null"
+    if tag == 0x06:
+        return None if _oid_ok(c) else "oid"
+    if tag == 0x0C:
+        try:
+            c.decode("utf-8")
+        except UnicodeDecodeError:
+            return "string"
+        return None
+    if tag == 0x13:
+        return None if all(b in _PRINTABLE for b in c) else "string"
+    if tag == 0x12:
+        return None if all(b in _NUMERIC for b in c) else "string"
+    if tag == 0x16:
+        return None if all(b < 0x80 for b in c) else "string"
+    if tag == 0x1E:
+        return None if len(c) % 2 == 0 else "string"
+    if tag == 0x1C:
+        return None if len(c) % 4 == 0 else "string"
+    if tag in (0x17, 0x18):
+        return None if _der_time_ok(c, tag == 0x17) else "time"
+    return None   # OCTET STRING, TeletexString: any contents
+
+
+def _der_set_order_ok(buf: bytes, kids) -> bool:
+    enc = [buf[k[3]:k[2]] for k in kids]
+    for a, b in zip(enc, enc[1:]):   # X.690 §11.6: ascending, the shorter padded with 0-octets
+        n = max(len(a), len(b))
+        if a.ljust(n, b"\0") > b.ljust(n, b"\0"):
+            return False
+    return True
+
+
+def _der_walk(buf: bytes, start: int, end: int):
+    """The children of [start, end) as (tag, contents start, end, element start), each checked by the rules of SPEC
+    §2 (d); a constructed child is walked too."""
+    out, o = [], start
+    while o < end:
+        if buf[o] & 0x1F == 0x1F:
+            raise _NotDer("tag")
+        try:
+            t, s, e = _der_strict_tlv(buf, o, end)
+        except Ap2EvidenceError:
+            raise _NotDer("length") from None
+        if t in _LEAF_CONSTRUCTED:
+            kids = _der_walk(buf, s, e)
+            if t == 0x31 and not _der_set_order_ok(buf, kids):
+                raise _NotDer("set_order")
+        elif t in _LEAF_PRIMITIVE:
+            why = _der_primitive_ok(t, buf[s:e])
+            if why:
+                raise _NotDer(why)
+        else:
+            raise _NotDer("tag")
+        out.append((t, s, e, o)); o = e
+    return out
+
+
+def _x5c_leaf_shape(buf: bytes) -> None:
+    top = _der_walk(buf, 0, len(buf))
+    if len(top) != 1 or top[0][0] != 0x30:
+        raise _NotDer("tbs")
+    cert = _der_walk(buf, top[0][1], top[0][2])
+    if [k[0] for k in cert] != [0x30, 0x30, 0x03]:
+        raise _NotDer("tbs")
+    tbs = _der_walk(buf, cert[0][1], cert[0][2])
+    i = 0
+    if tbs and tbs[0][0] == 0xA0:
+        if buf[tbs[0][3]:tbs[0][2]] != b"\xa0\x03\x02\x01\x02":   # v3 (RFC 5280 §4.1.2.1); v1 is the DEFAULT (X.690 §11.5)
+            raise _NotDer("version")
+        i = 1
+    body = [k[0] for k in tbs[i:i + 6]]
+    rest = [k[0] for k in tbs[i + 6:]]
+    if body != [0x02, 0x30, 0x30, 0x30, 0x30, 0x30] or rest != sorted(set(rest)) or not set(rest) <= {0x81, 0x82, 0xA3}:
+        raise _NotDer("tbs")
+    spki = _der_walk(buf, tbs[i + 5][1], tbs[i + 5][2])
+    if [k[0] for k in spki] != [0x30, 0x03]:
+        raise _NotDer("tbs")
+    for bits in (spki[1], cert[2]):   # subjectPublicKey (an ECPoint, octets: RFC 5480 §2.2) and signature: no unused bit
+        if buf[bits[1]] != 0:
+            raise _NotDer("bit_string")
+    serial = buf[tbs[i][1]:tbs[i][2]]
+    if serial[0] & 0x80 or not any(serial):   # RFC 5280 §4.1.2.2: "The serial number MUST be a positive integer"
+        raise _NotDer("serial")
+    validity = _der_walk(buf, tbs[i + 3][1], tbs[i + 3][2])
+    if len(validity) != 2 or not all(k[0] in (0x17, 0x18) for k in validity):
+        raise _NotDer("tbs")
+    for name in (tbs[i + 2], tbs[i + 4]):   # issuer, subject: SEQUENCE OF SET OF SEQUENCE { OID, AttributeValue }
+        for rdn in _der_walk(buf, name[1], name[2]):
+            if rdn[0] != 0x31:
+                raise _NotDer("tbs")
+            for atv in _der_walk(buf, rdn[1], rdn[2]):
+                parts = _der_walk(buf, atv[1], atv[2]) if atv[0] == 0x30 else []
+                if len(parts) != 2 or parts[0][0] != 0x06:
+                    raise _NotDer("tbs")
+                if parts[1][0] not in _ATTRIBUTE_VALUE:
+                    raise _NotDer("attribute_value")
+    for k in tbs[i + 6:]:
+        if k[0] != 0xA3:
+            continue
+        inner = _der_walk(buf, k[1], k[2])
+        if len(inner) != 1 or inner[0][0] != 0x30:
+            raise _NotDer("extension")
+        for ext in _der_walk(buf, inner[0][1], inner[0][2]):
+            parts = [p[0] for p in _der_walk(buf, ext[1], ext[2])] if ext[0] == 0x30 else []
+            if parts not in ([0x06, 0x04], [0x06, 0x01, 0x04]):
+                raise _NotDer("extension")
+            if len(parts) == 3:
+                crit = _der_walk(buf, ext[1], ext[2])[1]
+                if buf[crit[1]:crit[2]] != b"\xff":   # critical FALSE is the DEFAULT (X.690 §11.5)
+                    raise _NotDer("extension")
+
+
+def _leaf_why(e: Exception) -> str:
+    """The reason a leaf is unusable in an artifact's error: the rule of SPEC §2 (d) when the DER walk refused it (the same
+    text in both verifiers), else the exception's class name, as before 1.9.1."""
+    return str(e) if isinstance(e, Ap2EvidenceError) and str(e).startswith("x5c leaf is not DER: ") else type(e).__name__
+
+
+def x5c_leaf_der_problem(der: bytes) -> Optional[str]:
+    """1.9.1 (SPEC §2 (d)): None when the leaf is DER with the shape of RFC 5280 §4.1, else the name of the rule broken
+    (length, tag, boolean, integer, null, oid, bit_string, string, time, set_order, tbs, version, serial, extension,
+    attribute_value). The same function in the JS verifier: x5cLeafDerProblem."""
+    try:
+        _x5c_leaf_shape(der)
+    except _NotDer as e:
+        return e.rule
+    return None
+
+
 def leaf_key_purpose(der: bytes) -> Dict:
     """1.9.1 (SPEC §6 step 7): `{"signing": bool, "reason": None | code}` for an x5c leaf, read from its DER the same way
     in both verifiers. Codes: extensions_unreadable, duplicate_extension, key_usage_malformed, key_usage_not_signing,
@@ -800,7 +974,8 @@ def leaf_key_purpose(der: bytes) -> Dict:
             return no("key_usage_malformed")
         bits = ku[s:e]
         if t != 0x03 or e != len(ku) or not bits or bits[0] > 7 or (len(bits) == 1 and bits[0] != 0) \
-                or (len(bits) > 1 and bits[-1] & ((1 << bits[0]) - 1)):
+                or (len(bits) > 1 and bits[-1] & ((1 << bits[0]) - 1)) \
+                or (len(bits) > 1 and (bits[-1] & -bits[-1]) != 1 << bits[0]):   # X.690 §11.2.2: trailing 0 bits removed (1.9.1)
             return no("key_usage_malformed")
         if len(bits) < 2 or not bits[1] & 0xC0:   # digitalSignature (0x80) or nonRepudiation / contentCommitment (0x40)
             return no("key_usage_not_signing")
@@ -970,7 +1145,7 @@ def _check_provenance(pc, parsed: Dict, key: Dict, trust_anchor: Optional[str] =
         cert = _load_x5c_leaf(x5c)
         leaf = _jwk_from_pubkey(cert.public_key())
     except Exception as e:  # noqa: BLE001
-        raise Ap2EvidenceError(f"provenance_class x5c_header but the x5c leaf is unusable: {type(e).__name__}") from e
+        raise Ap2EvidenceError(f"provenance_class x5c_header but the x5c leaf is unusable: {_leaf_why(e)}") from e
     if any(leaf.get(f) != jwk.get(f) for f in ("kty", "crv", "x", "y")):
         raise Ap2EvidenceError("provenance_class x5c_header but the x5c leaf key differs from the snapshotted jwk")
     # r9: the receipt names WHO the certificate was issued to. A cleared flag means "a CA under your anchor certified this
@@ -1152,7 +1327,7 @@ def _reconcile_unused_header_keys(header: Dict, jwk: Dict, pc) -> None:
         try:
             leaf = _jwk_from_pubkey(_load_x5c_leaf(x5c).public_key())
         except Exception as e:  # noqa: BLE001
-            raise Ap2EvidenceError(f"the header x5c leaf is unusable: {type(e).__name__} (SPEC §2 (d), RFC 7515 §4.1.6)") from e
+            raise Ap2EvidenceError(f"the header x5c leaf is unusable: {_leaf_why(e)} (SPEC §2 (d), RFC 7515 §4.1.6)") from e
         if not _same_key(leaf, jwk):
             raise Ap2EvidenceError("the header x5c leaf names another key than the one the artifact verifies under (SPEC §2 (d), RFC 7515 §4.1.6)")
 

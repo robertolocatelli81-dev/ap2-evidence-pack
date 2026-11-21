@@ -9,8 +9,9 @@
 > and §6.9, a validated x5c chain clears `self_asserted_only` only when its leaf is issued for signing (keyUsage and
 > extendedKeyUsage, RFC 5280 §4.2.1.3 and §4.2.1.12), `x5c_leaf.key_purpose` in both verifiers, reason
 > `key_purpose_not_signing` (added to the reasons of `ap2-evidence-pack/states-1`, as 1.8.1 added
-> `signer_certificate_absent`); §6 step 6, §5 and §6.9, a pinned producer set implies `require_producer`: a pack
-> without a producer block is not `valid` under it, `policy.unmet` `trusted_producer_keys` (vector `stripped_signature`:
+> `signer_certificate_absent`); §2 (d), the x5c leaf is DER by one set of rules in both verifiers, walked before
+> their libraries read it (`x5c leaf is not DER: <rule>`), and §6 step 7 applies X.690 §11.2.2 to keyUsage; §6 step 6,
+> §5 and §6.9, a pinned producer set implies `require_producer`: a pack without a producer block is not `valid` under it, `policy.unmet` `trusted_producer_keys` (vector `stripped_signature`:
 > `trusted_producer_keys` added to its `policy.unmet`, `valid` unchanged); §7, one vector added for §6 step 2,
 > `issuer_alg_not_es256` (fifty-eight).
 
@@ -239,6 +240,42 @@ verifies under (sd-jwt-vc-27 §2.5: "A recipient MUST NOT treat inputs of other 
 unless its policy binds them to that identity"; it does not make them an error); a header that contradicts the signature is refused, not ignored. Not compared (declared): `x5t` and
 `x5t#S256`, the header `kid` against the `kid` of a supplied key, and, at verification, the header `kid` against the `kid`
 of a `jwks_fetched` key (a capture-time fact).
+
+1.9.1, what DER means for the leaf `x5c[0]`, wherever it is read (an `x5c_header` key, an `x5c` beside another key
+source, the key purpose of §6 step 7). Both verifiers walk the whole certificate with the same rules BEFORE handing it to
+their library, and a leaf that breaks one is not a certificate here: that artifact's error, `x5c leaf is not DER: <rule>`,
+in both. The rules are those of ITU-T X.690 (02/2021, in force with its Erratum 1 of 09/2021, read on itu.int on
+2026-11-21) and of RFC 5280 §4.1 for the shape of a certificate:
+- every element: a one-octet tag (no tag number above 30, X.690 §8.1.2.4), the definite length in the fewest octets
+  (§10.1), inside its parent, nothing after the certificate; the tags are a closed list — universal BOOLEAN, INTEGER, BIT
+  STRING, OCTET STRING, NULL, OBJECT IDENTIFIER, UTF8String, NumericString, PrintableString, TeletexString, IA5String,
+  UTCTime, GeneralizedTime, UniversalString, BMPString in the primitive form (§10.2: "For bitstring, octetstring and
+  restricted character string types, the constructed form of encoding shall not be used"), SEQUENCE and SET in the
+  constructed form, and the context tags `[0]` to `[3]` constructed and `[1]`, `[2]` primitive of RFC 5280 §4.1 (`rule`:
+  `length`, `tag`);
+- BOOLEAN: one octet, `00` or `FF` (§8.2.1, §11.1) — `boolean`; INTEGER: one or more octets, the first nine bits not all
+  ones nor all zero (§8.3.2) — `integer`; NULL: no contents — `null`; OBJECT IDENTIFIER: every subidentifier in the
+  fewest octets, the last octet of each with bit 8 clear (§8.19.2) — `oid`; BIT STRING: the unused-bits octet 0 to 7, 0
+  when there is no other octet, and the unused bits zero (§11.2.1) — `bit_string`;
+- the character strings: UTF8String valid UTF-8 (no overlong form, no surrogate), PrintableString in `A-Z a-z 0-9`,
+  space and `'()+,-./:=?`, NumericString in `0-9` and space, IA5String in 7 bits, BMPString an even number of octets, UniversalString a multiple of four — `string`; UTCTime
+  `YYMMDDHHMMSSZ` and GeneralizedTime `YYYYMMDDHHMMSSZ`, a date that exists (§11.7, §11.8; RFC 5280 §4.1.2.5 allows no
+  fractional seconds and no other zone) — `time`;
+- SET OF: the components in ascending order (§11.6) — `set_order`;
+- the shape of RFC 5280 §4.1: Certificate = tbsCertificate, signatureAlgorithm, signature; tbsCertificate = version
+  `[0]`, serialNumber, signature, issuer, validity (two times), subject, subjectPublicKeyInfo, then `[1]`, `[2]`, `[3]` in
+  this order, each at most once (`tbs`); the version, when present, is v3 (`a0 03 02 01 02`: v1 is the DEFAULT, which
+  X.690 §11.5 forbids to encode, and RFC 5280 §4.1.2.1 asks v3 when there are extensions) — `version`; the serial
+  number positive (RFC 5280 §4.1.2.2: "The serial number MUST be a positive integer") — `serial`; subjectPublicKeyInfo
+  an AlgorithmIdentifier and a BIT STRING, and that BIT STRING and the signature with no unused bit (they carry octets:
+  RFC 5480 §2.2 maps the ECPoint, "an OCTET STRING", bit for bit onto the BIT STRING; Proposed Standard, March 2009,
+  updated by RFC 8813 only, read the same day) — `bit_string`; an Extension is
+  `extnID`, an optional `critical`, `extnValue`, and `critical`, when present, is TRUE (FALSE is the DEFAULT, §11.5) —
+  `extension`; an AttributeValue of issuer and subject is a UTF8String, PrintableString, TeletexString, IA5String,
+  UniversalString or BMPString (DirectoryString of RFC 5280 §4.1.2.4 and IA5String of its Appendix A) — `attribute_value`.
+Not read by this walk: the contents of an OCTET STRING (an extension value: keyUsage and extendedKeyUsage are read by §6
+step 7, which also applies X.690 §11.2.2 to it) and of a BIT STRING (the public key, the signature). Up to 1.9.0 each verifier left the question to its library:
+cryptography (strict DER) for the reference, node:crypto (OpenSSL, which reads BER) for the JS verifier.
 
 ### 2.1 AP2 delegation chains (NORMATIVE, 1.9.0)
 
@@ -842,9 +879,13 @@ flags: `require_producer`, `require_pq`, `require_anchor`, and `min_anchors` (1.
      parent, nothing after the certificate — a long form where the short one fits is `key_usage_malformed` or
      `extended_key_usage_malformed` inside those two values and `extensions_unreadable` anywhere else on the walk
      (keyUsage `03 81 02 07 80` is malformed; cryptography 50.0.2 refuses that value, openssl 3.0.22 reads it as
-     digitalSignature, measured 2026-11-21). One DER rule is not applied: the trailing zero bits that X.690 §11.2.2
-     removes from a named-bit list are read, not refused (`03 02 00 80` is digitalSignature, as openssl 3.0.22 and
-     cryptography 50.0.2 read it, measured the same day).
+     digitalSignature, measured 2026-11-21). 1.9.1, also X.690 §11.2.2 ("the bitstring shall have all trailing 0 bits
+     removed before it is encoded"; NOTE 2: no 1 bit is "a length of 1 and an initial octet set to 0"): a keyUsage whose
+     last octet is zero, or whose lowest 1 bit is not the last bit in use, is `key_usage_malformed` (`03 02 00 80`,
+     `03 03 07 80 00`, `03 02 00 00`), although openssl 3.0.22 and cryptography 50.0.2 read `03 02 00 80` as
+     digitalSignature (measured 2026-11-21). Cost, measured the same day: of 170 real certificates that carry keyUsage
+     (148 of the system store, 33 of the TLS chains of ten public sites, 173 distinct), 2 break the rule — two root CAs of
+     one issuer, `03 03 07 06 00` — and none is an x5c leaf of this repository.
    Both extensions absent: `signing: true` (this format does not require the EKU). A chain that validates to a leaf that
    is not issued for signing keeps `chain_verified: true` (the chain did validate), leaves `self_asserted_only` true, and
    makes `issuer_identity` `contradicted` with `key_purpose_not_signing` (§6.9) — the certificate itself says the key is

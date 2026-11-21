@@ -3,9 +3,10 @@
 ## Unreleased (1.9.1) — fixes after an internal review of 1.8.0, measured again on 1.9.0 on 2026-11-20
 
 Each item below was reproduced on the tag v1.9.0 (de28c3a) and on v1.8.0 (d5601e4) with a script made for it. Of the
-31 tests added, the 23 that state the new behaviour fail on v1.9.0, as a failure or as an error (a constant or a
-function they read does not exist there); the other 8 are the six controls and the unchanged direction (`build` refusing, a
-refusal of openssl staying `false`), which pass on both.
+36 tests added, the 28 that state the new behaviour fail on v1.9.0, as a failure or as an error (a constant or a
+function they read does not exist there; the five of `test_ap2_x5c_leaf_der.py`, its control included, read a function
+that 1.9.0 does not have); the other 8 are the six controls and the unchanged direction (`build` refusing, a refusal of
+openssl staying `false`), which pass on both.
 
 - SPEC §6 step 2, both verifiers: the issuer signature is verified only under the `alg` the signed header names, ES256.
   Up to 1.9.0 `verify` checked ES256 whatever the header said (`build` refused it): a pack whose issuer header, signed
@@ -43,15 +44,31 @@ refusal of openssl staying `false`), which pass on both.
   edges), eleven TBS walks written by hand (one and two `[3]` fields, two that are not the Extensions syntax, one with
   long-form lengths, six that are not DER) and 3000 byte mutations of
   a leaf, the same answer in both verifiers, and the whole path under openssl with eight leaves.
-- SPEC §2 (d), JS verifier: the x5c leaf is DER there too. node:crypto parses BER: measured 2026-11-21 on 1.9.0, a leaf
-  whose serial has the length `81 nn` where the short form fits, signed again, was a certificate for the JS verifier
-  (`valid: true`) and not for the reference, where cryptography refuses it (that artifact's error, `valid: false`). The
-  JS verifier now walks every constructed element of the leaf and refuses a length that is not the minimal definite form
-  (`derLengthsAreStrict`), for a key that comes from the x5c and for an x5c beside another key source: that artifact's
-  error in both verifiers. No vector changes. Not closed by this: what the two libraries read differently besides the
-  lengths (measured the same day on 5 203 one-bit and one-byte changes of one leaf: 48 are a certificate for the JS
-  verifier only — the contents of a BOOLEAN or of an INTEGER, the tag or length octet of a UTF8String, an OCTET STRING
-  or a SET — and 3 for the reference only, the tag or length octet of a UTF8String).
+- SPEC §2 (d), both verifiers: the x5c leaf is DER, by one set of rules written in the SPEC, before each verifier's
+  library reads it. Up to 1.9.0 each left the question to its library, and they disagree: measured 2026-11-21 on 1.9.0,
+  a leaf whose serial has the length `81 nn` where the short form fits, signed again, was a certificate for the JS
+  verifier (node:crypto reads BER; `valid: true`) and not for the reference (cryptography refuses it; that artifact's
+  error). With minimal lengths alone, 52 of 5205 one-bit and one-byte changes of one leaf were still a certificate for
+  one verifier only (one fixed leaf, seed 11, 12 000 cases): 49 for the JS verifier only — the contents of a BOOLEAN or
+  of the version INTEGER, a UTF8String retagged, a constructed OCTET STRING, a SET retagged primitive — and 3 for the
+  reference only, a UTF8String retagged OCTET STRING or GeneralizedTime. Now both walk the whole leaf
+  (`x5c_leaf_der_problem`, `x5cLeafDerProblem`) under ITU-T X.690 (02/2021, in force) and the shape of RFC 5280 §4.1 —
+  one-octet tags from a closed list, minimal definite lengths, BOOLEAN `00`/`FF`, minimal INTEGERs, valid OIDs, BIT
+  STRING unused bits, strings in their alphabets, UTCTime and GeneralizedTime as RFC 5280 §4.1.2.5 writes them, SET OF
+  in order, the fields of tbsCertificate in order, version v3, a positive serial, `critical` never FALSE, name values of a
+  closed list of string types, no unused bit in the public key and the signature — and a leaf that breaks one is that
+  artifact's error, `x5c leaf is not DER: <rule>`, the same rule named in both. Measured after, the same day: 0 such
+  differences on those 12 000 cases and on 128 000 more (`fuzz_leaf_der.py`, four seeds of 20 000 over three leaves —
+  byte, bit, inserted and removed octets, long forms, and changes rebuilt on the tree: tags, BOOLEAN, INTEGER, strings,
+  times, version, `critical`, SET order, constructed and primitive forms, OIDs — and the reviewer's generator, four seeds
+  of 12 000); positive control, the same generator with the walk switched off: 956 differences on 3000 cases. Stricter
+  than cryptography 50 by choice (each counted on those runs): a serial that is negative or zero, a PrintableString or
+  IA5String outside its alphabet, a time or a name value of a type outside the lists. Real certificates, the same day: the
+  33 of the TLS chains of ten public sites pass; of the 148 of the system store, 140 pass and 8 are root CAs whose
+  serial is 0. keyUsage also follows X.690 §11.2.2 (trailing 0 bits removed): `03 02 00 80` is now `key_usage_malformed`
+  (2 of 170 real certificates with keyUsage break it, two root CAs of one issuer). No vector changes.
+  `test_ap2_x5c_leaf_der.py`: 5 tests (one case per rule in both verifiers, 1500 generated changes, a pack whose leaf
+  has `critical` `01`: `valid: true` for the JS verifier on 1.9.0, an artifact error in both now); all 5 fail on 1.9.0.
 - SPEC §6 step 6, §5, §6.9, both verifiers: a pinned producer set (`--trusted-producer-key`, `trusted_producer_keys`)
   implies `require_producer`. Up to 1.9.0 the set was applied only to a block that was present: the producer block
   removed from a pack whose key was pinned gave `valid: true`, `policy.unmet: []`. Now `policy_ok` and `valid` are
