@@ -6,7 +6,7 @@ from an installed wheel. Measured on 2026-11-17: the 1.7.3 wheel on PyPI (sha256
 ap2_pqcrypto/test_acvp_mldsa65.py without its vectors file (FileNotFoundError when run installed; the signature suite
 registered ML-DSA-65 all the same). Builds the wheel from a copy of the tracked files (needs the `build` and
 `setuptools` modules and a git work tree, else skipped); positive control: the same build without the package-data table
-lacks the file. 1.9.1: the work tree is asked of git (`rev-parse --is-inside-work-tree`) — measured 2026-11-21, on a
+lacks the file. 1.10.0: the work tree is asked of git (`rev-parse --is-inside-work-tree`) — measured 2026-11-21, on a
 `git archive` with `build` installed both tests ERRORED (`git ls-files` exit 128) instead of skipping; and ci.yml runs this
 file on the checkout after installing `build` and `setuptools`, so the positive control runs in CI (before, the jobs that
 run the suites have no `build` module and the file was skipped everywhere)."""

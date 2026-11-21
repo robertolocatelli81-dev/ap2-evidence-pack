@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Roberto Locatelli
-"""1.9.1, SPEC §3.2, §6.10: three places of the RFC 3161 path that ran outside the rules of the rest of the file.
+"""1.10.0, SPEC §3.2, §6.10: three places of the RFC 3161 path that ran outside the rules of the rest of the file.
 
 1. The key-identifier step (`key_id_token_problem`, a token whose SignerInfo names its signer by subjectKeyIdentifier)
    called openssl with a bare subprocess.run: measured on 2026-11-20 on 1.9.0, an openssl killed by SIGKILL in

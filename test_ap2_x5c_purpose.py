@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Roberto Locatelli
-"""1.9.1, SPEC §6 step 7 and §6.9: a validated x5c chain clears `self_asserted_only` only when the leaf was issued for
+"""1.10.0, SPEC §6 step 7 and §6.9: a validated x5c chain clears `self_asserted_only` only when the leaf was issued for
 signing — keyUsage (RFC 5280 §4.2.1.3) with digitalSignature or nonRepudiation/contentCommitment, extendedKeyUsage
 (§4.2.1.12) with anyExtendedKeyUsage or id-kp-documentSigning (RFC 9336). `x5c_leaf.key_purpose` is the same object in
 both verifiers.
@@ -142,7 +142,7 @@ HAND = [   # (name, ku value or None, eku value or None, duplicate?, expected)
     ("ku_digital_signature", "03020780", None, False, (True, None)),
     ("ku_non_repudiation", "03020640", None, False, (True, None)),
     ("ku_cert_sign_only", "03020204", None, False, (False, "key_usage_not_signing")),
-    ("ku_no_bit", "03020000", None, False, (False, "key_usage_malformed")),   # X.690 §11.2.2 NOTE 2: no 1 bit = length 1 (1.9.1)
+    ("ku_no_bit", "03020000", None, False, (False, "key_usage_malformed")),   # X.690 §11.2.2 NOTE 2: no 1 bit = length 1 (1.10.0)
     ("ku_empty_bitstring", "030100", None, False, (False, "key_usage_not_signing")),
     ("ku_two_octets_decipher_only", "0303070080", None, False, (False, "key_usage_not_signing")),
     ("ku_no_unused_octet", "0300", None, False, (False, "key_usage_malformed")),
@@ -154,7 +154,7 @@ HAND = [   # (name, ku value or None, eku value or None, duplicate?, expected)
     ("ku_trailing", "0302008000", None, False, (False, "key_usage_malformed")),
     ("ku_overrun", "03030080", None, False, (False, "key_usage_malformed")),
     ("ku_empty_value", "", None, False, (False, "key_usage_malformed")),
-    ("ku_trailing_zero_bits", "03020080", None, False, (False, "key_usage_malformed")),   # X.690 §11.2.2: trailing 0 bits removed (1.9.1)
+    ("ku_trailing_zero_bits", "03020080", None, False, (False, "key_usage_malformed")),   # X.690 §11.2.2: trailing 0 bits removed (1.10.0)
     ("ku_trailing_zero_octet", "0303078000", None, False, (False, "key_usage_malformed")),
     ("ku_minimal_two_octets", "0303078080", None, False, (True, None)),   # control: digitalSignature + decipherOnly, minimal
     ("ku_long_length_form", "0381020780", None, False, (False, "key_usage_malformed")),   # X.690 §10.1: the short form fits

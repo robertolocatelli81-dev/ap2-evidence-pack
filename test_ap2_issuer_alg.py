@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Roberto Locatelli
-"""1.9.1, SPEC §6 step 2, RFC 7515 §5.2 step 8: verify checks the issuer signature only under the alg the signed header
+"""1.10.0, SPEC §6 step 2, RFC 7515 §5.2 step 8: verify checks the issuer signature only under the alg the signed header
 names, and this format knows ES256 only.
 
 Up to 1.9.0 verify checked ES256 whatever the header said (build refused it): measured on 2026-11-20 on 1.9.0, a pack

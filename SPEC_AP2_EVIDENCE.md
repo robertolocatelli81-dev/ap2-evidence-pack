@@ -3,7 +3,7 @@
 
 # ap2-evidence-pack — normative format v1.0 (2026-09-05), specification revision 1.9.0 (2026-11-20)
 
-> Unreleased revision 1.9.1 (after 1.9.0, 2026-11-20): §6 step 2, the issuer signature is verified only under the
+> Unreleased revision 1.10.0 (after 1.9.0, 2026-11-20): §6 step 2, the issuer signature is verified only under the
 > `alg` the signed header names (`issuer_alg_not_es256`); §3.2, an openssl that does not answer on the key-identifier
 > path, or a temporary file of that path that cannot be written, is a check not run (`null`), not a `false`; §6 step 7
 > and §6.9, a validated x5c chain clears `self_asserted_only` only when its leaf is issued for signing (keyUsage and
@@ -241,7 +241,7 @@ unless its policy binds them to that identity"; it does not make them an error);
 `x5t#S256`, the header `kid` against the `kid` of a supplied key, and, at verification, the header `kid` against the `kid`
 of a `jwks_fetched` key (a capture-time fact).
 
-1.9.1, what DER means for the leaf `x5c[0]`, wherever it is read (an `x5c_header` key, an `x5c` beside another key
+1.10.0, what DER means for the leaf `x5c[0]`, wherever it is read (an `x5c_header` key, an `x5c` beside another key
 source, the key purpose of §6 step 7). Both verifiers walk the whole certificate with the same rules BEFORE handing it to
 their library, and a leaf that breaks one is not a certificate here: that artifact's error, `x5c leaf is not DER: <rule>`,
 in both. The rules are those of ITU-T X.690 (02/2021, in force with its Erratum 1 of 09/2021, read on itu.int on
@@ -532,7 +532,7 @@ lowercased; the same RDNs in order), the serial number as an integer; and `opens
 chain `openssl ts -verify -CAfile` builds for the other form (no system store, no partial chain). An openssl that on this path is
 killed by a signal, gives no answer within 30 s or cannot be started, or a temporary file it needs that cannot be
 written, is a check not run here, `tsa_verified` `null`
-(§6.10; 1.9.1 — up to 1.9.0 it was `false`, a finding about the token: measured 2026-11-20 with an openssl killed by
+(§6.10; 1.10.0 — up to 1.9.0 it was `false`, a finding about the token: measured 2026-11-20 with an openssl killed by
 SIGKILL in `cms -verify` and in `verify`, with one answering after 45 s, and with a write of each of the two files of
 this step failing with ENOSPC). Closed shapes (1.8.0,
 measured on 2026-11-17 with the generative bench of omega-cra-evol's port of this step): exactly one SignerInfo (RFC
@@ -697,7 +697,7 @@ signature was `producer_ok: true`). **Pinning:** an embedded key proves internal
 authenticity. When the relying party supplies a pinned trust set
 (`{sig_alg: [public_key_b64, ...]}`), `producer_trusted` is `true` only if every
 present signature's key is pinned; a valid-but-unpinned signature MUST reject
-the pack even with no policy flags set. 1.9.1: a pinned set implies `require_producer` — a pack without a producer
+the pack even with no policy flags set. 1.10.0: a pinned set implies `require_producer` — a pack without a producer
 block does not meet it (§6 step 6). Without a pinned set `producer_trusted`
 is `null` and the pack MUST NOT be treated as authentic. `pq_protected` is true
 only on a valid ML-DSA-65 signature whose key is pinned (or no pin set given).
@@ -733,7 +733,7 @@ flags: `require_producer`, `require_pq`, `require_anchor`, and `min_anchors` (1.
    protected header (`crit` → RFC 7515 §4.1.11, unknown parameters ignored and reported); 1.7.3, compare every key source
    of the header that is not the source of the snapshotted key (§2 (d)): a `jwk` or `x5c` naming another key, or not a
    key, is that artifact's error, and the names go to `ignored.key_material`; verify the ES256 signature with
-   the snapshotted JWK over the JWS signing input — only when the signed header's `alg` is `"ES256"` (1.9.1, RFC 7515
+   the snapshotted JWK over the JWS signing input — only when the signed header's `alg` is `"ES256"` (1.10.0, RFC 7515
    §5.2 step 8: the signature is validated "in the manner defined for the algorithm being used, which MUST be accurately
    represented by the value of the `alg` (algorithm) Header Parameter"); any other value, or none, is that artifact's
    error `issuer_alg_not_es256`, as `build` already refused it. Up to 1.9.0 verify checked ES256 whatever the header
@@ -811,7 +811,7 @@ flags: `require_producer`, `require_pq`, `require_anchor`, and `min_anchors` (1.
 5. Verify the producer block per §5 → `producer_ok`, `producer_trusted`,
    `pq_protected`.
 6. Policy: `policy_ok` is false if `require_producer` and no valid producer
-   block; 1.9.1, if a pinned producer set is given and the pack carries no producer block (the set implies
+   block; 1.10.0, if a pinned producer set is given and the pack carries no producer block (the set implies
    `require_producer`; `policy.unmet` names `trusted_producer_keys`, not `require_producer`, which the relying party did
    not pass — both when it passed both; up to 1.9.0 the set was applied only to a block that was present: measured
    2026-11-20 on 1.9.0, the block removed from a pack whose producer key was pinned gave `valid: true` and
@@ -847,7 +847,7 @@ flags: `require_producer`, `require_pq`, `require_anchor`, and `min_anchors` (1.
    its issuer, cleared it in both verifiers while the pack stayed `valid`. Two DN strings the
    forger writes are not an issuance: only a validated chain is.
    (flag, not a failure: the verdict names the weakness instead of hiding it).
-   1.9.1, the PURPOSE of the leaf: a validated chain clears the flag only when the leaf was issued for signing, read from
+   1.10.0, the PURPOSE of the leaf: a validated chain clears the flag only when the leaf was issued for signing, read from
    the leaf's DER by both verifiers with the same rule and reported, with or without an anchor, as `x5c_leaf.key_purpose`
    = `{"signing": true|false, "reason": null|<code>, "matched": null|<OID>}` (`matched` since 1.10.0). RFC 5280 (Proposed Standard, May 2008; its updates RFC 6818, 8398,
    8399, 9549, 9598, 9608, 9618, 9925 and 10007 do not change §4.2.1.3 or §4.2.1.12; read on rfc-editor.org on
@@ -898,7 +898,7 @@ flags: `require_producer`, `require_pq`, `require_anchor`, and `min_anchors` (1.
      parent, nothing after the certificate — a long form where the short one fits is `key_usage_malformed` or
      `extended_key_usage_malformed` inside those two values and `extensions_unreadable` anywhere else on the walk
      (keyUsage `03 81 02 07 80` is malformed; cryptography 50.0.2 refuses that value, openssl 3.0.22 reads it as
-     digitalSignature, measured 2026-11-21). 1.9.1, also X.690 §11.2.2 ("the bitstring shall have all trailing 0 bits
+     digitalSignature, measured 2026-11-21). 1.10.0, also X.690 §11.2.2 ("the bitstring shall have all trailing 0 bits
      removed before it is encoded"; NOTE 2: no 1 bit is "a length of 1 and an initial octet set to 0"): a keyUsage whose
      last octet is zero, or whose lowest 1 bit is not the last bit in use, is `key_usage_malformed` (`03 02 00 80`,
      `03 03 07 80 00`, `03 02 00 00`), although openssl 3.0.22 and cryptography 50.0.2 read `03 02 00 80` as
@@ -953,7 +953,7 @@ receipt of both verifiers also carries:
 - `policy` (admitted packs): `{"met": bool, "unmet": [...]}`. `unmet` names, in this order, each requirement of the
   relying party the pack does not meet: `require_producer`, `require_pq`, `require_anchor`, `min_anchors` (§6 step 6),
   `require_binding` (1.9.0, below), `trusted_producer_keys` (a pinned set is given and the producer block is absent —
-  1.9.1, §6 step 6 — or present and not `trusted`, §5) and `trust_set_complete` (below). `met` is true iff `unmet` is empty. `policy_ok` keeps its §6 step 6
+  1.10.0, §6 step 6 — or present and not `trusted`, §5) and `trust_set_complete` (below). `met` is true iff `unmet` is empty. `policy_ok` keeps its §6 step 6
   meaning and, since 1.9.0, is also false when `require_binding` is unmet. A policy is a disposition of the relying party,
   not a state of the pack.
 - `require_binding` (1.9.0; `--require-binding IN->TO`, repeatable, both verifiers; `require_bindings`, a list of
@@ -982,7 +982,7 @@ element is `not_evaluated` with `not_present`.
 | `holder_binding` | each artifact that is not an error and carries a KB-JWT; since 1.9.0 also each `chain_cnf` artifact that is not an error (§2.1: `verified`) | its KB-JWT verifies under `cnf.jwk` | `kb_signature_invalid` (the signature does not verify, whatever `sd_hash`); `sd_hash_mismatch` (the signature verifies, `sd_hash` does not) | `holder_key_unknown` (no `cnf.jwk`: recorded, never fails the pack, §6 step 2 — except an `sd_hash` that does not match, an artifact error since 1.8.1); `not_present` |
 | `time_anchor` | the `rfc3161_timestamp` token when `anchored`; each `anchors` entry | binding verified (§3.2) AND, under `--tsa-cert`, the TSA signature verified | `binding_mismatch` (an imprint was read and is another digest, whatever else fails); `token_invalid` (otherwise: not a parseable, granted token); `token_missing` (`anchored` with no `tsr_b64`, §6 step 4) | `tsa_not_checked` (binding verified, no TSA certificate given: a self-issued token satisfies the binding, §3.2); `tsa_invalid` (the TSA signature does not verify under the certificate given: not counted, §3.3); `signer_certificate_absent` (1.8.1, §3.2: the signer certificate is not found, the signature not evaluated: not counted); `instrument_failure`; `not_present` |
 | `producer_signature` | each signature entry; the block itself | `PASS` with a key in the pinned set | `signature_invalid` (a `FAIL` entry; also a block with no entry, or whose `scheme` does not match its entries, §5, with a `detail`) | `self_asserted` (`PASS`, no pinned set: the key is carried by the pack — `valid` can be true without pins, a policy of this format, never a trust statement; krausz §5.4.2(a) has no resolved result without the relying party's trust material); `key_unresolved` (`PASS`, a pinned set that does not hold the key — not a failed signature); `backend_missing` (`SKIP`: no ML-DSA-65 backend, or a `sig_alg` this format does not define); `not_present` |
-| `issuer_identity` | the key of each artifact that is not an error | an `x5c_header` key whose chain validates to the relying party's trust anchor and whose leaf is issued for signing (§6 step 7, 1.9.1) — qualifier `ca_certified`: a CA under YOUR anchor certified the key, never "this is the issuer" | `chain_broken` (openssl reports a certificate signature failure inside the chain, or an `x5c` entry is not strict base64); `key_purpose_not_signing` (1.9.1: the chain validates, the leaf's keyUsage or extendedKeyUsage does not allow signing or cannot be read as §6 step 7 requires — `x5c_leaf.key_purpose.reason` says which) | `self_asserted` (`jwk_header`, `supplied`, `jwks_fetched`, and since 1.9.0 `chain_cnf`, §2.1); `no_trust_anchor` (`x5c_header`, no anchor given); `chain_unresolved` (the chain does not reach the anchor given: not resolved in the relying party's material, not a defect of the input); `instrument_failure`; `not_present` |
+| `issuer_identity` | the key of each artifact that is not an error | an `x5c_header` key whose chain validates to the relying party's trust anchor and whose leaf is issued for signing (§6 step 7, 1.10.0) — qualifier `ca_certified`: a CA under YOUR anchor certified the key, never "this is the issuer" | `chain_broken` (openssl reports a certificate signature failure inside the chain, or an `x5c` entry is not strict base64); `key_purpose_not_signing` (1.10.0: the chain validates, the leaf's keyUsage or extendedKeyUsage does not allow signing or cannot be read as §6 step 7 requires — `x5c_leaf.key_purpose.reason` says which) | `self_asserted` (`jwk_header`, `supplied`, `jwks_fetched`, and since 1.9.0 `chain_cnf`, §2.1); `no_trust_anchor` (`x5c_header`, no anchor given); `chain_unresolved` (the chain does not reach the anchor given: not resolved in the relying party's material, not a defect of the input); `instrument_failure`; `not_present` |
 
 An artifact that is an error is stated once, in `sealed_content` (`artifact_invalid`); `holder_binding` and
 `issuer_identity` are stated over the artifacts that are not errors, and say `not_present` with a `detail` when none is.
@@ -1009,21 +1009,21 @@ valid, §5).
 `issuer_identity` is `contradicted`, AND no producer entry is `SKIP` (`backend_missing`), AND `policy.met`. Two terms are
 not those of the equation the design of this revision pre-registered (every subject; no `SKIP` term), and both come from
 rules of earlier revisions this one does not change: an x5c chain never decided `valid` (§6 step 7: a flag, not a failure
-— vector `issuer_x5c_chain_broken` is valid with `issuer_identity` contradicted, and since 1.9.1 also
+— vector `issuer_x5c_chain_broken` is valid with `issuer_identity` contradicted, and since 1.10.0 also
 `issuer_x5c_key_purpose_not_signing`), and §5 makes a block with a `SKIP` entry
 not `ok` although no check failed (`producer_backend_missing`). Measured on 18/10/2026 by `verifiers/states_controls.py`
 (the schema-mutant corpus plus the vectors under four pinned-set inputs, 22 967 receipts): the equation above holds on
 every receipt; the pre-registered one fails on 7, all of them receipts of those two packs. Measured again on 2026-11-20
-on revision 1.9.1 (24 651 receipts): the equation above holds on every receipt; the pre-registered one fails on 5, three
+on revision 1.10.0 (24 651 receipts): the equation above holds on every receipt; the pre-registered one fails on 5, three
 receipts of `producer_backend_missing` and two of `issuer_x5c_chain_broken` under `trust_anchor` — the two receipts of
 `issuer_x5c_chain_broken` under a pinned producer set that failed it up to 1.9.0 (7 on 1.9.0, measured the same day) are
-not `valid` since 1.9.1 (a pinned set without a producer block, §6 step 6), as both equations say. Measured on 2026-11-21 on the
+not `valid` since 1.10.0 (a pinned set without a producer block, §6 step 6), as both equations say. Measured on 2026-11-21 on the
 code of 4e8740e, with the vector `issuer_x5c_key_purpose_not_signing` added: 6 314 files, 25 349 receipts, 0 violations,
 the same 5 failures of the pre-registered equation.
 
 **What no state can say.** A producer block that was removed and one that was never added give the same digest and
 the same states (`producer_signature: not_evaluated`, `not_present`): only the SHA-256 of the whole file, or
-`require_producer`, or since 1.9.1 a pinned producer set, tells them apart (§10).
+`require_producer`, or since 1.10.0 a pinned producer set, tells them apart (§10).
 
 ### 6.10 Exit codes and the receipt (NORMATIVE, 1.6.0)
 
@@ -1049,7 +1049,7 @@ openssl ABSENT is neither: as in 1.5.x the field is `null` (`tsa_verified`, `cha
 Run every `spec/vectors/ap2/<name>.json` under the policy in
 `<name>.expected.json` and reproduce the `normative` block exactly
 (`run_ap2_conformance.py` does this for the reference; exit 0 = conformant).
-The set contains fifty-nine vectors (1.9.1: + 2 — `issuer_x5c_key_purpose_not_signing`, the key purpose of §6 step 7:
+The set contains fifty-nine vectors (1.10.0: + 2 — `issuer_x5c_key_purpose_not_signing`, the key purpose of §6 step 7:
 an x5c leaf with keyUsage keyCertSign only and extendedKeyUsage serverAuth only under `trust_anchor`
 `issuer_purpose_ca.crt`, `valid`, `issuer_identity` `contradicted` `key_purpose_not_signing`, `self_asserted_only`
 true, needs openssl; on 2e2556b, before the rule, `verified` `ca_certified` and `self_asserted_only` false, measured
@@ -1244,7 +1244,7 @@ does not emit their names. Since 1.6.0 the receipt states its verdict in four fi
 digest covers the sealed content (§3), not `rfc3161_timestamp`, `producer_signatures` or `anchors`, so a copy with a
 signature or an anchor removed, or re-signed, has the same digest (and a copy with its producer block removed has the
 states of a pack that never had one, §6.9). Record the SHA-256 of
-the whole file, or verify with pinned producer keys (since 1.9.1 they imply `require_producer`, §6 step 6), plus `require_anchor` or `min_anchors` when
+the whole file, or verify with pinned producer keys (since 1.10.0 they imply `require_producer`, §6 step 6), plus `require_anchor` or `min_anchors` when
 a ground rests on the pack's time.
 
 **First, was the pack evaluated at all: `admission`.** `refused` means the verifier did not evaluate the pack; its

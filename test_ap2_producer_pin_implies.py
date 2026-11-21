@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Roberto Locatelli
-"""1.9.1, SPEC §6 step 6, §5, §6.9: a pinned producer set implies `require_producer`.
+"""1.10.0, SPEC §6 step 6, §5, §6.9: a pinned producer set implies `require_producer`.
 
 Up to 1.9.0 the set was applied only to a block that was present: measured on 2026-11-20 on 1.9.0, the producer block
 removed from a pack whose producer key was pinned gave `valid: true`, `policy.unmet: []` in both verifiers. Now

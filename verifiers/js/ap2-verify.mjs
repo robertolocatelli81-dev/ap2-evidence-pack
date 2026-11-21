@@ -373,7 +373,7 @@ function checkProvenance(pc, parsed, key) {   // returns: is this key SELF-ASSER
   let leaf, ident;
   try {
     const der = b64Strict(x5c[0]); if (!der) throw new Error("leaf not base64");
-    const cert = new X509Certificate(der); if (!Buffer.from(cert.raw).equals(der)) throw new Error("bytes after the certificate"); { const why = x5cLeafDerProblem(der); if (why) throw new Error("x5c leaf is not DER: " + why); }   // 1.9.1 — SPEC §2 (d)   // 1.7.3: node:crypto parses a DER certificate followed by more bytes; the reference (strict DER) refuses it
+    const cert = new X509Certificate(der); if (!Buffer.from(cert.raw).equals(der)) throw new Error("bytes after the certificate"); { const why = x5cLeafDerProblem(der); if (why) throw new Error("x5c leaf is not DER: " + why); }   // 1.10.0 — SPEC §2 (d)   // 1.7.3: node:crypto parses a DER certificate followed by more bytes; the reference (strict DER) refuses it
     leaf = createPublicKey({ key: cert.publicKey.export({ format: "jwk" }), format: "jwk" }).export({ format: "jwk" });
     // r9: the receipt names WHO the certificate was issued to — a cleared flag means "a CA under your anchor certified this key",
     // never "the key belongs to the mandate's issuer", and an auditor cannot tell CN=the-bank from CN=attacker without this
@@ -385,7 +385,7 @@ function checkProvenance(pc, parsed, key) {   // returns: is this key SELF-ASSER
     ident = { subject: rfc4514(cert.subject), issuer: rfc4514(cert.issuer), serial: cert.serialNumber.toLowerCase().replace(/^0+/, ""),
               not_valid_before: isoZ(cert.validFrom), not_valid_after: isoZ(cert.validTo),
               sha256: createHash("sha256").update(der).digest("hex"), chain_verified: null,
-              key_purpose: leafKeyPurpose(der) };   // 1.9.1 — SPEC §6 step 7: reported here too; this verifier never clears the flag
+              key_purpose: leafKeyPurpose(der) };   // 1.10.0 — SPEC §6 step 7: reported here too; this verifier never clears the flag
   } catch (e) { throw new Refused("provenance_class x5c_header but the x5c leaf is unusable" + leafWhy(e)); }
   if (["kty", "crv", "x", "y"].some((f) => leaf[f] !== jwk[f])) throw new Refused("provenance_class x5c_header but the x5c leaf key differs from the snapshotted jwk");
   // r8: r7 read "issued by someone else" off `subject !== issuer` — two DN strings the forger writes himself (a leaf
@@ -410,7 +410,7 @@ function reconcileUnusedHeaderKeys(header, jwk, pc) {
     let leaf;
     try {
       const der = b64Strict(x5c[0]); if (!der) throw new Error("leaf not base64");
-      const cert = new X509Certificate(der); if (!Buffer.from(cert.raw).equals(der)) throw new Error("bytes after the certificate"); { const why = x5cLeafDerProblem(der); if (why) throw new Error("x5c leaf is not DER: " + why); }   // 1.9.1 — SPEC §2 (d)   // as in checkProvenance
+      const cert = new X509Certificate(der); if (!Buffer.from(cert.raw).equals(der)) throw new Error("bytes after the certificate"); { const why = x5cLeafDerProblem(der); if (why) throw new Error("x5c leaf is not DER: " + why); }   // 1.10.0 — SPEC §2 (d)   // as in checkProvenance
       leaf = createPublicKey({ key: cert.publicKey.export({ format: "jwk" }), format: "jwk" }).export({ format: "jwk" });
     } catch (e) { throw new Refused("the header x5c leaf is unusable" + leafWhy(e) + " (SPEC §2 (d), RFC 7515 §4.1.6)"); }
     if (!sameKey(leaf, jwk)) throw new Refused("the header x5c leaf names another key than the one the artifact verifies under (SPEC §2 (d), RFC 7515 §4.1.6)");
@@ -504,7 +504,7 @@ function derTLV(buf, off) { if (off + 2 > buf.length) throw new Refused("der"); 
   if (len & 0x80) { const n = len & 0x7f; if (n === 0 || n > 4 || off + 2 + n > buf.length) throw new Refused("der len"); len = 0; for (let k = 0; k < n; k++) len = len * 256 + buf[off + 2 + k]; hl = 2 + n; }   // r3: `<<` is int32 — 0x84 80 00 00 00 went negative and passed the overrun check
   if (off + hl + len > buf.length) throw new Refused("der overrun"); return { tag, start: off + hl, end: off + hl + len, next: off + hl + len }; }
 function derChildren(buf, tlv) { const out = []; let o = tlv.start; while (o < tlv.end) { const c = derTLV(buf, o); out.push(c); o = c.next; } return out; }
-// 1.9.1 — SPEC §6 step 7: whether an x5c leaf was issued for signing, the same rule and the same object as the reference's
+// 1.10.0 — SPEC §6 step 7: whether an x5c leaf was issued for signing, the same rule and the same object as the reference's
 // leaf_key_purpose. keyUsage (RFC 5280 §4.2.1.3): digitalSignature (bit 0) or nonRepudiation / contentCommitment (bit 1);
 // extendedKeyUsage (§4.2.1.12): one of a closed list, this format's choice — id-kp-documentSigning (RFC 9336) and, since
 // 1.10.0, the mDL Document Signer purpose 1.0.18013.5.1.2; anyExtendedKeyUsage is not a purpose since 1.10.0. Both
@@ -520,7 +520,7 @@ function oidOk(c) {   // X.690 §8.19.2: last octet of each sub-identifier with 
 function derStrictTLV(buf, off, end) { const t = derTLV(buf, off);
   if (t.end > end || (t.start - off > 2 && (buf[off + 2] === 0 || t.end - t.start < 128))) throw new Refused("der: not DER"); return t; }
 function derStrictChildren(buf, tlv) { const out = []; let o = tlv.start; while (o < tlv.end) { const c = derStrictTLV(buf, o, tlv.end); out.push(c); o = c.next; } return out; }
-// 1.9.1 — SPEC §2 (d): the x5c leaf walked as DER (ITU-T X.690 02/2021) with the shape of RFC 5280 §4.1, the same rules
+// 1.10.0 — SPEC §2 (d): the x5c leaf walked as DER (ITU-T X.690 02/2021) with the shape of RFC 5280 §4.1, the same rules
 // as the reference's x5c_leaf_der_problem, before node:crypto (OpenSSL reads BER) sees it. Measured 2026-11-21: 52 of
 // 5205 one-bit and one-byte changes of one leaf were a certificate for one verifier only.
 const LEAF_PRIMITIVE = new Set([0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x0c, 0x12, 0x13, 0x14, 0x16, 0x17, 0x18, 0x1c, 0x1e, 0x81, 0x82]);
@@ -595,7 +595,7 @@ function x5cLeafShape(buf) {
       const shape = parts.map((p) => p.tag).join(); if (shape !== "6,4" && shape !== "6,1,4") throw new NotDer("extension");
       if (parts.length === 3 && !(parts[1].end - parts[1].start === 1 && buf[parts[1].start] === 0xff)) throw new NotDer("extension"); } }   // critical FALSE is the DEFAULT (X.690 §11.5)
 }
-// the rule of SPEC §2 (d) in an artifact's error, as the reference writes it (1.9.1)
+// the rule of SPEC §2 (d) in an artifact's error, as the reference writes it (1.10.0)
 const leafWhy = (e) => (e instanceof Error && e.message.startsWith("x5c leaf is not DER: ") ? ": " + e.message : "");
 export function x5cLeafDerProblem(der) {   // null, or the rule broken (SPEC §2 (d)) — the reference's x5c_leaf_der_problem
   try { x5cLeafShape(der); return null; } catch (e) { if (e instanceof NotDer) return e.rule; throw e; } }
@@ -623,7 +623,7 @@ export function leafKeyPurpose(der) {
     const bits = ku.subarray(t.start, t.end);
     if (t.tag !== 0x03 || t.end !== ku.length || !bits.length || bits[0] > 7 || (bits.length === 1 && bits[0] !== 0)
         || (bits.length > 1 && (bits[bits.length - 1] & ((1 << bits[0]) - 1)))
-        || (bits.length > 1 && (bits[bits.length - 1] & -bits[bits.length - 1]) !== 1 << bits[0])) return no("key_usage_malformed");   // X.690 §11.2.2: trailing 0 bits removed (1.9.1)
+        || (bits.length > 1 && (bits[bits.length - 1] & -bits[bits.length - 1]) !== 1 << bits[0])) return no("key_usage_malformed");   // X.690 §11.2.2: trailing 0 bits removed (1.10.0)
     if (bits.length < 2 || !(bits[1] & 0xc0)) return no("key_usage_not_signing");   // digitalSignature 0x80, nonRepudiation 0x40
   }
   const eku = found.get(ID_CE_EXT_KEY_USAGE);
@@ -1015,7 +1015,7 @@ function verifyEvidenceInner(path, opts) {
       // verified in this verifier and failed in the reference. It runs before checkProvenance, which reads the header.
       if (parsed.payload === null || typeof parsed.payload !== "object" || Array.isArray(parsed.payload) || parsed.header === null || typeof parsed.header !== "object" || Array.isArray(parsed.header)) throw new Refused("JWT header and payload must be objects");
       if (canon(a.header) !== canon(parsed.header)) throw new Refused("artifact header copy differs from the decoded protected header (SPEC §2)");   // 1.4.0: the informative copy must say what the signed header says
-      if (parsed.header.alg !== "ES256") throw new Refused("issuer_alg_not_es256: the signed header does not name alg ES256 (RFC 7515 §5.2 step 8, SPEC §6 step 2)");   // 1.9.1: up to 1.9.0 ES256 was checked whatever the header said
+      if (parsed.header.alg !== "ES256") throw new Refused("issuer_alg_not_es256: the signed header does not name alg ES256 (RFC 7515 §5.2 step 8, SPEC §6 step 2)");   // 1.10.0: up to 1.9.0 ES256 was checked whatever the header said
       if (Boolean(parsed.kbJwt) !== a.kb_jwt.present) throw new Refused("artifact kb_jwt.present contradicts the compact serialization (SPEC §9.1)");
       // SPEC §9.2 — the standards' rule for the unknown: ignored, and REPORTED (crit: RFC 7515 §4.1.11, a rejection)
       const ignored = { header: joseHeaderIgnored(parsed.header, "JWT header"), header_jwk: unknownMembers(parsed.header.jwk, JWK_REGISTERED), key_jwk: unknownMembers(a.key.jwk, JWK_REGISTERED) };
@@ -1071,7 +1071,7 @@ function verifyEvidenceInner(path, opts) {
   let bindingMissing = null;   // 1.9.0 — SPEC §6.9: each IN->TO must be in the RECOMPUTED set, which counts only when bindingsOk
   if (opts.requireBindings && opts.requireBindings.length) { const held = new Set(bindingsOk ? findBindings(forBindings).map((b) => JSON.stringify([b.in, b.commits_to])) : []);
     const miss = opts.requireBindings.filter((pr) => !held.has(JSON.stringify(pr))); if (miss.length) { unmet.push("require_binding"); bindingMissing = miss; } }
-  // 1.9.1 — SPEC §6 step 6, §6.9: a pinned producer set implies require_producer: a block ABSENT does not meet it
+  // 1.10.0 — SPEC §6 step 6, §6.9: a pinned producer set implies require_producer: a block ABSENT does not meet it
   // (up to 1.9.0 only a present block was held to the set: measured 2026-11-20, the block removed → valid: true, unmet [])
   const pinAbsent = (opts.trusted ?? null) !== null && !producer.present;
   const policyOk = unmet.length === 0 && !pinAbsent;

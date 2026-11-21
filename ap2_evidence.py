@@ -150,7 +150,7 @@ def _no_dup_pairs(pairs):
 # JSON implementation is refused, so a third-party verifier computes the same canonical bytes or refuses the same file.
 MAX_JSON_DEPTH = 512
 MAX_EVIDENCE_BYTES = 64 << 20
-MAX_TSA_REPLY_BYTES = 1 << 20   # 1.9.1: an RFC 3161 reply read by stamp --tsa / build --tsa, as the 1 MiB of a JWKS
+MAX_TSA_REPLY_BYTES = 1 << 20   # 1.10.0: an RFC 3161 reply read by stamp --tsa / build --tsa, as the 1 MiB of a JWKS
 _SAFE_INT = (1 << 53) - 1
 
 
@@ -703,7 +703,7 @@ def _load_x5c_leaf(x5c: List[str]):
     try:   # r7: a leaf wrapped at 76 columns, not a certificate, or not a string used to be a bare ValueError -> traceback out of `build`
         der = _sigsuite._unb64(x5c[0])   # r6: strict RFC 4648 — b64decode() dropped a space/newline, the JS verifier refused it
         why = x5c_leaf_der_problem(der)
-        if why:   # 1.9.1 (SPEC §2 (d)): the rules of both verifiers, not the library's
+        if why:   # 1.10.0 (SPEC §2 (d)): the rules of both verifiers, not the library's
             raise Ap2EvidenceError(f"x5c leaf is not DER: {why}")
         leaf = x509.load_der_x509_certificate(der)
     except Ap2EvidenceError:
@@ -720,7 +720,7 @@ def _pubkey_from_x5c_leaf(x5c: List[str]):
     return _load_x5c_leaf(x5c).public_key()
 
 
-# 1.9.1 (SPEC §6 step 7): the purposes RFC 5280 gives a leaf for signing. keyUsage (§4.2.1.3): digitalSignature (bit 0) or
+# 1.10.0 (SPEC §6 step 7): the purposes RFC 5280 gives a leaf for signing. keyUsage (§4.2.1.3): digitalSignature (bit 0) or
 # nonRepudiation / contentCommitment (bit 1), the two bits for digital signatures "other than signatures on certificates
 # (bit 5) and CRLs (bit 6)". extendedKeyUsage (§4.2.1.12, "the certificate MUST only be used for one of the purposes
 # indicated"): a closed list, this format's choice (RFC 5280 leaves it to the application) — id-kp-documentSigning
@@ -764,7 +764,7 @@ def _der_strict_children(buf: bytes, start: int, end: int) -> List[Tuple[int, in
     return out
 
 
-# 1.9.1 (SPEC §2 (d)): the x5c leaf walked as DER (ITU-T X.690 02/2021) with the shape of RFC 5280 §4.1, the same rules
+# 1.10.0 (SPEC §2 (d)): the x5c leaf walked as DER (ITU-T X.690 02/2021) with the shape of RFC 5280 §4.1, the same rules
 # in both verifiers, before the library reads it. Up to 1.9.0 each verifier left it to its library (cryptography: strict
 # DER; node:crypto / OpenSSL: BER): measured 2026-11-21, 52 of 5205 one-bit and one-byte changes of one leaf were a
 # certificate for one verifier only.
@@ -924,7 +924,7 @@ def _leaf_why(e: Exception) -> str:
 
 
 def x5c_leaf_der_problem(der: bytes) -> Optional[str]:
-    """1.9.1 (SPEC §2 (d)): None when the leaf is DER with the shape of RFC 5280 §4.1, else the name of the rule broken
+    """1.10.0 (SPEC §2 (d)): None when the leaf is DER with the shape of RFC 5280 §4.1, else the name of the rule broken
     (length, tag, boolean, integer, null, oid, bit_string, string, time, set_order, tbs, version, serial, extension,
     attribute_value). The same function in the JS verifier: x5cLeafDerProblem."""
     try:
@@ -935,7 +935,7 @@ def x5c_leaf_der_problem(der: bytes) -> Optional[str]:
 
 
 def leaf_key_purpose(der: bytes) -> Dict:
-    """1.9.1 (SPEC §6 step 7): `{"signing": bool, "reason": None | code}` for an x5c leaf, read from its DER the same way
+    """1.10.0 (SPEC §6 step 7): `{"signing": bool, "reason": None | code}` for an x5c leaf, read from its DER the same way
     in both verifiers. Codes: extensions_unreadable, duplicate_extension, key_usage_malformed, key_usage_not_signing,
     extended_key_usage_malformed, extended_key_usage_not_signing. Every length read is minimal and every element ends
     inside its parent (`_der_strict_tlv`). Both extensions absent: signing (RFC 5280 §4.2.1.12
@@ -977,7 +977,7 @@ def leaf_key_purpose(der: bytes) -> Dict:
         bits = ku[s:e]
         if t != 0x03 or e != len(ku) or not bits or bits[0] > 7 or (len(bits) == 1 and bits[0] != 0) \
                 or (len(bits) > 1 and bits[-1] & ((1 << bits[0]) - 1)) \
-                or (len(bits) > 1 and (bits[-1] & -bits[-1]) != 1 << bits[0]):   # X.690 §11.2.2: trailing 0 bits removed (1.9.1)
+                or (len(bits) > 1 and (bits[-1] & -bits[-1]) != 1 << bits[0]):   # X.690 §11.2.2: trailing 0 bits removed (1.10.0)
             return no("key_usage_malformed")
         if len(bits) < 2 or not bits[1] & 0xC0:   # digitalSignature (0x80) or nonRepudiation / contentCommitment (0x40)
             return no("key_usage_not_signing")
@@ -1160,7 +1160,7 @@ def _check_provenance(pc, parsed: Dict, key: Dict, trust_anchor: Optional[str] =
              "not_valid_after": cert.not_valid_after_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
              "sha256": hashlib.sha256(cert.public_bytes(_serialization().Encoding.DER)).hexdigest()}
     ident["chain_verified"] = None     # r11: always present, as in the JS receipt — None = not measured
-    # 1.9.1 (SPEC §6 step 7): whether the leaf was issued for signing (keyUsage / extendedKeyUsage, RFC 5280 §4.2.1.3,
+    # 1.10.0 (SPEC §6 step 7): whether the leaf was issued for signing (keyUsage / extendedKeyUsage, RFC 5280 §4.2.1.3,
     # §4.2.1.12), reported with or without an anchor, the same object in both verifiers. Up to 1.9.0 neither extension was
     # read: measured 2026-11-20, a leaf with keyUsage keyCertSign only and EKU serverAuth only, under the anchor, cleared
     # self_asserted_only (`ca_certified`).
@@ -1176,7 +1176,7 @@ def _check_provenance(pc, parsed: Dict, key: Dict, trust_anchor: Optional[str] =
         chain_ok = None
         ident["_not_run"] = str(e)
     ident["chain_verified"] = chain_ok
-    # only a chain that really validated clears it (None = openssl absent = unmeasurable), and since 1.9.1 only to a leaf
+    # only a chain that really validated clears it (None = openssl absent = unmeasurable), and since 1.10.0 only to a leaf
     # issued for signing (SPEC §6 step 7): `chain_verified` stays the chain's answer
     return not (chain_ok is True and ident["key_purpose"]["signing"] is True), ident
 
@@ -1688,7 +1688,7 @@ def _rfc3161_stamp(digest_hex: str, tsa_url: str, timeout: int = 20) -> Dict:
         http = urllib.request.Request(tsa_url, data=req, method="POST",
                                       headers={"Content-Type": "application/timestamp-query"})
         with urllib.request.urlopen(http, timeout=timeout) as rh:
-            resp = rh.read(MAX_TSA_REPLY_BYTES + 1)   # 1.9.1: bounded, as the JWKS fetch is (up to 1.9.0 read whole: measured
+            resp = rh.read(MAX_TSA_REPLY_BYTES + 1)   # 1.10.0: bounded, as the JWKS fetch is (up to 1.9.0 read whole: measured
         if len(resp) > MAX_TSA_REPLY_BYTES:          # 2026-11-20, an 8 MiB reply was read to the last byte)
             return {"anchored": False, "tsa_url": tsa_url,
                     "note": f"TSA reply larger than {MAX_TSA_REPLY_BYTES} bytes: not read further, not anchored"}
@@ -2030,7 +2030,7 @@ def _ski_policies_shape(el):
 def key_id_token_problem(der, digest_hex, ca_file, at, tmp, exe="openssl"):
     """the checks of `openssl ts -verify -digest D -CAfile CA -attime T`, made one by one for a token whose signer is
     named by subjectKeyIdentifier: None when they hold, else why not. `tmp` is an empty private directory. Raises
-    KeyIdCheckNotRun or (1.9.1) Ap2WriteError when openssl could not run a step here, or a temporary file it needs could
+    KeyIdCheckNotRun or (1.10.0) Ap2WriteError when openssl could not run a step here, or a temporary file it needs could
     not be written: never a "why not"."""
     import hashlib
     import os
@@ -2047,8 +2047,8 @@ def key_id_token_problem(der, digest_hex, ca_file, at, tmp, exe="openssl"):
     except (ValueError, IndexError) as e:
         return "token not read: %s" % e
     tp, sp = os.path.join(tmp, "ski_token.der"), os.path.join(tmp, "ski_signer.pem")
-    _tmp_write(tp, token)   # 1.9.1 (SPEC §6.10): a temporary file openssl needs that cannot be written is a check not run here
-    # 1.9.1 (SPEC §6.10): through _run_openssl, so an openssl that is killed by a signal, gives no answer within 30 s or
+    _tmp_write(tp, token)   # 1.10.0 (SPEC §6.10): a temporary file openssl needs that cannot be written is a check not run here
+    # 1.10.0 (SPEC §6.10): through _run_openssl, so an openssl that is killed by a signal, gives no answer within 30 s or
     # cannot be started raises Ap2WriteError — the check was not run here, `tsa_verified` null. Up to 1.9.0 these two calls
     # were bare subprocess.run: measured 2026-11-20, SIGKILL gave "openssl cms -verify: refused" / "openssl verify: refused"
     # and a timeout a TimeoutExpired, each `tsa_verified: false`, a finding about the token
@@ -2150,7 +2150,7 @@ def key_id_token_problem(der, digest_hex, ca_file, at, tmp, exe="openssl"):
     if allowed is not None:   # 1.9.0 (SPEC §3.2, RFC 5035 §5.4.1): only these may build the path below the pins
         certs = [c for c in certs if c in allowed]
     up = os.path.join(tmp, "ski_untrusted.pem")
-    _tmp_write(up, b"".join(_ski_pem(c) for c in certs))   # 1.9.1 (SPEC §6.10), as ski_token.der above
+    _tmp_write(up, b"".join(_ski_pem(c) for c in certs))   # 1.10.0 (SPEC §6.10), as ski_token.der above
     cmd = [exe, "verify", "-purpose", "timestampsign", "-attime", str(int(at)), "-CAfile", ca_file, "-no-CApath",
            "-no-CAstore"] + (["-untrusted", up] if certs else []) + [sp]
     r = _run_openssl(cmd, 30)
@@ -2723,7 +2723,7 @@ def derive_states(*, digest_ok, art_results, binding_set_match, ts_block, rfc_bl
         else:
             leaf = r.get("x5c_leaf") or {}
             cv = leaf.get("chain_verified")
-            if cv is True and (leaf.get("key_purpose") or {}).get("signing") is not True:   # 1.9.1 (SPEC §6 step 7, §6.9)
+            if cv is True and (leaf.get("key_purpose") or {}).get("signing") is not True:   # 1.10.0 (SPEC §6 step 7, §6.9)
                 issuer.append(("contradicted", "key_purpose_not_signing", f"the leaf is not issued for signing: {(leaf.get('key_purpose') or {}).get('reason')} (RFC 5280 §4.2.1.3, §4.2.1.12)"))
             elif cv is True:
                 issuer.append(("verified", "ca_certified"))
@@ -3312,7 +3312,7 @@ def _verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = F
                 raise Ap2EvidenceError("JWT header and payload must be objects")
             if _canon(a["header"]) != _canon(parsed["header"]):   # 1.4.0 — SPEC §2: the informative copy must say what the signed header says
                 raise Ap2EvidenceError("artifact header copy differs from the decoded protected header (SPEC §2)")
-            if parsed["header"].get("alg") != "ES256":   # 1.9.1 (SPEC §6 step 2, RFC 7515 §5.2 step 8): the signature is checked
+            if parsed["header"].get("alg") != "ES256":   # 1.10.0 (SPEC §6 step 2, RFC 7515 §5.2 step 8): the signature is checked
                 # under the alg the signed header names, and this format knows ES256 only. Up to 1.9.0 verify checked ES256
                 # whatever the header said: measured 2026-11-20, a header saying "none", "HS256", "ES384" or "RS256" over an
                 # ES256 signature was valid: true in both verifiers (build refused it, in _snapshot_key)
@@ -3427,7 +3427,7 @@ def _verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = F
         if missing:
             unmet.append("require_binding")
             binding_policy_missing = missing
-    # 1.9.1 (SPEC §6 step 6, §6.9): a pinned producer set implies require_producer — a pack whose block is ABSENT does not
+    # 1.10.0 (SPEC §6 step 6, §6.9): a pinned producer set implies require_producer — a pack whose block is ABSENT does not
     # meet it (`trusted_producer_keys` unmet, `policy_ok` false). Up to 1.9.0 only a PRESENT block was held to the set:
     # measured 2026-11-20, the block removed from a pack whose key was pinned gave `valid: true`, `unmet: []`, both verifiers.
     pin_absent = trusted_producer_keys is not None and not producer["present"]

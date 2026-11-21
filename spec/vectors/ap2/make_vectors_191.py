@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Roberto Locatelli
-"""Generator of the 1.9.1 vector of SPEC §6 step 2 (the issuer signature only under the `alg` the signed header names) —
+"""Generator of the 1.10.0 vector of SPEC §6 step 2 (the issuer signature only under the `alg` the signed header names) —
 provenance of the frozen files.
 
   issuer_alg_not_es256   an ES256 signature of the issuer under a signed header that says "alg": "none"
@@ -20,7 +20,7 @@ is not in the normative block; the `states` block is the SPEC §6.9 row of an ar
   python3 make_vectors_191.py alg        write issuer_alg_not_es256 (a fresh key: rebuild only deliberately)
   python3 make_vectors_191.py purpose    write issuer_x5c_key_purpose_not_signing and issuer_purpose_ca.crt (fresh keys)
 
-The second is measured on 2026-11-21: on 2e2556b (before 1.9.1's key-purpose rule) the reference gives issuer_identity
+The second is measured on 2026-11-21: on 2e2556b (before 1.10.0's key-purpose rule) the reference gives issuer_identity
 verified / ca_certified and self_asserted_only false on it.
 """
 import base64
@@ -33,7 +33,7 @@ sys.path.insert(0, _HERE)
 import make_vectors_closed_schema as cs  # noqa: E402
 from make_vectors_sd_rules import STATES  # noqa: E402
 
-SUBJECT = "ap2 conformance vector (issuer alg, 1.9.1)"
+SUBJECT = "ap2 conformance vector (issuer alg, 1.10.0)"
 
 
 def alg() -> int:
@@ -48,7 +48,7 @@ def alg() -> int:
         "An issuer JWT whose signed protected header says \"alg\": \"none\" and whose signature is a valid ES256 "
         "signature of the header's own jwk over the JWS signing input. RFC 7515 §5.2 step 8: the signature is validated "
         "in the manner defined for the algorithm the alg header parameter names. Measured 2026-11-20 on v1.9.0: both "
-        "verifiers valid: true. 1.9.1 (SPEC §6 step 2): that artifact's error, issuer_alg_not_es256.",
+        "verifiers valid: true. 1.10.0 (SPEC §6 step 2): that artifact's error, issuer_alg_not_es256.",
         {}, cs.ARTIFACT_ERROR)
     exp["states"] = STATES
     cs._write(name, cs._pack(scope, SUBJECT, [cs._artifact("intent", jwt + "~", hdr, jwk, claims, False)]), exp)
@@ -105,7 +105,7 @@ def purpose() -> int:
                                   "issuer_identity": {"state": "contradicted", "reasons": ["key_purpose_not_signing"]}},
                      "policy": {"met": True, "unmet": []}}
     exp["requires"] = ["openssl"]
-    cs._write(name_, cs._pack(scope_of(), "ap2 conformance vector (key purpose, 1.9.1)", [art]), exp)
+    cs._write(name_, cs._pack(scope_of(), "ap2 conformance vector (key purpose, 1.10.0)", [art]), exp)
     return 0
 
 

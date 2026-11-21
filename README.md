@@ -213,7 +213,7 @@ QTSP service under eIDAS art. 45j), and validates x5c chains only when you suppl
 chain linkage and `provenance_classes` / `self_asserted_only` for capture strength.
 `self_asserted_only` is fail-closed (SPEC §6.7): offline **nothing** clears it — not a label
 (`supplied`, `jwks_fetched`), not a certificate that names a famous CA as its issuer. Only an
-`x5c` chain that validates to a trust anchor YOU supply does, and since 1.9.1 only when its leaf is issued for signing
+`x5c` chain that validates to a trust anchor YOU supply does, and since 1.10.0 only when its leaf is issued for signing
 (keyUsage absent or with digitalSignature or contentCommitment, extendedKeyUsage absent or listing id-kp-documentSigning
 or the mDL Document Signer purpose `1.0.18013.5.1.2` that AP2's sample signer certificate carries — anyExtendedKeyUsage
 alone is not a purpose — RFC 5280 §4.2.1.3, §4.2.1.12, RFC 9336; `artifacts[].x5c_leaf.key_purpose`, with the purpose
@@ -231,7 +231,7 @@ classical signature (ed25519 or ecdsa-p256) plus **FIPS 204 ML-DSA-65** — so t
 integrity/authenticity survives the quantum transition (NIST IR 8547). Verification is
 fail-closed; authenticity requires the relying party to **pin** the producer public keys
 out of band (an embedded key proves consistency, never authenticity). Policy flags on
-`verify_evidence`: `require_producer`, `require_pq`, `require_anchor`, and since 1.5.0 `min_anchors`; since 1.9.1 a
+`verify_evidence`: `require_producer`, `require_pq`, `require_anchor`, and since 1.5.0 `min_anchors`; since 1.10.0 a
 pinned set implies `require_producer` (a pack without a producer block is not `valid` under it, SPEC §6 step 6). The ML-DSA-65
 path is checked against NIST ACVP sigVer vectors (`pqcrypto/vectors/`): every case of the ML-DSA-65 external/pure
 group of usnistgov/ACVP-Server (15), written by `pqcrypto/vectors/make_acvp_mldsa65.py` from NIST's JSON at a pinned
@@ -326,7 +326,7 @@ from a copy of the reference, 2 520 miss their class (measured 2026-10-18). The 
 `verifiers/states_controls.py` (1.6.0) runs the same corpus through the controls of the states (SPEC §6.9): no
 `contradicted` without a check that ran and failed, no `verified` over a check that did not run, the `valid` equation,
 pinned sets that never create a contradiction — 22 967 receipts, 0 violations (24 651 receipts, 0 violations on
-2026-11-20; 25 349 receipts, 0 violations on 2026-11-21 with the 1.9.1 vectors); each of six deliberately broken rules of
+2026-11-20; 25 349 receipts, 0 violations on 2026-11-21 with the 1.10.0 vectors); each of six deliberately broken rules of
 the derivation turns it red.
 
 **Differential oracle** (`verifiers/differential_oracle.py`, 22/09/2026): the two verifiers must

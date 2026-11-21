@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Roberto Locatelli
-"""1.9.1, SPEC §2 (d): the x5c leaf is walked as DER (ITU-T X.690 02/2021) with the shape of RFC 5280 §4.1, by the same
+"""1.10.0, SPEC §2 (d): the x5c leaf is walked as DER (ITU-T X.690 02/2021) with the shape of RFC 5280 §4.1, by the same
 rules in both verifiers, before cryptography (reference) or node:crypto (JS verifier) reads it.
 
 Up to 1.9.0 each verifier left the question to its library, and they disagree: measured on 2026-11-21 with one leaf

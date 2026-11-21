@@ -1,5 +1,5 @@
 {
- "description": "An issuer JWT whose signed protected header says \"alg\": \"none\" and whose signature is a valid ES256 signature of the header's own jwk over the JWS signing input. RFC 7515 §5.2 step 8: the signature is validated in the manner defined for the algorithm the alg header parameter names. Measured 2026-11-20 on v1.9.0: both verifiers valid: true. 1.9.1 (SPEC §6 step 2): that artifact's error, issuer_alg_not_es256.",
+ "description": "An issuer JWT whose signed protected header says \"alg\": \"none\" and whose signature is a valid ES256 signature of the header's own jwk over the JWS signing input. RFC 7515 §5.2 step 8: the signature is validated in the manner defined for the algorithm the alg header parameter names. Measured 2026-11-20 on v1.9.0: both verifiers valid: true. 1.10.0 (SPEC §6 step 2): that artifact's error, issuer_alg_not_es256.",
  "normative": {
   "anchors_verified": 0,
   "bindings_ok": false,

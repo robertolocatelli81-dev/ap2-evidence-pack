@@ -80,7 +80,7 @@ jobs:
           (cd /tmp && /tmp/pkgvenv/bin/python -I -m unittest ap2_pqcrypto.test_acvp_mldsa65)
           /tmp/pkgvenv/bin/python -I -c "import ap2_nist_beacon as b; assert b.__file__.startswith('/tmp/pkgvenv/'), b.__file__"
           echo "the published package imports and verifies on its own"
-      - name: "The wheel carries the ACVP vectors, positive control included (test_ap2_wheel_contents.py on the checkout, 1.9.1)"
+      - name: "The wheel carries the ACVP vectors, positive control included (test_ap2_wheel_contents.py on the checkout, 1.10.0)"
         run: |
           python -m pip install -q build "setuptools>=68"
           python test_ap2_wheel_contents.py 2>&1 | tee "$RUNNER_TEMP/wheel_contents.txt"
