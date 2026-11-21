@@ -3,8 +3,8 @@
 ## Unreleased (1.9.1) — fixes after an internal review of 1.8.0, measured again on 1.9.0 on 2026-11-20
 
 Each item below was reproduced on the tag v1.9.0 (de28c3a) and on v1.8.0 (d5601e4) with a script made for it. Of the
-28 tests added, the 21 that state the new behaviour fail on v1.9.0, as a failure or as an error (a constant or a
-function they read does not exist there); the other 7 are the five controls and the unchanged direction (`build` refusing, a
+31 tests added, the 23 that state the new behaviour fail on v1.9.0, as a failure or as an error (a constant or a
+function they read does not exist there); the other 8 are the six controls and the unchanged direction (`build` refusing, a
 refusal of openssl staying `false`), which pass on both.
 
 - SPEC §6 step 2, both verifiers: the issuer signature is verified only under the `alg` the signed header names, ES256.
@@ -33,11 +33,25 @@ refusal of openssl staying `false`), which pass on both.
   ca_certified`. Now `chain_verified` stays `true`, the flag stays set and `issuer_identity` is `contradicted /
   key_purpose_not_signing` (a new reason of `ap2-evidence-pack/states-1`; `valid` does not change, as for
   `chain_broken`). Each `x5c_leaf` carries `key_purpose` (`{"signing", "reason"}`) in both verifiers, with or without an
-  anchor; the differential oracle compares it. Verdicts: no vector changes (the six x5c leaves of `spec/vectors` carry
-  neither extension: `signing: true`). `test_ap2_x5c_purpose.py`: 10 tests — 400 generated leaves checked against the
-  rule written from the generator's parameters, 32 extension values written by hand (malformed, duplicated, DER edges),
-  two TBS walks with one and two `[3]` fields and 3000 byte mutations of a leaf, the same answer in both verifiers, and
-  the whole path under openssl with eight leaves.
+  anchor; the differential oracle compares it. The walk reads DER (minimal definite lengths, X.690 §10.1; every
+  element inside its parent; nothing after the certificate): a long length form where the short one fits is malformed
+  or unreadable, in both verifiers. Verdicts: no vector changes (of the six x5c leaves of `spec/vectors`, three
+  distinct certificates, four carry a critical keyUsage with digitalSignature and no extendedKeyUsage, two carry neither
+  extension: `signing: true` for all six). `test_ap2_x5c_purpose.py`: 13 tests, three of them for the next entry; the
+  other 10 — 400 generated leaves checked against
+  the rule written from the generator's parameters, 37 extension values written by hand (malformed, duplicated, DER
+  edges), eleven TBS walks written by hand (one and two `[3]` fields, two that are not the Extensions syntax, one with
+  long-form lengths, six that are not DER) and 3000 byte mutations of
+  a leaf, the same answer in both verifiers, and the whole path under openssl with eight leaves.
+- SPEC §2 (d), JS verifier: the x5c leaf is DER there too. node:crypto parses BER: measured 2026-11-21 on 1.9.0, a leaf
+  whose serial has the length `81 nn` where the short form fits, signed again, was a certificate for the JS verifier
+  (`valid: true`) and not for the reference, where cryptography refuses it (that artifact's error, `valid: false`). The
+  JS verifier now walks every constructed element of the leaf and refuses a length that is not the minimal definite form
+  (`derLengthsAreStrict`), for a key that comes from the x5c and for an x5c beside another key source: that artifact's
+  error in both verifiers. No vector changes. Not closed by this: what the two libraries read differently besides the
+  lengths (measured the same day on 5 203 one-bit and one-byte changes of one leaf: 48 are a certificate for the JS
+  verifier only — the contents of a BOOLEAN or of an INTEGER, the tag or length octet of a UTF8String, an OCTET STRING
+  or a SET — and 3 for the reference only, the tag or length octet of a UTF8String).
 - SPEC §6 step 6, §5, §6.9, both verifiers: a pinned producer set (`--trusted-producer-key`, `trusted_producer_keys`)
   implies `require_producer`. Up to 1.9.0 the set was applied only to a block that was present: the producer block
   removed from a pack whose key was pinned gave `valid: true`, `policy.unmet: []`. Now `policy_ok` and `valid` are

@@ -373,7 +373,7 @@ function checkProvenance(pc, parsed, key) {   // returns: is this key SELF-ASSER
   let leaf, ident;
   try {
     const der = b64Strict(x5c[0]); if (!der) throw new Error("leaf not base64");
-    const cert = new X509Certificate(der); if (!Buffer.from(cert.raw).equals(der)) throw new Error("bytes after the certificate");   // 1.7.3: node:crypto parses a DER certificate followed by more bytes; the reference (strict DER) refuses it
+    const cert = new X509Certificate(der); if (!Buffer.from(cert.raw).equals(der)) throw new Error("bytes after the certificate"); if (!derLengthsAreStrict(der)) throw new Error("not DER: a length that is not minimal");   // 1.7.3: node:crypto parses a DER certificate followed by more bytes; the reference (strict DER) refuses it
     leaf = createPublicKey({ key: cert.publicKey.export({ format: "jwk" }), format: "jwk" }).export({ format: "jwk" });
     // r9: the receipt names WHO the certificate was issued to — a cleared flag means "a CA under your anchor certified this key",
     // never "the key belongs to the mandate's issuer", and an auditor cannot tell CN=the-bank from CN=attacker without this
@@ -410,7 +410,7 @@ function reconcileUnusedHeaderKeys(header, jwk, pc) {
     let leaf;
     try {
       const der = b64Strict(x5c[0]); if (!der) throw new Error("leaf not base64");
-      const cert = new X509Certificate(der); if (!Buffer.from(cert.raw).equals(der)) throw new Error("bytes after the certificate");   // as in checkProvenance
+      const cert = new X509Certificate(der); if (!Buffer.from(cert.raw).equals(der)) throw new Error("bytes after the certificate"); if (!derLengthsAreStrict(der)) throw new Error("not DER: a length that is not minimal");   // as in checkProvenance
       leaf = createPublicKey({ key: cert.publicKey.export({ format: "jwk" }), format: "jwk" }).export({ format: "jwk" });
     } catch (e) { throw new Refused("the header x5c leaf is unusable (SPEC §2 (d), RFC 7515 §4.1.6)"); }
     if (!sameKey(leaf, jwk)) throw new Refused("the header x5c leaf names another key than the one the artifact verifies under (SPEC §2 (d), RFC 7515 §4.1.6)");
@@ -513,18 +513,31 @@ const SIGNING_EKUS = ["551d2500", "2b06010505070324"];   // 2.5.29.37.0 anyExten
 function oidOk(c) {   // X.690 §8.19.2: last octet of each sub-identifier with bit 8 clear, none starting with 0x80
   if (!c.length || c[c.length - 1] & 0x80) return false;
   let start = true; for (const b of c) { if (start && b === 0x80) return false; start = !(b & 0x80); } return true; }
+// the purpose walk reads DER: the length in its minimal definite form (X.690 §10.1) and the element inside its parent,
+// which ends at `end` — derTLV alone takes a long form where the short one fits and bounds an element by the buffer
+function derStrictTLV(buf, off, end) { const t = derTLV(buf, off);
+  if (t.end > end || (t.start - off > 2 && (buf[off + 2] === 0 || t.end - t.start < 128))) throw new Refused("der: not DER"); return t; }
+function derStrictChildren(buf, tlv) { const out = []; let o = tlv.start; while (o < tlv.end) { const c = derStrictTLV(buf, o, tlv.end); out.push(c); o = c.next; } return out; }
+// SPEC §2 (d): the leaf is "strict base64 DER". node:crypto (OpenSSL) parses BER: measured 2026-11-21, a leaf whose serial
+// had the length 81 14 for 14 was a certificate here and `valid: true`, and not a certificate for the reference
+// (cryptography refuses it) — `valid: false` there. Every constructed element is walked: minimal definite lengths, each
+// element inside its parent. The contents of primitive elements are not read here (an OCTET STRING holds an extension),
+// nor what follows the certificate (the callers compare `raw` with the bytes given).
+export function derLengthsAreStrict(der) {
+  const walk = (tlv) => { for (const c of derStrictChildren(der, tlv)) if (c.tag & 0x20) walk(c); };
+  try { const top = derStrictTLV(der, 0, der.length); if (top.tag & 0x20) walk(top); return true; } catch { return false; } }
 export function leafKeyPurpose(der) {
   const no = (reason) => ({ signing: false, reason });
   const found = new Map();
   try {
-    const cert = derTLV(der, 0); if (cert.tag !== 0x30) return no("extensions_unreadable");
-    const tbs = derChildren(der, cert)[0]; if (!tbs || tbs.tag !== 0x30) return no("extensions_unreadable");
-    const exts = derChildren(der, tbs).filter((c) => c.tag === 0xa3);
+    const cert = derStrictTLV(der, 0, der.length); if (cert.tag !== 0x30 || cert.end !== der.length) return no("extensions_unreadable");
+    const tbs = derStrictChildren(der, cert)[0]; if (!tbs || tbs.tag !== 0x30) return no("extensions_unreadable");
+    const exts = derStrictChildren(der, tbs).filter((c) => c.tag === 0xa3);
     if (exts.length > 1) return no("extensions_unreadable");
     if (exts.length) {
-      const inner = derChildren(der, exts[0]); if (inner.length !== 1 || inner[0].tag !== 0x30) return no("extensions_unreadable");
-      for (const ext of derChildren(der, inner[0])) {
-        const parts = ext.tag === 0x30 ? derChildren(der, ext) : [];
+      const inner = derStrictChildren(der, exts[0]); if (inner.length !== 1 || inner[0].tag !== 0x30) return no("extensions_unreadable");
+      for (const ext of derStrictChildren(der, inner[0])) {
+        const parts = ext.tag === 0x30 ? derStrictChildren(der, ext) : [];
         if (!(parts.length >= 2 && parts.length <= 3 && parts[0].tag === 0x06 && parts[parts.length - 1].tag === 0x04 && (parts.length === 2 || parts[1].tag === 0x01))) return no("extensions_unreadable");
         const oid = der.subarray(parts[0].start, parts[0].end).toString("hex");
         if (oid === ID_CE_KEY_USAGE || oid === ID_CE_EXT_KEY_USAGE) {
@@ -533,7 +546,7 @@ export function leafKeyPurpose(der) {
   } catch { return no("extensions_unreadable"); }
   const ku = found.get(ID_CE_KEY_USAGE);
   if (ku !== undefined) {
-    let t; try { t = derTLV(ku, 0); } catch { return no("key_usage_malformed"); }
+    let t; try { t = derStrictTLV(ku, 0, ku.length); } catch { return no("key_usage_malformed"); }
     const bits = ku.subarray(t.start, t.end);
     if (t.tag !== 0x03 || t.end !== ku.length || !bits.length || bits[0] > 7 || (bits.length === 1 && bits[0] !== 0)
         || (bits.length > 1 && (bits[bits.length - 1] & ((1 << bits[0]) - 1)))) return no("key_usage_malformed");
@@ -541,7 +554,7 @@ export function leafKeyPurpose(der) {
   }
   const eku = found.get(ID_CE_EXT_KEY_USAGE);
   if (eku !== undefined) {
-    let ids = null; try { const t = derTLV(eku, 0); if (t.tag === 0x30 && t.end === eku.length) ids = derChildren(eku, t); } catch { ids = null; }
+    let ids = null; try { const t = derStrictTLV(eku, 0, eku.length); if (t.tag === 0x30 && t.end === eku.length) ids = derStrictChildren(eku, t); } catch { ids = null; }
     if (!ids || !ids.length || ids.some((c) => c.tag !== 0x06 || !oidOk(eku.subarray(c.start, c.end)))) return no("extended_key_usage_malformed");   // SEQUENCE SIZE (1..MAX) OF KeyPurposeId
     if (!ids.some((c) => SIGNING_EKUS.includes(eku.subarray(c.start, c.end).toString("hex")))) return no("extended_key_usage_not_signing");
   }

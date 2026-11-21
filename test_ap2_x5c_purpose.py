@@ -150,7 +150,10 @@ HAND = [   # (name, ku value or None, eku value or None, duplicate?, expected)
     ("ku_trailing", "0302008000", None, False, (False, "key_usage_malformed")),
     ("ku_overrun", "03030080", None, False, (False, "key_usage_malformed")),
     ("ku_empty_value", "", None, False, (False, "key_usage_malformed")),
-    ("ku_long_length_form", "0381020080", None, False, (True, None)),
+    ("ku_trailing_zero_bits", "03020080", None, False, (True, None)),          # X.690 §11.2.2 is not applied: read, not refused
+    ("ku_trailing_zero_octet", "0303078000", None, False, (True, None)),
+    ("ku_long_length_form", "0381020780", None, False, (False, "key_usage_malformed")),   # X.690 §10.1: the short form fits
+    ("ku_long_length_leading_zero", "038200020780", None, False, (False, "key_usage_malformed")),
     ("eku_any", None, "3006060455" "1d2500", False, (True, None)),
     ("eku_doc_signing", None, "300a06082b06010505070324", False, (True, None)),
     ("eku_server_auth", None, "300a06082b06010505070301", False, (False, "extended_key_usage_not_signing")),
@@ -162,6 +165,8 @@ HAND = [   # (name, ku value or None, eku value or None, duplicate?, expected)
     ("eku_not_oid", None, "300304010a", False, (False, "extended_key_usage_malformed")),
     ("eku_set_not_sequence", None, "3106060455" "1d2500", False, (False, "extended_key_usage_malformed")),
     ("eku_trailing", None, "3006060455" "1d250000", False, (False, "extended_key_usage_malformed")),
+    ("eku_long_length_sequence", None, "30810a06082b06010505070324", False, (False, "extended_key_usage_malformed")),
+    ("eku_long_length_oid", None, "300b0681082b06010505070324", False, (False, "extended_key_usage_malformed")),
     ("eku_any_long_doc", None, "3006060455" "1d2501", False, (False, "extended_key_usage_not_signing")),
     ("ku_ok_eku_server", "03020780", "300a06082b06010505070301", False, (False, "extended_key_usage_not_signing")),
     ("ku_bad_eku_doc", "03020204", "300a06082b06010505070324", False, (False, "key_usage_not_signing")),
@@ -193,6 +198,28 @@ _KU_SIGNING_EXT = _tlv(0x30, _tlv(0x06, KU_OID) + _tlv(0x01, b"\xff") + _tlv(0x0
 TWO_EXTENSION_FIELDS = _tlv(0x30, _tlv(0x30, _tlv(0x02, b"\x01") + _tlv(0xA3, _tlv(0x30, _KU_SIGNING_EXT))
                                      + _tlv(0xA3, _tlv(0x30, _KU_SIGNING_EXT))))
 ONE_EXTENSION_FIELD = _tlv(0x30, _tlv(0x30, _tlv(0x02, b"\x01") + _tlv(0xA3, _tlv(0x30, _KU_SIGNING_EXT))))
+# the same walk, not DER: a long length form where the short one fits (X.690 §10.1), at the certificate, at the TBS and at
+# the extension; the TBS running one octet past the certificate that holds it; one octet after the certificate
+_TBS_BODY = _tlv(0x02, b"\x01") + _tlv(0xA3, _tlv(0x30, _KU_SIGNING_EXT))
+_KU_SIGNING_EXT_LONG = b"\x30\x81" + _KU_SIGNING_EXT[1:]
+# not the Extensions syntax: two SEQUENCEs inside the [3] field; an Extension of four parts (two BOOLEANs)
+NOT_EXTENSIONS_WALKS = [
+    _tlv(0x30, _tlv(0x30, _tlv(0x02, b"\x01") + _tlv(0xA3, _tlv(0x30, _KU_SIGNING_EXT) + _tlv(0x30, _KU_SIGNING_EXT)))),
+    _tlv(0x30, _tlv(0x30, _tlv(0x02, b"\x01") + _tlv(0xA3, _tlv(0x30, _tlv(0x30, _tlv(0x06, KU_OID) + _tlv(0x01, b"\xff")
+                                                                          + _tlv(0x01, b"\xff") + _tlv(0x04, bytes.fromhex("03020780"))))))),
+]
+# 130 octets inside the TBS, so that the lengths of the TBS and of the certificate need the long form: 81 nn is DER,
+# 82 00 nn (a leading zero octet) is not
+_TBS_BODY_LONG = _tlv(0x02, b"\x01") + _tlv(0x04, bytes(130)) + _tlv(0xA3, _tlv(0x30, _KU_SIGNING_EXT))
+LONG_FORM_DER_WALK = _tlv(0x30, _tlv(0x30, _TBS_BODY_LONG))
+NOT_DER_WALKS = [
+    b"\x30\x82\x00" + LONG_FORM_DER_WALK[2:],
+    b"\x30\x81" + ONE_EXTENSION_FIELD[1:],
+    _tlv(0x30, b"\x30\x81" + bytes([len(_TBS_BODY)]) + _TBS_BODY),
+    _tlv(0x30, _tlv(0x30, _tlv(0x02, b"\x01") + _tlv(0xA3, _tlv(0x30, _KU_SIGNING_EXT_LONG)))),
+    bytes([0x30, ONE_EXTENSION_FIELD[1] - 1]) + ONE_EXTENSION_FIELD[2:],
+    ONE_EXTENSION_FIELD + b"\x00",
+]
 
 
 _JS_PURPOSE = """
@@ -234,8 +261,10 @@ class Reference(unittest.TestCase):
     def test_no_extension_and_unreadable(self):
         self.assertEqual(A.leaf_key_purpose(_der(_builder().sign(_KEY, hashes.SHA256()))), {"signing": True, "reason": None})
         self.assertEqual(A.leaf_key_purpose(ONE_EXTENSION_FIELD), {"signing": True, "reason": None})   # control of the next
+        self.assertEqual(LONG_FORM_DER_WALK[:2], b"\x30\x81")
+        self.assertEqual(A.leaf_key_purpose(LONG_FORM_DER_WALK), {"signing": True, "reason": None})    # control: 81 nn is DER
         for junk in (b"", b"\x30", b"\x30\x00", b"\x04\x00", b"\x30\x03\x02\x01\x01", b"\x30\x84\xff\xff\xff\xff",
-                     TWO_EXTENSION_FIELDS):
+                     TWO_EXTENSION_FIELDS, *NOT_EXTENSIONS_WALKS, *NOT_DER_WALKS):
             self.assertEqual(A.leaf_key_purpose(junk), {"signing": False, "reason": "extensions_unreadable"}, junk.hex())
 
 
@@ -243,7 +272,7 @@ class Reference(unittest.TestCase):
 class SameInJs(unittest.TestCase):
     def test_generated_and_hand_written(self):
         ders = ([d for d, _, _ in generated_leaves()] + [_hand_der(ku, eku, dup) for _, ku, eku, dup, _ in HAND]
-                + [ONE_EXTENSION_FIELD, TWO_EXTENSION_FIELDS])
+                + [ONE_EXTENSION_FIELD, TWO_EXTENSION_FIELDS, LONG_FORM_DER_WALK] + NOT_EXTENSIONS_WALKS + NOT_DER_WALKS)
         js = js_purposes(ders)
         self.assertEqual(len(js), len(ders))
         diff = [i for i, (d, j) in enumerate(zip(ders, js)) if A.leaf_key_purpose(d) != j]
@@ -275,6 +304,88 @@ class SameInJs(unittest.TestCase):
         js = js_purposes(muts)
         self.assertEqual([i for i in range(len(muts)) if py[i] != js[i]], [])
         self.assertGreater(len({(p["signing"], p["reason"]) for p in py}), 3)   # the mutations reach several answers
+
+
+def _resigned_leaf(long_serial_length: bool) -> bytes:
+    """A self-signed leaf of `_KEY`, its TBSCertificate assembled again and signed again by hand; with
+    `long_serial_length` the serial's length is written 81 nn where nn fits the short form (BER, not DER, X.690 §10.1)."""
+    der = _der(_builder().sign(_KEY, hashes.SHA256()))
+    whole = lambda c: der[c[1] - (2 if c[2] - c[1] < 128 else 3 if c[2] - c[1] < 256 else 4):c[2]]   # noqa: E731
+    _, s, e = A._der_tlv(der, 0)
+    top = A._der_children(der, s, e)
+    fields = A._der_children(der, top[0][1], top[0][2])
+    serial = der[fields[1][1]:fields[1][2]]
+    assert len(serial) < 128
+    body = (whole(fields[0]) + (b"\x02\x81" + bytes([len(serial)]) + serial if long_serial_length else whole(fields[1]))
+            + b"".join(whole(f) for f in fields[2:]))
+    seq = lambda b: b"\x30" + (bytes([len(b)]) if len(b) < 128 else bytes([0x81, len(b)]) if len(b) < 256   # noqa: E731
+                               else b"\x82" + len(b).to_bytes(2, "big")) + b
+    tbs = seq(body)
+    return seq(tbs + whole(top[1]) + _tlv(0x03, b"\x00" + _KEY.sign(tbs, ec.ECDSA(hashes.SHA256()))))
+
+
+def _pack_with_leaf(leaf: bytes, path: str, beside_jwk: bool = False) -> str:
+    """A pack whose one artifact carries `leaf` in x5c, assembled from parts (`build` refuses a leaf that is not DER).
+    `beside_jwk`: the key comes from the header `jwk` (`jwk_header`) and the x5c only stands beside it (SPEC §2 (d))."""
+    import hashlib
+    hdr = {"alg": "ES256", "typ": "example+sd-jwt", "x5c": [base64.b64encode(leaf).decode()]}
+    if beside_jwk:
+        n = _KEY.public_key().public_numbers()
+        jwk = {"kty": "EC", "crv": "P-256", "x": _b64u(n.x.to_bytes(32, "big")), "y": _b64u(n.y.to_bytes(32, "big"))}
+        hdr = {"alg": "ES256", "typ": "example+sd-jwt", "jwk": jwk, "x5c": hdr["x5c"]}
+    claims = {"vct": "mandate.payment.1", "transaction_id": "dGVzdC10cmFuc2FjdGlvbg",
+              "payee": {"id": "m", "name": "M"}, "payment_amount": {"amount": 1250, "currency": "EUR"},
+              "payment_instrument": {"id": "i", "type": "card"}}
+    si = _b64u(json.dumps(hdr).encode()) + "." + _b64u(json.dumps(claims).encode())
+    r, s = decode_dss_signature(_KEY.sign(si.encode(), ec.ECDSA(hashes.SHA256())))
+    token = si + "." + _b64u(r.to_bytes(32, "big") + s.to_bytes(32, "big")) + "~"
+    good = _der(_builder().sign(_KEY, hashes.SHA256()))
+    hdr0 = dict(hdr, x5c=[base64.b64encode(good).decode()])
+    if beside_jwk:
+        del hdr0["x5c"]   # built as a jwk_header key; the x5c is put beside it below
+    si0 = _b64u(json.dumps(hdr0).encode()) + "." + _b64u(json.dumps(claims).encode())
+    r, s = decode_dss_signature(_KEY.sign(si0.encode(), ec.ECDSA(hashes.SHA256())))
+    A.build_evidence([{"name": "payment", "sd_jwt": si0 + "." + _b64u(r.to_bytes(32, "big") + s.to_bytes(32, "big")) + "~"}],
+                     path, tsa_url=None)
+    with open(path, encoding="utf-8") as f:
+        ev = json.load(f)
+    ev["artifacts"][0]["sd_jwt_compact"], ev["artifacts"][0]["header"] = token, hdr
+    sealed = {k: v for k, v in ev.items() if k not in ("evidence_digest_sha256", "rfc3161_timestamp", "producer_signatures")}
+    ev["evidence_digest_sha256"] = hashlib.sha256(A._canon(sealed)).hexdigest()
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(ev, f)
+    return path
+
+
+@unittest.skipUnless(NODE, "node absent: the JS verifier cannot be measured")
+class LeafIsDer(unittest.TestCase):
+    """SPEC §2 (d): the x5c leaf is strict base64 DER, for both verifiers. Measured 2026-11-21 on 1.9.0 and on 190303f: a
+    leaf whose serial has the length 81 nn was `valid: true` for the JS verifier (node:crypto parses BER) and that
+    artifact's error for the reference (cryptography refuses it)."""
+
+    def _both(self, leaf, beside_jwk=False):
+        d = tempfile.mkdtemp(prefix="ap2leafder_")
+        try:
+            pack = _pack_with_leaf(leaf, os.path.join(d, "p.json"), beside_jwk)
+            with open(pack, encoding="utf-8") as f:
+                self.assertEqual(json.load(f)["artifacts"][0]["key"]["provenance_class"], "jwk_header" if beside_jwk else "x5c_header")
+            py = A.verify_evidence(pack)
+            p = subprocess.run([NODE, JS, pack], capture_output=True, text=True, timeout=120)
+            js = json.loads(p.stdout)
+            self.assertEqual(p.returncode, 0 if js["valid"] else 1)
+            return [(r["valid"], r["states"]["sealed_content"]["state"], r["artifacts"][0].get("error") is not None) for r in (py, js)]
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_controls_resigned_der_leaf_is_valid_in_both(self):
+        self.assertEqual(self._both(_resigned_leaf(False)), [(True, "verified", False)] * 2)
+
+    def test_long_length_form_is_no_certificate_in_either(self):
+        self.assertEqual(self._both(_resigned_leaf(True)), [(False, "contradicted", True)] * 2)
+
+    def test_the_same_for_an_x5c_beside_the_jwk(self):
+        self.assertEqual(self._both(_resigned_leaf(False), beside_jwk=True), [(True, "verified", False)] * 2)   # control
+        self.assertEqual(self._both(_resigned_leaf(True), beside_jwk=True), [(False, "contradicted", True)] * 2)
 
 
 def _ca(cn):

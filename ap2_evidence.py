@@ -717,8 +717,8 @@ def _pubkey_from_x5c_leaf(x5c: List[str]):
 
 
 # 1.9.1 (SPEC §6 step 7): the purposes RFC 5280 gives a leaf for signing. keyUsage (§4.2.1.3): digitalSignature (bit 0) or
-# nonRepudiation / contentCommitment (bit 1), the two bits for "verifying digital signatures, other than signatures on
-# certificates ... and CRLs". extendedKeyUsage (§4.2.1.12, "the certificate MUST only be used for one of the purposes
+# nonRepudiation / contentCommitment (bit 1), the two bits for digital signatures "other than signatures on certificates
+# (bit 5) and CRLs (bit 6)". extendedKeyUsage (§4.2.1.12, "the certificate MUST only be used for one of the purposes
 # indicated"): a closed list, this format's choice (RFC 5280 leaves it to the application) — anyExtendedKeyUsage (the CA
 # "does not wish to restrict usages of the key") and id-kp-documentSigning (RFC 9336). Every other KeyPurposeId, named or
 # not, is not a signing purpose here. Contents octets of the OBJECT IDENTIFIERs, compared byte for byte.
@@ -741,29 +741,47 @@ def _oid_ok(c: bytes) -> bool:
     return True
 
 
+def _der_strict_tlv(buf: bytes, off: int, end: int) -> Tuple[int, int, int]:
+    """`_der_tlv` for the purpose walk (SPEC §6 step 7): the length in the minimal definite form of DER (X.690 §10.1) and
+    the element inside its parent, which ends at `end`. `_der_tlv` alone takes a long form where the short one fits and
+    bounds an element by the buffer: measured 2026-11-21, a keyUsage `03 81 02 07 80` was read as digitalSignature."""
+    t, s, e = _der_tlv(buf, off)
+    if e > end or (s - off > 2 and (buf[off + 2] == 0 or e - s < 128)):
+        raise Ap2EvidenceError("der: not DER")
+    return t, s, e
+
+
+def _der_strict_children(buf: bytes, start: int, end: int) -> List[Tuple[int, int, int]]:
+    out, o = [], start
+    while o < end:
+        t = _der_strict_tlv(buf, o, end); out.append(t); o = t[2]
+    return out
+
+
 def leaf_key_purpose(der: bytes) -> Dict:
     """1.9.1 (SPEC §6 step 7): `{"signing": bool, "reason": None | code}` for an x5c leaf, read from its DER the same way
     in both verifiers. Codes: extensions_unreadable, duplicate_extension, key_usage_malformed, key_usage_not_signing,
-    extended_key_usage_malformed, extended_key_usage_not_signing. Both extensions absent: signing (RFC 5280 §4.2.1.12
+    extended_key_usage_malformed, extended_key_usage_not_signing. Every length read is minimal and every element ends
+    inside its parent (`_der_strict_tlv`). Both extensions absent: signing (RFC 5280 §4.2.1.12
     lets an application require the EKU, MAY; this format does not)."""
     def no(reason):
         return {"signing": False, "reason": reason}
     try:
-        t, s, e = _der_tlv(der, 0)
-        top = _der_children(der, s, e) if t == 0x30 else []
+        t, s, e = _der_strict_tlv(der, 0, len(der))
+        top = _der_strict_children(der, s, e) if t == 0x30 and e == len(der) else []   # one certificate, nothing after it
         tbs = top[0] if top else None
         if tbs is None or tbs[0] != 0x30:
             return no("extensions_unreadable")
-        exts = [c for c in _der_children(der, tbs[1], tbs[2]) if c[0] == 0xA3]
+        exts = [c for c in _der_strict_children(der, tbs[1], tbs[2]) if c[0] == 0xA3]
         found: Dict[bytes, bytes] = {}
         if len(exts) > 1:
             return no("extensions_unreadable")
         if exts:
-            inner = _der_children(der, exts[0][1], exts[0][2])
+            inner = _der_strict_children(der, exts[0][1], exts[0][2])
             if len(inner) != 1 or inner[0][0] != 0x30:
                 return no("extensions_unreadable")
-            for ext in _der_children(der, inner[0][1], inner[0][2]):
-                parts = _der_children(der, ext[1], ext[2]) if ext[0] == 0x30 else []
+            for ext in _der_strict_children(der, inner[0][1], inner[0][2]):
+                parts = _der_strict_children(der, ext[1], ext[2]) if ext[0] == 0x30 else []
                 if not (2 <= len(parts) <= 3 and parts[0][0] == 0x06 and parts[-1][0] == 0x04
                         and (len(parts) == 2 or parts[1][0] == 0x01)):
                     return no("extensions_unreadable")
@@ -777,7 +795,7 @@ def leaf_key_purpose(der: bytes) -> Dict:
     ku = found.get(_ID_CE_KEY_USAGE)
     if ku is not None:
         try:
-            t, s, e = _der_tlv(ku, 0)
+            t, s, e = _der_strict_tlv(ku, 0, len(ku))
         except Ap2EvidenceError:
             return no("key_usage_malformed")
         bits = ku[s:e]
@@ -789,8 +807,8 @@ def leaf_key_purpose(der: bytes) -> Dict:
     eku = found.get(_ID_CE_EXT_KEY_USAGE)
     if eku is not None:
         try:
-            t, s, e = _der_tlv(eku, 0)
-            ids = _der_children(eku, s, e) if t == 0x30 and e == len(eku) else None
+            t, s, e = _der_strict_tlv(eku, 0, len(eku))
+            ids = _der_strict_children(eku, s, e) if t == 0x30 and e == len(eku) else None
         except Ap2EvidenceError:
             ids = None
         if not ids or any(c[0] != 0x06 or not _oid_ok(eku[c[1]:c[2]]) for c in ids):   # SEQUENCE SIZE (1..MAX) OF KeyPurposeId
