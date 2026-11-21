@@ -191,7 +191,9 @@ class TestReceiptShape(unittest.TestCase):
             if SC.design_equation(r) != r["valid"]:
                 design_fail.append(name)
         if ap2._sigsuite.MLDSA_AVAILABLE:   # without the backend every ML-DSA-65 entry is SKIP: more packs fall outside the design's equation
-            self.assertEqual(design_fail, (["issuer_x5c_chain_broken"] if shutil.which("openssl") else []) + ["producer_backend_missing"])
+            # 1.9.1: issuer_x5c_key_purpose_not_signing is valid with issuer_identity contradicted, as issuer_x5c_chain_broken
+            self.assertEqual(design_fail, (["issuer_x5c_chain_broken", "issuer_x5c_key_purpose_not_signing"] if shutil.which("openssl") else [])
+                             + ["producer_backend_missing"])
 
     @unittest.skipUnless(HAVE_NODE, "node absent")
     def test_js_refuses_trust_anchor_and_takes_trust_set_complete(self):

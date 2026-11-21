@@ -990,7 +990,8 @@ valid, §5).
 `issuer_identity` is `contradicted`, AND no producer entry is `SKIP` (`backend_missing`), AND `policy.met`. Two terms are
 not those of the equation the design of this revision pre-registered (every subject; no `SKIP` term), and both come from
 rules of earlier revisions this one does not change: an x5c chain never decided `valid` (§6 step 7: a flag, not a failure
-— vector `issuer_x5c_chain_broken` is valid with `issuer_identity` contradicted), and §5 makes a block with a `SKIP` entry
+— vector `issuer_x5c_chain_broken` is valid with `issuer_identity` contradicted, and since 1.9.1 also
+`issuer_x5c_key_purpose_not_signing`), and §5 makes a block with a `SKIP` entry
 not `ok` although no check failed (`producer_backend_missing`). Measured on 18/10/2026 by `verifiers/states_controls.py`
 (the schema-mutant corpus plus the vectors under four pinned-set inputs, 22 967 receipts): the equation above holds on
 every receipt; the pre-registered one fails on 7, all of them receipts of those two packs. Measured again on 2026-11-20
