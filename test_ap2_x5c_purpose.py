@@ -143,6 +143,7 @@ HAND = [   # (name, ku value or None, eku value or None, duplicate?, expected)
     ("ku_two_octets_decipher_only", "0303070080", None, False, (False, "key_usage_not_signing")),
     ("ku_no_unused_octet", "0300", None, False, (False, "key_usage_malformed")),
     ("ku_unused_8", "03020880", None, False, (False, "key_usage_malformed")),
+    ("ku_unused_8_zero_octet", "03020800", None, False, (False, "key_usage_malformed")),
     ("ku_unused_bit_set", "03020181", None, False, (False, "key_usage_malformed")),
     ("ku_unused_without_octets", "030101", None, False, (False, "key_usage_malformed")),
     ("ku_wrong_tag", "04020080", None, False, (False, "key_usage_malformed")),
@@ -180,6 +181,18 @@ def _hand_der(ku, eku, dup):
     if ku is not None:
         return raw_leaf(h(ku), None, KU_OID)
     return raw_leaf(None, h(eku), KU_OID, EKU_OID)
+
+
+def _tlv(tag: int, body: bytes) -> bytes:
+    n = len(body)
+    return bytes([tag]) + (bytes([n]) if n < 128 else bytes([0x81, n])) + body
+
+
+_KU_SIGNING_EXT = _tlv(0x30, _tlv(0x06, KU_OID) + _tlv(0x01, b"\xff") + _tlv(0x04, bytes.fromhex("03020780")))
+# a TBSCertificate walk with two [3] fields, the first holding a keyUsage that would be signing: not one extensions field
+TWO_EXTENSION_FIELDS = _tlv(0x30, _tlv(0x30, _tlv(0x02, b"\x01") + _tlv(0xA3, _tlv(0x30, _KU_SIGNING_EXT))
+                                     + _tlv(0xA3, _tlv(0x30, _KU_SIGNING_EXT))))
+ONE_EXTENSION_FIELD = _tlv(0x30, _tlv(0x30, _tlv(0x02, b"\x01") + _tlv(0xA3, _tlv(0x30, _KU_SIGNING_EXT))))
 
 
 _JS_PURPOSE = """
@@ -220,14 +233,17 @@ class Reference(unittest.TestCase):
 
     def test_no_extension_and_unreadable(self):
         self.assertEqual(A.leaf_key_purpose(_der(_builder().sign(_KEY, hashes.SHA256()))), {"signing": True, "reason": None})
-        for junk in (b"", b"\x30", b"\x30\x00", b"\x04\x00", b"\x30\x03\x02\x01\x01", b"\x30\x84\xff\xff\xff\xff"):
+        self.assertEqual(A.leaf_key_purpose(ONE_EXTENSION_FIELD), {"signing": True, "reason": None})   # control of the next
+        for junk in (b"", b"\x30", b"\x30\x00", b"\x04\x00", b"\x30\x03\x02\x01\x01", b"\x30\x84\xff\xff\xff\xff",
+                     TWO_EXTENSION_FIELDS):
             self.assertEqual(A.leaf_key_purpose(junk), {"signing": False, "reason": "extensions_unreadable"}, junk.hex())
 
 
 @unittest.skipUnless(NODE, "node absent: the JS verifier cannot be measured")
 class SameInJs(unittest.TestCase):
     def test_generated_and_hand_written(self):
-        ders = [d for d, _, _ in generated_leaves()] + [_hand_der(ku, eku, dup) for _, ku, eku, dup, _ in HAND]
+        ders = ([d for d, _, _ in generated_leaves()] + [_hand_der(ku, eku, dup) for _, ku, eku, dup, _ in HAND]
+                + [ONE_EXTENSION_FIELD, TWO_EXTENSION_FIELDS])
         js = js_purposes(ders)
         self.assertEqual(len(js), len(ders))
         diff = [i for i, (d, j) in enumerate(zip(ders, js)) if A.leaf_key_purpose(d) != j]

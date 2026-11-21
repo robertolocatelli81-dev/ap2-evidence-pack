@@ -35,9 +35,9 @@ refusal of openssl staying `false`), which pass on both.
   `chain_broken`). Each `x5c_leaf` carries `key_purpose` (`{"signing", "reason"}`) in both verifiers, with or without an
   anchor; the differential oracle compares it. Verdicts: no vector changes (the six x5c leaves of `spec/vectors` carry
   neither extension: `signing: true`). `test_ap2_x5c_purpose.py`: 10 tests — 400 generated leaves checked against the
-  rule written from the generator's parameters, 31 extension values written by hand (malformed, duplicated, DER edges)
-  and 3000 byte mutations of a leaf, the same answer in both verifiers, and the whole path under openssl with eight
-  leaves.
+  rule written from the generator's parameters, 32 extension values written by hand (malformed, duplicated, DER edges),
+  two TBS walks with one and two `[3]` fields and 3000 byte mutations of a leaf, the same answer in both verifiers, and
+  the whole path under openssl with eight leaves.
 - SPEC §6 step 6, §5, §6.9, both verifiers: a pinned producer set (`--trusted-producer-key`, `trusted_producer_keys`)
   implies `require_producer`. Up to 1.9.0 the set was applied only to a block that was present: the producer block
   removed from a pack whose key was pinned gave `valid: true`, `policy.unmet: []`. Now `policy_ok` and `valid` are
