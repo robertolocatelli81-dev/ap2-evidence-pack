@@ -4,8 +4,9 @@
 # ap2-evidence-pack — normative format v1.0 (2026-09-05), specification revision 1.9.0 (2026-11-20)
 
 > Unreleased revision 1.9.1 (after 1.9.0, 2026-11-20): §6 step 2, the issuer signature is verified only under the
-> `alg` the signed header names (`issuer_alg_not_es256`). No vector is added (the cases are in
-> `test_ap2_issuer_alg.py`).
+> `alg` the signed header names (`issuer_alg_not_es256`); §3.2, an openssl that does not answer on the key-identifier
+> path is a check not run (`null`), not a `false`. No vector is added (the cases are in `test_ap2_issuer_alg.py` and
+> `test_ap2_openssl_not_run_tsa.py`).
 
 > Revision 1.9.0 (2026-11-20; it contains 1.8.1, which was not released on its own): §2.1 (new), AP2 delegation chains
 > `<hop0>~~<hop1>...` are read in their native form — split into hops by `build`, every hop after the first verified with
@@ -480,7 +481,10 @@ signer's subject or one of its subjectAltName; the names (that issuer, that subj
 OpenSSL's `X509_NAME_cmp` compares them (string values in UTF-8, white space trimmed and folded, ASCII letters
 lowercased; the same RDNs in order), the serial number as an integer; and `openssl verify -purpose timestampsign -attime <genTime> -CAfile
 <--tsa-cert> -no-CApath -no-CAstore -untrusted <the token's certificates>` over the signer certificate, which is the
-chain `openssl ts -verify -CAfile` builds for the other form (no system store, no partial chain). Closed shapes (1.8.0,
+chain `openssl ts -verify -CAfile` builds for the other form (no system store, no partial chain). An openssl that on this path is
+killed by a signal, gives no answer within 30 s or cannot be started is a check not run here, `tsa_verified` `null`
+(§6.10; 1.9.1 — up to 1.9.0 it was `false`, a finding about the token: measured 2026-11-20 with an openssl killed by
+SIGKILL in `cms -verify` and in `verify`, and with one answering after 45 s). Closed shapes (1.8.0,
 measured on 2026-11-17 with the generative bench of omega-cra-evol's port of this step): exactly one SignerInfo (RFC
 3161 §2.4.2: "The time-stamp token MUST NOT contain any signatures other than the signature of the TSA"; until this
 correction a token with two SignerInfos, both verifying, was `tsa_verified: true` here, where `openssl ts -verify`

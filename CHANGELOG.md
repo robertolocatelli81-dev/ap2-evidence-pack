@@ -10,6 +10,11 @@ test added fails on v1.9.0.
   by the issuer, says `none`, `HS256`, `ES384` or `RS256` over an ES256 signature was `valid: true` in the Python and
   the JavaScript verifier. Now that artifact's error `issuer_alg_not_es256` (RFC 7515 §5.2 step 8).
   `test_ap2_issuer_alg.py`: 68 generated `alg` values in Python, 30 in JavaScript, and `build` refusing four of them.
+- SPEC §3.2, §6.10: on the key-identifier path of an RFC 3161 token (a SignerInfo naming its signer by
+  subjectKeyIdentifier) openssl ran outside `_run_openssl`: an openssl killed by a signal in `cms -verify` or in
+  `verify`, or one giving no answer within 30 s, made `tsa_verified` `false`. It is now `null`, a check not run here,
+  with the reason in `tsa_note`, as on the `openssl ts -verify` path. A refusal of openssl stays `false`.
+  `test_ap2_openssl_not_run_tsa.py`: 5 tests.
 
 ## 1.9.0 — 2026-11-20 — AP2 chains in their native form; receipts bound to the closed mandate; a binding policy; false greens closed
 

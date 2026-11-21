@@ -1737,10 +1737,10 @@ def _ski_policies_shape(el):
 
 def key_id_token_problem(der, digest_hex, ca_file, at, tmp, exe="openssl"):
     """the checks of `openssl ts -verify -digest D -CAfile CA -attime T`, made one by one for a token whose signer is
-    named by subjectKeyIdentifier: None when they hold, else why not. `tmp` is an empty private directory."""
+    named by subjectKeyIdentifier: None when they hold, else why not. `tmp` is an empty private directory. Raises
+    KeyIdCheckNotRun or (1.9.1) Ap2WriteError when openssl could not run a step here: never a "why not"."""
     import hashlib
     import os
-    import subprocess
     try:
         token = _ski_token(der)
         ci = _ski_items(_ski_one(token, "ContentInfo", 0x30), "ContentInfo")
@@ -1756,8 +1756,12 @@ def key_id_token_problem(der, digest_hex, ca_file, at, tmp, exe="openssl"):
     tp, sp = os.path.join(tmp, "ski_token.der"), os.path.join(tmp, "ski_signer.pem")
     with open(tp, "wb") as fh:
         fh.write(token)
-    r = subprocess.run([exe, "cms", "-verify", "-noverify", "-binary", "-inform", "DER", "-in", tp, "-certfile", ca_file,
-                        "-signer", sp, "-out", os.devnull], capture_output=True, timeout=30)
+    # 1.9.1 (SPEC §6.10): through _run_openssl, so an openssl that is killed by a signal, gives no answer within 30 s or
+    # cannot be started raises Ap2WriteError — the check was not run here, `tsa_verified` null. Up to 1.9.0 these two calls
+    # were bare subprocess.run: measured 2026-11-20, SIGKILL gave "openssl cms -verify: refused" / "openssl verify: refused"
+    # and a timeout a TimeoutExpired, each `tsa_verified: false`, a finding about the token
+    r = _run_openssl([exe, "cms", "-verify", "-noverify", "-binary", "-inform", "DER", "-in", tp, "-certfile", ca_file,
+                      "-signer", sp, "-out", os.devnull], 30)
     if r.returncode != 0 or not os.path.exists(sp):
         return "openssl cms -verify: " + ((r.stderr or b"").decode(errors="replace").strip().splitlines() or ["refused"])[-1][:160]
     with open(sp, "rb") as fh:
@@ -1858,7 +1862,7 @@ def key_id_token_problem(der, digest_hex, ca_file, at, tmp, exe="openssl"):
         fh.write(b"".join(_ski_pem(c) for c in certs))
     cmd = [exe, "verify", "-purpose", "timestampsign", "-attime", str(int(at)), "-CAfile", ca_file, "-no-CApath",
            "-no-CAstore"] + (["-untrusted", up] if certs else []) + [sp]
-    r = subprocess.run(cmd, capture_output=True, timeout=30)
+    r = _run_openssl(cmd, 30)
     if r.returncode != 0 and b"nknown option" in (r.stderr or b"") + (r.stdout or b""):   # before OpenSSL 3.0
         raise KeyIdCheckNotRun("this openssl does not know an option of `verify` (OpenSSL 3.0 or later is needed): "
                                + (r.stderr or r.stdout or b"").decode(errors="replace").strip()[-120:])
