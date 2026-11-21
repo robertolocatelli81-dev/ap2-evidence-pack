@@ -1,0 +1,62 @@
+{
+ "description": "A mandate whose key is an x5c leaf issued by issuer_purpose_ca.crt with keyUsage keyCertSign only and extendedKeyUsage serverAuth only, under --trust-anchor issuer_purpose_ca.crt: the chain validates, the leaf is not issued for signing (RFC 5280 §4.2.1.3, §4.2.1.12) — issuer_identity contradicted/key_purpose_not_signing, self_asserted_only true; the pack stays valid, as for chain_broken (SPEC §6 step 7, §6.9). Measured 2026-11-21 on 2e2556b: verified/ca_certified and self_asserted_only false. Needs openssl.",
+ "normative": {
+  "anchors_verified": 0,
+  "bindings_ok": true,
+  "digest_ok": true,
+  "policy_ok": true,
+  "pq_protected": false,
+  "producer_ok": null,
+  "producer_present": false,
+  "producer_trusted": null,
+  "rfc3161_claimed": false,
+  "rfc3161_verified": null,
+  "self_asserted_only": true,
+  "valid": true
+ },
+ "policy": {
+  "trust_anchor": "issuer_purpose_ca.crt"
+ },
+ "requires": [
+  "openssl"
+ ],
+ "states": {
+  "admission": "admitted",
+  "policy": {
+   "met": true,
+   "unmet": []
+  },
+  "refusal_class": null,
+  "subjects": {
+   "holder_binding": {
+    "reasons": [
+     "not_present"
+    ],
+    "state": "not_evaluated"
+   },
+   "issuer_identity": {
+    "reasons": [
+     "key_purpose_not_signing"
+    ],
+    "state": "contradicted"
+   },
+   "producer_signature": {
+    "reasons": [
+     "not_present"
+    ],
+    "state": "not_evaluated"
+   },
+   "sealed_content": {
+    "reasons": [],
+    "state": "verified"
+   },
+   "time_anchor": {
+    "reasons": [
+     "not_present"
+    ],
+    "state": "not_evaluated"
+   }
+  }
+ },
+ "vector": "issuer_x5c_key_purpose_not_signing"
+}

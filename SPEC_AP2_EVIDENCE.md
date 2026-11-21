@@ -13,7 +13,7 @@
 > their libraries read it (`x5c leaf is not DER: <rule>`), and §6 step 7 applies X.690 §11.2.2 to keyUsage; §6 step 6,
 > §5 and §6.9, a pinned producer set implies `require_producer`: a pack without a producer block is not `valid` under it, `policy.unmet` `trusted_producer_keys` (vector `stripped_signature`:
 > `trusted_producer_keys` added to its `policy.unmet`, `valid` unchanged); §7, one vector added for §6 step 2,
-> `issuer_alg_not_es256` (fifty-eight).
+> `issuer_alg_not_es256`, and one for §6 step 7, `issuer_x5c_key_purpose_not_signing` (fifty-nine).
 
 > Revision 1.9.0 (2026-11-20; it contains 1.8.1, which was not released on its own): §2.1 (new), AP2 delegation chains
 > `<hop0>~~<hop1>...` are read in their native form — split into hops by `build`, every hop after the first verified with
@@ -1027,7 +1027,11 @@ openssl ABSENT is neither: as in 1.5.x the field is `null` (`tsa_verified`, `cha
 Run every `spec/vectors/ap2/<name>.json` under the policy in
 `<name>.expected.json` and reproduce the `normative` block exactly
 (`run_ap2_conformance.py` does this for the reference; exit 0 = conformant).
-The set contains fifty-eight vectors (1.9.1: + 1, `issuer_alg_not_es256`, the `alg` rule of §6 step 2 — an ES256
+The set contains fifty-nine vectors (1.9.1: + 2 — `issuer_x5c_key_purpose_not_signing`, the key purpose of §6 step 7:
+an x5c leaf with keyUsage keyCertSign only and extendedKeyUsage serverAuth only under `trust_anchor`
+`issuer_purpose_ca.crt`, `valid`, `issuer_identity` `contradicted` `key_purpose_not_signing`, `self_asserted_only`
+true, needs openssl; on 2e2556b, before the rule, `verified` `ca_certified` and `self_asserted_only` false, measured
+2026-11-21 — and `issuer_alg_not_es256`, the `alg` rule of §6 step 2 — an ES256
 signature of the issuer under a signed header that says `"alg": "none"`, `valid: true` under 1.9.0 in both verifiers,
 measured 2026-11-20; an artifact error, `sealed_content` `contradicted` `artifact_invalid`, no producer block; 1.8.1: + 4, the grammar of §6 step 2 — `sd_jwt_no_separator` and
 `sd_jwt_empty_component`, both `valid` under 1.8.0 in both verifiers, and `sd_jwt_no_trailing_tilde`, an artifact error
@@ -1079,7 +1083,7 @@ refusal; a conformant verifier reproduces it exactly); `policy` keys `trusted_pr
 `require_producer`, `require_anchor`, `min_anchors`, with the types of §6 (`require_*` booleans, `min_anchors` a positive
 integer, `trusted_producer_keys` null or an object mapping a `sig_alg` to a key or a non-empty list of keys), and since
 1.6.0 `trust_set_complete` (boolean), `tsa_cert` and `trust_anchor` (the name of a file of the vector set, passed as
-`--tsa-cert` / `--trust-anchor`), and since 1.7.2 `accept_integral_floats` (boolean, §3.1). The five vectors that pass `tsa_cert` or `trust_anchor` list `"openssl"` in `requires`: a
+`--tsa-cert` / `--trust-anchor`), and since 1.7.2 `accept_integral_floats` (boolean, §3.1). The six vectors that pass `tsa_cert` or `trust_anchor` (five up to 1.9.0) list `"openssl"` in `requires`: a
 verifier that cannot call openssl (the JS verifier) reports them SKIP. A runner that meets
 any other key, backend name or policy type, a file that is not UTF-8 JSON or repeats a key, or a pack without its
 expected file (or the reverse) stops with an error of the vector set, never ignoring it (`run_ap2_conformance.py`:

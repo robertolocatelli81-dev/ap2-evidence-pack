@@ -78,7 +78,12 @@ openssl staying `false`), which pass on both.
   combinations of block (pinned, not pinned, absent) × set × `require_producer` in both verifiers.
 - SPEC §7: one conformance vector, `issuer_alg_not_es256` (`spec/vectors/ap2/make_vectors_191.py`): an ES256
   signature of the issuer under a signed header that says `"alg": "none"`, an artifact error (`sealed_content`
-  `contradicted` `artifact_invalid`). On v1.9.0 both verifiers report it `valid: true`. Fifty-eight vectors.
+  `contradicted` `artifact_invalid`). On v1.9.0 both verifiers report it `valid: true`.
+- SPEC §7: one conformance vector, `issuer_x5c_key_purpose_not_signing` (`make_vectors_191.py purpose`, with
+  `issuer_purpose_ca.crt`): an x5c leaf whose keyUsage is keyCertSign only and whose extendedKeyUsage is serverAuth
+  only, under `trust_anchor` the CA that issued it — `valid`, `issuer_identity` `contradicted /
+  key_purpose_not_signing`, `self_asserted_only` true; it needs openssl (the JS verifier reports it SKIP). On 2e2556b,
+  before the rule: `verified / ca_certified`, `self_asserted_only` false, measured 2026-11-21. Fifty-nine vectors.
 
 ## 1.9.0 — 2026-11-20 — AP2 chains in their native form; receipts bound to the closed mandate; a binding policy; false greens closed
 
