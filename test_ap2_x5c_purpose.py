@@ -49,10 +49,11 @@ KU_FLAGS = ("digital_signature", "content_commitment", "key_encipherment", "data
             "key_cert_sign", "crl_sign", "encipher_only", "decipher_only")
 ANY_EKU = ObjectIdentifier("2.5.29.37.0")
 DOC_SIGNING = ObjectIdentifier("1.3.6.1.5.5.7.3.36")
+MDL_DS = ObjectIdentifier("1.0.18013.5.1.2")   # 1.10.0: the EKU of AP2's sample SD-JWT signer certificate
 EKU_POOL = (ExtendedKeyUsageOID.SERVER_AUTH, ExtendedKeyUsageOID.CLIENT_AUTH, ExtendedKeyUsageOID.CODE_SIGNING,
             ExtendedKeyUsageOID.EMAIL_PROTECTION, ExtendedKeyUsageOID.TIME_STAMPING, ExtendedKeyUsageOID.OCSP_SIGNING,
-            ANY_EKU, DOC_SIGNING, ObjectIdentifier("1.3.6.1.4.1.311.10.3.12"), ObjectIdentifier("1.2.3.4.5"))
-SIGNING_EKUS = {ANY_EKU, DOC_SIGNING}
+            ANY_EKU, DOC_SIGNING, MDL_DS, ObjectIdentifier("1.3.6.1.4.1.311.10.3.12"), ObjectIdentifier("1.2.3.4.5"))
+SIGNING_EKUS = (DOC_SIGNING, MDL_DS)   # 1.10.0: anyExtendedKeyUsage is not a purpose
 PLACEHOLDER_A, PLACEHOLDER_B = ObjectIdentifier("2.5.29.98"), ObjectIdentifier("2.5.29.99")   # 55 1d 62 / 55 1d 63
 KU_OID, EKU_OID = bytes.fromhex("551d0f"), bytes.fromhex("551d25")
 _KEY = ec.generate_private_key(ec.SECP256R1())
@@ -82,10 +83,13 @@ def _der(cert) -> bytes:
 def expected(ku_flags, ekus):
     """The rule of SPEC §6 step 7 written from the generator's parameters, not from the certificate."""
     if ku_flags is not None and not ({"digital_signature", "content_commitment"} & set(ku_flags)):
-        return {"signing": False, "reason": "key_usage_not_signing"}
-    if ekus is not None and not (SIGNING_EKUS & set(ekus)):
-        return {"signing": False, "reason": "extended_key_usage_not_signing"}
-    return {"signing": True, "reason": None}
+        return {"signing": False, "reason": "key_usage_not_signing", "matched": None}
+    if ekus is None:
+        return {"signing": True, "reason": None, "matched": None}
+    hit = next((e.dotted_string for e in ekus if e in SIGNING_EKUS), None)   # the first accepted one, in the list's order
+    if hit is None:
+        return {"signing": False, "reason": "extended_key_usage_not_signing", "matched": None}
+    return {"signing": True, "reason": None, "matched": hit}
 
 
 def generated_leaves(n=400, seed=20261120):
@@ -155,10 +159,15 @@ HAND = [   # (name, ku value or None, eku value or None, duplicate?, expected)
     ("ku_minimal_two_octets", "0303078080", None, False, (True, None)),   # control: digitalSignature + decipherOnly, minimal
     ("ku_long_length_form", "0381020780", None, False, (False, "key_usage_malformed")),   # X.690 §10.1: the short form fits
     ("ku_long_length_leading_zero", "038200020780", None, False, (False, "key_usage_malformed")),
-    ("eku_any", None, "3006060455" "1d2500", False, (True, None)),
-    ("eku_doc_signing", None, "300a06082b06010505070324", False, (True, None)),
+    ("eku_any", None, "3006060455" "1d2500", False, (False, "extended_key_usage_not_signing")),   # 1.10.0: alone, no purpose
+    ("eku_any_then_doc", None, "30100604551d250006082b06010505070324", False, (True, None, "1.3.6.1.5.5.7.3.36")),
+    ("eku_mdl_ds", None, "3009060728818c5d050102", False, (True, None, "1.0.18013.5.1.2")),
+    ("eku_server_any_mdl", None, "301906082b060105050703010604551d2500060728818c5d050102", False, (True, None, "1.0.18013.5.1.2")),
+    ("eku_mdl_wrong_arc", None, "3009060728818c5d050103", False, (False, "extended_key_usage_not_signing")),
+    ("eku_doc_signing", None, "300a06082b06010505070324", False, (True, None, "1.3.6.1.5.5.7.3.36")),
     ("eku_server_auth", None, "300a06082b06010505070301", False, (False, "extended_key_usage_not_signing")),
-    ("eku_server_then_doc", None, "301406082b0601050507030106082b06010505070324", False, (True, None)),
+    ("eku_server_then_doc", None, "301406082b0601050507030106082b06010505070324", False, (True, None, "1.3.6.1.5.5.7.3.36")),
+    ("eku_doc_then_mdl", None, "301306082b06010505070324060728818c5d050102", False, (True, None, "1.3.6.1.5.5.7.3.36")),
     ("eku_empty_sequence", None, "3000", False, (False, "extended_key_usage_malformed")),
     ("eku_empty_oid", None, "30020600", False, (False, "extended_key_usage_malformed")),
     ("eku_oid_unterminated", None, "3003060181", False, (False, "extended_key_usage_malformed")),
@@ -255,18 +264,19 @@ class Reference(unittest.TestCase):
         self.assertEqual(bad, [])
 
     def test_hand_written_values(self):
-        for name, ku, eku, dup, (signing, reason) in HAND:
+        for name, ku, eku, dup, want in HAND:
             with self.subTest(name):
-                self.assertEqual(A.leaf_key_purpose(_hand_der(ku, eku, dup)), {"signing": signing, "reason": reason})
+                signing, reason, matched = (want + (None,))[:3]
+                self.assertEqual(A.leaf_key_purpose(_hand_der(ku, eku, dup)), {"signing": signing, "reason": reason, "matched": matched})
 
     def test_no_extension_and_unreadable(self):
-        self.assertEqual(A.leaf_key_purpose(_der(_builder().sign(_KEY, hashes.SHA256()))), {"signing": True, "reason": None})
-        self.assertEqual(A.leaf_key_purpose(ONE_EXTENSION_FIELD), {"signing": True, "reason": None})   # control of the next
+        self.assertEqual(A.leaf_key_purpose(_der(_builder().sign(_KEY, hashes.SHA256()))), {"signing": True, "reason": None, "matched": None})
+        self.assertEqual(A.leaf_key_purpose(ONE_EXTENSION_FIELD), {"signing": True, "reason": None, "matched": None})   # control of the next
         self.assertEqual(LONG_FORM_DER_WALK[:2], b"\x30\x81")
-        self.assertEqual(A.leaf_key_purpose(LONG_FORM_DER_WALK), {"signing": True, "reason": None})    # control: 81 nn is DER
+        self.assertEqual(A.leaf_key_purpose(LONG_FORM_DER_WALK), {"signing": True, "reason": None, "matched": None})    # control: 81 nn is DER
         for junk in (b"", b"\x30", b"\x30\x00", b"\x04\x00", b"\x30\x03\x02\x01\x01", b"\x30\x84\xff\xff\xff\xff",
                      TWO_EXTENSION_FIELDS, *NOT_EXTENSIONS_WALKS, *NOT_DER_WALKS):
-            self.assertEqual(A.leaf_key_purpose(junk), {"signing": False, "reason": "extensions_unreadable"}, junk.hex())
+            self.assertEqual(A.leaf_key_purpose(junk), {"signing": False, "reason": "extensions_unreadable", "matched": None}, junk.hex())
 
 
 @unittest.skipUnless(NODE, "node absent: the JS verifier cannot be measured")
@@ -406,7 +416,9 @@ class WholePath(unittest.TestCase):
         "plain": (None, None, ("verified", ["ca_certified"]), False),
         "digital_signature": (["digital_signature"], None, ("verified", ["ca_certified"]), False),
         "content_commitment_doc": (["content_commitment"], [DOC_SIGNING], ("verified", ["ca_certified"]), False),
-        "any_eku": (["digital_signature"], [ExtendedKeyUsageOID.SERVER_AUTH, ANY_EKU], ("verified", ["ca_certified"]), False),
+        "any_eku": (["digital_signature"], [ExtendedKeyUsageOID.SERVER_AUTH, ANY_EKU], ("contradicted", ["key_purpose_not_signing"]), True),   # 1.10.0
+        "any_eku_with_doc": (["digital_signature"], [ANY_EKU, DOC_SIGNING], ("verified", ["ca_certified"]), False),
+        "mdl_ds": (["digital_signature"], [MDL_DS], ("verified", ["ca_certified"]), False),
     }
 
     @classmethod
@@ -459,7 +471,7 @@ class WholePath(unittest.TestCase):
 
     def test_purpose_reported_without_anchor(self):
         r = A.verify_evidence(self.packs["tls_leaf"])
-        self.assertEqual(r["artifacts"][0]["x5c_leaf"]["key_purpose"], {"signing": False, "reason": "key_usage_not_signing"})
+        self.assertEqual(r["artifacts"][0]["x5c_leaf"]["key_purpose"], {"signing": False, "reason": "key_usage_not_signing", "matched": None})
         self.assertEqual(r["states"]["issuer_identity"]["reasons"], ["no_trust_anchor"])
 
     @unittest.skipUnless(NODE, "node absent: the JS verifier cannot be measured")
@@ -473,6 +485,36 @@ class WholePath(unittest.TestCase):
                 py = A.verify_evidence(self.packs[name])
                 self.assertEqual(js["artifacts"][0]["x5c_leaf"]["key_purpose"], py["artifacts"][0]["x5c_leaf"]["key_purpose"])
                 self.assertTrue(js["self_asserted_only"])
+
+
+class Ap2SampleCertificate(unittest.TestCase):
+    """1.10.0: the sample SD-JWT signer certificate of google-agentic-commerce/AP2 (spec/vectors/ap2_certs/, Apache-2.0)
+    carries the extendedKeyUsage 1.0.18013.5.1.2 (mDL Document Signer), critical. Measured on 2026-11-21 on the branch
+    head b37d904, before this change: {"signing": false, "reason": "extended_key_usage_not_signing"}; now a signing
+    purpose, the same in both verifiers. The certificate expired on 2026-04-25: its chain is checked at a time inside
+    its validity (the TSA time a pack would carry), and refused at today's clock (control)."""
+    DIR = os.path.join(ROOT, "spec", "vectors", "ap2_certs")
+
+    @classmethod
+    def setUpClass(cls):
+        with open(os.path.join(cls.DIR, "ds_cert_sdjwt.pem"), "rb") as f:
+            cls.cert = x509.load_pem_x509_certificate(f.read())
+        cls.der = _der(cls.cert)
+
+    def test_purpose_is_mdl_document_signer(self):
+        self.assertIsNone(A.x5c_leaf_der_problem(self.der))
+        self.assertEqual(A.leaf_key_purpose(self.der), {"signing": True, "reason": None, "matched": "1.0.18013.5.1.2"})
+
+    @unittest.skipUnless(NODE, "node absent: the JS verifier cannot be measured")
+    def test_same_in_js(self):
+        self.assertEqual(js_purposes([self.der]), [A.leaf_key_purpose(self.der)])
+
+    @unittest.skipUnless(OPENSSL, "openssl absent: the x5c chain cannot be checked")
+    def test_chain_to_the_sample_issuer(self):
+        b64 = base64.b64encode(self.der).decode()
+        anchor = os.path.join(self.DIR, "issuer_cert_sdjwt.pem")
+        self.assertIs(A._verify_x5c_chain([b64], anchor, at_time="20250601000000Z"), True)
+        self.assertIs(A._verify_x5c_chain([b64], anchor), False)   # control: expired at today's clock
 
 
 if __name__ == "__main__":

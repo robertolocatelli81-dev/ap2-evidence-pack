@@ -20,6 +20,9 @@ Third-party material in this repository, not under the copyright above:
   pack_built_by_1.8.0.json, a pack this project built from them) were emitted on 2026-11-18 with the AP2 SDK of
   google-agentic-commerce/AP2 (Apache-2.0, commit e1ea56db…) and keys generated for the purpose; sources and sha256 in
   spec/vectors/ap2_chains/README.md.
+- spec/vectors/ap2_certs/ds_cert_sdjwt.pem and issuer_cert_sdjwt.pem: the sample certificates of
+  google-agentic-commerce/AP2 (code/samples/certs/, commit e1ea56db…), Apache-2.0, copied verbatim; source and sha256
+  in spec/vectors/ap2_certs/README.md.
 - The minor units in ap2_evidence.py (MINOR_UNITS) and verifiers/js/ap2-verify.mjs are the ISO 4217 minor units of five
   currencies (EUR, USD, GBP, CHF 2; JPY 0), facts; no currency list is distributed here.
 The NIST beacon serialization in ap2_nist_beacon.py was cross-checked with clcert/beacon-verifier (MIT); no code of it

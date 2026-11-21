@@ -266,7 +266,12 @@ in both. The rules are those of ITU-T X.690 (02/2021, in force with its Erratum 
   `[0]`, serialNumber, signature, issuer, validity (two times), subject, subjectPublicKeyInfo, then `[1]`, `[2]`, `[3]` in
   this order, each at most once (`tbs`); the version, when present, is v3 (`a0 03 02 01 02`: v1 is the DEFAULT, which
   X.690 §11.5 forbids to encode, and RFC 5280 §4.1.2.1 asks v3 when there are extensions) — `version`; the serial
-  number positive (RFC 5280 §4.1.2.2: "The serial number MUST be a positive integer") — `serial`; subjectPublicKeyInfo
+  number positive (RFC 5280 §4.1.2.2: "The serial number MUST be a positive integer") — `serial`, asked of the leaf
+  only: the anchor and the other certificates of `x5c` are read by openssl, not by this walk, because "there are a few
+  roots in common trust stores (like certifi) that have `serial == 0`" (pyca/cryptography 50.0.2, `policy/mod.rs`, read
+  on 2026-11-21; measured that day: an anchor with serial 0 validates a chain, a leaf with serial 0 is refused). RFC 5280
+  adds "Certificate users SHOULD be prepared to gracefully handle such certificates": here the leaf is a named error,
+  not a crash; subjectPublicKeyInfo
   an AlgorithmIdentifier and a BIT STRING, and that BIT STRING and the signature with no unused bit (they carry octets:
   RFC 5480 §2.2 maps the ECPoint, "an OCTET STRING", bit for bit onto the BIT STRING; Proposed Standard, March 2009,
   updated by RFC 8813 only, read the same day) — `bit_string`; an Extension is
@@ -844,7 +849,7 @@ flags: `require_producer`, `require_pq`, `require_anchor`, and `min_anchors` (1.
    (flag, not a failure: the verdict names the weakness instead of hiding it).
    1.9.1, the PURPOSE of the leaf: a validated chain clears the flag only when the leaf was issued for signing, read from
    the leaf's DER by both verifiers with the same rule and reported, with or without an anchor, as `x5c_leaf.key_purpose`
-   = `{"signing": true|false, "reason": null|<code>}`. RFC 5280 (Proposed Standard, May 2008; its updates RFC 6818, 8398,
+   = `{"signing": true|false, "reason": null|<code>, "matched": null|<OID>}` (`matched` since 1.10.0). RFC 5280 (Proposed Standard, May 2008; its updates RFC 6818, 8398,
    8399, 9549, 9598, 9608, 9618, 9925 and 10007 do not change §4.2.1.3 or §4.2.1.12; read on rfc-editor.org on
    2026-11-20; its two verified errata on §4.2.1.12, 5802 and 6414, change the comments of id-kp-serverAuth and
    id-kp-clientAuth, not the rule, read there on 2026-11-21) ties the use of the key to two extensions, and both are checked, each on its own (§4.2.1.12: "If a
@@ -856,20 +861,34 @@ flags: `require_producer`, `require_pq`, `require_anchor`, and `min_anchors` (1.
    - extendedKeyUsage present ("If the extension is present, then the certificate MUST only be used for one of the
      purposes indicated"): it MUST list one of a closed set, this format's choice, since RFC 5280 leaves the purpose an
      application requires to the application ("Certificate using applications MAY require ... that a particular purpose
-     be indicated"): `anyExtendedKeyUsage` (2.5.29.37.0 — the CA "does not wish to restrict usages of the key") or
+     be indicated"; "Applications that require the presence of a particular purpose MAY reject certificates that
+     include the anyExtendedKeyUsage OID but not the particular OID expected for the application"):
      `id-kp-documentSigning` (1.3.6.1.5.5.7.3.36, RFC 9336, Proposed Standard, December 2022, read the same day — the key
      "has been certified to be used for cryptographic operations on contents that are consumed by people": a mandate is
-     content its user approves). Any other list is `extended_key_usage_not_signing`: `serverAuth` and `clientAuth` (TLS),
-     `codeSigning` ("Signing of downloadable executable code"), `emailProtection`, `timeStamping`, `OCSPSigning`, and
-     every KeyPurposeId this text does not name. RFC 9336 §1 records that `id-kp-emailProtection`, `id-kp-codeSigning` or
-     a vendor-defined KeyPurposeId are the current practice for signing documents, and that changes made to the code
-     signing and S/MIME ecosystems "may cause unexpected behaviors" on document signing; this format does not accept
-     them. A relying party that refuses `anyExtendedKeyUsage` (RFC 9336 §1: "bad practice for publicly trusted
-     certificates") applies its own policy to the certificate, which the receipt names by `x5c_leaf.sha256`
-     (`key_purpose` does not say which KeyPurposeId matched): this text accepts it, because RFC 5280 defines it for a CA
-     that "does not wish to restrict usages of the key", and a leaf with no extendedKeyUsage at all is accepted too
-     (openssl 3.0.22 reads it otherwise: `verify -purpose smimesign` accepts a leaf with no extendedKeyUsage and refuses
-     one that lists only anyExtendedKeyUsage, measured 2026-11-21);
+     content its user approves) or, since 1.10.0, the mDL Document Signer purpose `1.0.18013.5.1.2` (the name is that of
+     oid-base.com, "Mobile Driving Licence (mDL) Document Signer (DS)", read on 2026-11-21; ISO/IEC 18013-5, which
+     defines it, is sold and was not read): the sample certificate AP2 ships for SD-JWT signers,
+     `code/samples/certs/ds_cert_sdjwt.pem` of google-agentic-commerce/AP2 (Apache-2.0, sha256 `a4b92cd6…`, unchanged at
+     `e1ea56db`, read on 2026-11-21), carries exactly that EKU, critical, and before this change (branch head b37d904) this format called it
+     `extended_key_usage_not_signing` (measured 2026-11-21). `anyExtendedKeyUsage` (2.5.29.37.0) is not a
+     purpose here since 1.10.0: alone it is `extended_key_usage_not_signing`; beside an accepted purpose the leaf is
+     accepted for that purpose. The certificate rules of 2026 forbid it in the certificates a signer holds — CA/Browser
+     Forum TLS Baseline Requirements 2.3.1 §7.1.2.7.10 ("`anyExtendedKeyUsage` … MUST NOT"), S/MIME 1.0.17 §7.1.2.3
+     ("… and `anyExtendedKeyUsage` SHALL NOT be present"), Code Signing 3.11.0 §7.1.2.3 ("the following EKUs MUST NOT be
+     present: `anyExtendedKeyUsage`"), all read on 2026-11-21 — and RFC 9336 §1 calls it "bad practice for publicly
+     trusted certificates"; pyca/cryptography 50.0.2 (its verifier, for end-entity certificates: "**must not** be the
+     explicit `anyExtendedKeyUsage` EKU") and openssl 3.0.22 (`verify -purpose smimesign`, measured 2026-11-21) refuse it
+     in the leaf; Go `crypto/x509` (`verify.go` read the same day: "The presence of anyExtendedKeyUsage overrides any other key
+     usage") accepts it. Before this change (b37d904) this format accepted it alone. Any other
+     list is `extended_key_usage_not_signing`: `serverAuth` and `clientAuth` (TLS), `codeSigning` ("Signing of
+     downloadable executable code"), `emailProtection`, `timeStamping`, `OCSPSigning`, and every KeyPurposeId this text
+     does not name. RFC 9336 §1 records that `id-kp-emailProtection`, `id-kp-codeSigning` or a vendor-defined
+     KeyPurposeId are the current practice for signing documents, and that changes made to the code signing and S/MIME
+     ecosystems "may cause unexpected behaviors" on document signing; this format does not accept them. A leaf with no
+     extendedKeyUsage at all is accepted (RFC 5280 does not require the extension; openssl 3.0.22 `verify -purpose
+     smimesign` accepts such a leaf too, measured 2026-11-21). `key_purpose.matched` names the purpose that matched:
+     the dotted OID of the first KeyPurposeId of the list that is in the closed set, `null` when the leaf has no
+     extendedKeyUsage or is not issued for signing;
    - either extension twice (RFC 5280 §4.2: "A certificate MUST NOT include more than one instance of a particular
      extension") → `duplicate_extension`; a keyUsage that is not one DER BIT STRING (unused bits 0–7 and zero) →
      `key_usage_malformed`; an extendedKeyUsage that is not one DER SEQUENCE of one or more OBJECT IDENTIFIERs →

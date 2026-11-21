@@ -3,9 +3,9 @@
 ## Unreleased (1.9.1) — fixes after an internal review of 1.8.0, measured again on 1.9.0 on 2026-11-20
 
 Each item below was reproduced on the tag v1.9.0 (de28c3a) and on v1.8.0 (d5601e4) with a script made for it. Of the
-36 tests added, the 28 that state the new behaviour fail on v1.9.0, as a failure or as an error (a constant or a
-function they read does not exist there; the five of `test_ap2_x5c_leaf_der.py`, its control included, read a function
-that 1.9.0 does not have); the other 8 are the six controls and the unchanged direction (`build` refusing, a refusal of
+40 tests added, the 31 that state the new behaviour fail on v1.9.0, as a failure or as an error (a constant or a
+function they read does not exist there; the six of `test_ap2_x5c_leaf_der.py`, its control included, read a function
+that 1.9.0 does not have); the other 9 are the seven controls and the unchanged direction (`build` refusing, a refusal of
 openssl staying `false`), which pass on both.
 
 - SPEC §6 step 2, both verifiers: the issuer signature is verified only under the `alg` the signed header names, ES256.
@@ -27,20 +27,26 @@ openssl staying `false`), which pass on both.
   anchored, with a note. `test_ap2_openssl_not_run_tsa.py`: 10 tests.
 - SPEC §6 step 7, §6.9, both verifiers: an x5c chain that validates to the relying party's anchor clears
   `self_asserted_only` only when its leaf is issued for signing — keyUsage, when present, with digitalSignature or
-  nonRepudiation/contentCommitment (RFC 5280 §4.2.1.3); extendedKeyUsage, when present, listing anyExtendedKeyUsage or
-  id-kp-documentSigning (RFC 5280 §4.2.1.12, RFC 9336; the closed list is this format's choice, SPEC §6 step 7 gives the
-  reasons). Up to 1.9.0 neither extension was read: a leaf with keyUsage keyCertSign only and extendedKeyUsage serverAuth
+  nonRepudiation/contentCommitment (RFC 5280 §4.2.1.3); extendedKeyUsage, when present, listing id-kp-documentSigning
+  (RFC 9336) or the mDL Document Signer purpose `1.0.18013.5.1.2` (RFC 5280 §4.2.1.12; the closed list is this format's
+  choice, SPEC §6 step 7 gives the reasons). anyExtendedKeyUsage alone is not a purpose (the CA/Browser Forum Baseline
+  Requirements for TLS, S/MIME and code signing forbid it in the certificates they profile; pyca/cryptography 50.0.2 and
+  openssl refuse it in a leaf, measured 2026-11-21); beside an accepted purpose the leaf is accepted for that purpose.
+  The mDL purpose is the one of AP2's sample SD-JWT signer certificate (`code/samples/certs/ds_cert_sdjwt.pem`, copied in
+  `spec/vectors/ap2_certs/` with its source): on the branch before this choice (b37d904) that certificate was
+  `extended_key_usage_not_signing`, now it is a signing purpose in both verifiers. Up to 1.9.0 neither extension was read: a leaf with keyUsage keyCertSign only and extendedKeyUsage serverAuth
   only, under the anchor, gave `chain_verified: true`, `self_asserted_only: false`, `issuer_identity` `verified /
   ca_certified`. Now `chain_verified` stays `true`, the flag stays set and `issuer_identity` is `contradicted /
   key_purpose_not_signing` (a new reason of `ap2-evidence-pack/states-1`; `valid` does not change, as for
-  `chain_broken`). Each `x5c_leaf` carries `key_purpose` (`{"signing", "reason"}`) in both verifiers, with or without an
+  `chain_broken`). Each `x5c_leaf` carries `key_purpose` (`{"signing", "reason", "matched"}`, `matched` the purpose that matched) in both verifiers, with or without an
   anchor; the differential oracle compares it. The walk reads DER (minimal definite lengths, X.690 §10.1; every
   element inside its parent; nothing after the certificate): a long length form where the short one fits is malformed
   or unreadable, in both verifiers. Verdicts: no vector changes (of the six x5c leaves of `spec/vectors`, three
   distinct certificates, four carry a critical keyUsage with digitalSignature and no extendedKeyUsage, two carry neither
-  extension: `signing: true` for all six). `test_ap2_x5c_purpose.py`: 13 tests, three of them for the next entry; the
-  other 10 — 400 generated leaves checked against
-  the rule written from the generator's parameters, 37 extension values written by hand (malformed, duplicated, DER
+  extension: `signing: true` for all six). `test_ap2_x5c_purpose.py`: 16 tests, three of them for the next entry and
+  three for AP2's sample certificate (its purpose in both verifiers, its chain to the sample issuer at a time inside
+  its validity, refused at today's clock); the other 10 — 400 generated leaves checked against
+  the rule written from the generator's parameters, 43 extension values written by hand (malformed, duplicated, DER
   edges), eleven TBS walks written by hand (one and two `[3]` fields, two that are not the Extensions syntax, one with
   long-form lengths, six that are not DER) and 3000 byte mutations of
   a leaf, the same answer in both verifiers, and the whole path under openssl with eight leaves.
@@ -67,8 +73,10 @@ openssl staying `false`), which pass on both.
   33 of the TLS chains of ten public sites pass; of the 148 of the system store, 140 pass and 8 are root CAs whose
   serial is 0. keyUsage also follows X.690 §11.2.2 (trailing 0 bits removed): `03 02 00 80` is now `key_usage_malformed`
   (2 of 170 real certificates with keyUsage break it, two root CAs of one issuer). No vector changes.
-  `test_ap2_x5c_leaf_der.py`: 5 tests (one case per rule in both verifiers, 1500 generated changes, a pack whose leaf
-  has `critical` `01`: `valid: true` for the JS verifier on 1.9.0, an artifact error in both now); all 5 fail on 1.9.0.
+  `test_ap2_x5c_leaf_der.py`: 6 tests (one case per rule in both verifiers, 1500 generated changes, a pack whose leaf
+  has `critical` `01`: `valid: true` for the JS verifier on 1.9.0, an artifact error in both now; an anchor with serial
+  0 that still anchors a chain while a leaf with serial 0 is refused: the serial rule is the leaf's only); all 6 fail on
+  1.9.0.
 - SPEC §6 step 6, §5, §6.9, both verifiers: a pinned producer set (`--trusted-producer-key`, `trusted_producer_keys`)
   implies `require_producer`. Up to 1.9.0 the set was applied only to a block that was present: the producer block
   removed from a pack whose key was pinned gave `valid: true`, `policy.unmet: []`. Now `policy_ok` and `valid` are

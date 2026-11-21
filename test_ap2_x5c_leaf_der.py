@@ -353,5 +353,56 @@ class WholePack(unittest.TestCase):
             self.assertIn("x5c leaf is not DER: boolean", arts)
 
 
+@unittest.skipUnless(shutil.which("openssl"), "openssl absent: the x5c chain cannot be checked")
+class SerialOnlyForTheLeaf(unittest.TestCase):
+    """1.10.0 (SPEC §2 (d)): the positive serial is asked of the x5c leaf only. Anchors and intermediates are read by
+    openssl, not by this walk: a CA whose serial is 0 (several roots of common trust stores have one; pyca/cryptography
+    50.0.2 does not refuse it for that reason) still anchors a chain. Control: the same leaf with serial 0 is that
+    artifact's error."""
+
+    @staticmethod
+    def _resigned_with_serial(der, key, serial):   # cryptography's builder refuses serial 0: the TBS is rewritten and signed
+        tree = parse(der, 0, len(der))
+        node(tree, TBS + (1,))[1] = serial
+        tbs = ser([node(tree, TBS)])
+        sig = key.sign(tbs, ec.ECDSA(hashes.SHA256()))
+        body = tbs + ser([node(tree, (0, 1))]) + bytes([0x03]) + _len(len(sig) + 1) + b"\x00" + sig
+        return bytes([0x30]) + _len(len(body)) + body
+
+    def _ca(self):
+        k = ec.generate_private_key(ec.SECP256R1())
+        c = (x509.CertificateBuilder().subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "zero ca")]))
+             .issuer_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "zero ca")])).public_key(k.public_key())
+             .serial_number(1).not_valid_before(NOW - datetime.timedelta(days=1)).not_valid_after(NOW + datetime.timedelta(days=30))
+             .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+             .add_extension(x509.KeyUsage(False, False, False, False, False, True, True, False, False), critical=True))
+        return k, self._resigned_with_serial(c.sign(k, hashes.SHA256()).public_bytes(serialization.Encoding.DER), k, b"\x00")
+
+    def _leaf(self, ca_key, serial):
+        b = (x509.CertificateBuilder().subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "leaf")]))
+             .issuer_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "zero ca")])).public_key(KEY.public_key())
+             .serial_number(7).not_valid_before(NOW - datetime.timedelta(days=1)).not_valid_after(NOW + datetime.timedelta(days=30)))
+        der = b.sign(ca_key, hashes.SHA256()).public_bytes(serialization.Encoding.DER)
+        return der if serial is None else self._resigned_with_serial(der, ca_key, serial)
+
+    def test_anchor_with_serial_zero_and_leaf_with_serial_zero(self):
+        d = tempfile.mkdtemp(prefix="ap2serial_")
+        try:
+            ca_key, ca_der = self._ca()
+            self.assertEqual(A.x5c_leaf_der_problem(ca_der), "serial")   # the bench: the anchor really has serial 0
+            anchor = os.path.join(d, "ca.pem")
+            with open(anchor, "wb") as f:
+                f.write(b"-----BEGIN CERTIFICATE-----\n" + base64.encodebytes(ca_der) + b"-----END CERTIFICATE-----\n")
+            good = self._leaf(ca_key, None)
+            self.assertIsNone(A.x5c_leaf_der_problem(good))
+            self.assertIs(A._verify_x5c_chain([base64.b64encode(good).decode()], anchor), True)   # the anchor's serial 0 is not read
+            zero = self._leaf(ca_key, b"\x00")
+            self.assertEqual(A.x5c_leaf_der_problem(zero), "serial")
+            with self.assertRaisesRegex(A.Ap2EvidenceError, "x5c leaf is not DER: serial"):
+                A._load_x5c_leaf([base64.b64encode(zero).decode()])
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main()

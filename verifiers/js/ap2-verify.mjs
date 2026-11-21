@@ -506,10 +506,12 @@ function derTLV(buf, off) { if (off + 2 > buf.length) throw new Refused("der"); 
 function derChildren(buf, tlv) { const out = []; let o = tlv.start; while (o < tlv.end) { const c = derTLV(buf, o); out.push(c); o = c.next; } return out; }
 // 1.9.1 — SPEC §6 step 7: whether an x5c leaf was issued for signing, the same rule and the same object as the reference's
 // leaf_key_purpose. keyUsage (RFC 5280 §4.2.1.3): digitalSignature (bit 0) or nonRepudiation / contentCommitment (bit 1);
-// extendedKeyUsage (§4.2.1.12): one of a closed list, this format's choice — anyExtendedKeyUsage, id-kp-documentSigning
-// (RFC 9336). Both absent: signing. OBJECT IDENTIFIER contents compared byte for byte.
+// extendedKeyUsage (§4.2.1.12): one of a closed list, this format's choice — id-kp-documentSigning (RFC 9336) and, since
+// 1.10.0, the mDL Document Signer purpose 1.0.18013.5.1.2; anyExtendedKeyUsage is not a purpose since 1.10.0. Both
+// absent: signing. OBJECT IDENTIFIER contents compared byte for byte; `matched` reports the dotted name.
 const ID_CE_KEY_USAGE = "551d0f", ID_CE_EXT_KEY_USAGE = "551d25";
-const SIGNING_EKUS = ["551d2500", "2b06010505070324"];   // 2.5.29.37.0 anyExtendedKeyUsage; 1.3.6.1.5.5.7.3.36 id-kp-documentSigning
+const SIGNING_EKUS = new Map([["2b06010505070324", "1.3.6.1.5.5.7.3.36"],   // id-kp-documentSigning (RFC 9336 §3.1)
+  ["28818c5d050102", "1.0.18013.5.1.2"]]);   // mDL Document Signer (1.10.0; name: oid-base.com)
 function oidOk(c) {   // X.690 §8.19.2: last octet of each sub-identifier with bit 8 clear, none starting with 0x80
   if (!c.length || c[c.length - 1] & 0x80) return false;
   let start = true; for (const b of c) { if (start && b === 0x80) return false; start = !(b & 0x80); } return true; }
@@ -598,7 +600,7 @@ const leafWhy = (e) => (e instanceof Error && e.message.startsWith("x5c leaf is 
 export function x5cLeafDerProblem(der) {   // null, or the rule broken (SPEC §2 (d)) — the reference's x5c_leaf_der_problem
   try { x5cLeafShape(der); return null; } catch (e) { if (e instanceof NotDer) return e.rule; throw e; } }
 export function leafKeyPurpose(der) {
-  const no = (reason) => ({ signing: false, reason });
+  const no = (reason) => ({ signing: false, reason, matched: null });
   const found = new Map();
   try {
     const cert = derStrictTLV(der, 0, der.length); if (cert.tag !== 0x30 || cert.end !== der.length) return no("extensions_unreadable");
@@ -628,9 +630,11 @@ export function leafKeyPurpose(der) {
   if (eku !== undefined) {
     let ids = null; try { const t = derStrictTLV(eku, 0, eku.length); if (t.tag === 0x30 && t.end === eku.length) ids = derStrictChildren(eku, t); } catch { ids = null; }
     if (!ids || !ids.length || ids.some((c) => c.tag !== 0x06 || !oidOk(eku.subarray(c.start, c.end)))) return no("extended_key_usage_malformed");   // SEQUENCE SIZE (1..MAX) OF KeyPurposeId
-    if (!ids.some((c) => SIGNING_EKUS.includes(eku.subarray(c.start, c.end).toString("hex")))) return no("extended_key_usage_not_signing");
+    const hit = ids.map((c) => SIGNING_EKUS.get(eku.subarray(c.start, c.end).toString("hex"))).find((x) => x !== undefined);
+    if (hit === undefined) return no("extended_key_usage_not_signing");   // anyExtendedKeyUsage alone is not a purpose here (1.10.0)
+    return { signing: true, reason: null, matched: hit };
   }
-  return { signing: true, reason: null };
+  return { signing: true, reason: null, matched: null };
 }
 function verifyRfc3161(tsrB64, expectedDigestHex) {
   // r11: granted null = no status was read (the bytes never decoded), not "the TSA refused" — a value the receipt never measured

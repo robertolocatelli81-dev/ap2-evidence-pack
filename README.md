@@ -214,8 +214,10 @@ chain linkage and `provenance_classes` / `self_asserted_only` for capture streng
 `self_asserted_only` is fail-closed (SPEC §6.7): offline **nothing** clears it — not a label
 (`supplied`, `jwks_fetched`), not a certificate that names a famous CA as its issuer. Only an
 `x5c` chain that validates to a trust anchor YOU supply does, and since 1.9.1 only when its leaf is issued for signing
-(keyUsage absent or with digitalSignature or contentCommitment, extendedKeyUsage absent or listing anyExtendedKeyUsage or
-id-kp-documentSigning — RFC 5280 §4.2.1.3, §4.2.1.12, RFC 9336; `artifacts[].x5c_leaf.key_purpose`, SPEC §6 step 7)
+(keyUsage absent or with digitalSignature or contentCommitment, extendedKeyUsage absent or listing id-kp-documentSigning
+or the mDL Document Signer purpose `1.0.18013.5.1.2` that AP2's sample signer certificate carries — anyExtendedKeyUsage
+alone is not a purpose — RFC 5280 §4.2.1.3, §4.2.1.12, RFC 9336; `artifacts[].x5c_leaf.key_purpose`, with the purpose
+that `matched`, SPEC §6 step 7)
 (`--trust-anchor <PEM>`, reported in `chain_verified`, validated at the `genTime` of a TSA-verified token when the pack has one, so an
 expired signing certificate still counts years later); the Node verifier cannot validate chains and,
 since 1.6.0, refuses `--trust-anchor` as a usage error (exit 2) instead of accepting it and reporting `chain_verified: null`. A cleared flag says a CA under your anchor certified that key — not

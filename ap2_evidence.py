@@ -723,13 +723,15 @@ def _pubkey_from_x5c_leaf(x5c: List[str]):
 # 1.9.1 (SPEC §6 step 7): the purposes RFC 5280 gives a leaf for signing. keyUsage (§4.2.1.3): digitalSignature (bit 0) or
 # nonRepudiation / contentCommitment (bit 1), the two bits for digital signatures "other than signatures on certificates
 # (bit 5) and CRLs (bit 6)". extendedKeyUsage (§4.2.1.12, "the certificate MUST only be used for one of the purposes
-# indicated"): a closed list, this format's choice (RFC 5280 leaves it to the application) — anyExtendedKeyUsage (the CA
-# "does not wish to restrict usages of the key") and id-kp-documentSigning (RFC 9336). Every other KeyPurposeId, named or
-# not, is not a signing purpose here. Contents octets of the OBJECT IDENTIFIERs, compared byte for byte.
+# indicated"): a closed list, this format's choice (RFC 5280 leaves it to the application) — id-kp-documentSigning
+# (RFC 9336) and, since 1.10.0, the mDL Document Signer purpose 1.0.18013.5.1.2 (the EKU of AP2's sample SD-JWT signer
+# certificate). anyExtendedKeyUsage is not a purpose since 1.10.0 (alone: not signing; beside an accepted purpose: that
+# purpose). Every other KeyPurposeId, named or not, is not a signing purpose here. Contents octets of the OBJECT
+# IDENTIFIERs, compared byte for byte; `matched` reports the dotted name.
 _ID_CE_KEY_USAGE = bytes.fromhex("551d0f")                    # 2.5.29.15
 _ID_CE_EXT_KEY_USAGE = bytes.fromhex("551d25")                # 2.5.29.37
-_SIGNING_EKUS = (bytes.fromhex("551d2500"),                   # 2.5.29.37.0 anyExtendedKeyUsage (RFC 5280 §4.2.1.12)
-                 bytes.fromhex("2b06010505070324"))           # 1.3.6.1.5.5.7.3.36 id-kp-documentSigning (RFC 9336 §3.1)
+_SIGNING_EKUS = {bytes.fromhex("2b06010505070324"): "1.3.6.1.5.5.7.3.36",   # id-kp-documentSigning (RFC 9336 §3.1)
+                 bytes.fromhex("28818c5d050102"): "1.0.18013.5.1.2"}        # mDL Document Signer (1.10.0; name: oid-base.com)
 
 
 def _oid_ok(c: bytes) -> bool:
@@ -939,7 +941,7 @@ def leaf_key_purpose(der: bytes) -> Dict:
     inside its parent (`_der_strict_tlv`). Both extensions absent: signing (RFC 5280 §4.2.1.12
     lets an application require the EKU, MAY; this format does not)."""
     def no(reason):
-        return {"signing": False, "reason": reason}
+        return {"signing": False, "reason": reason, "matched": None}
     try:
         t, s, e = _der_strict_tlv(der, 0, len(der))
         top = _der_strict_children(der, s, e) if t == 0x30 and e == len(der) else []   # one certificate, nothing after it
@@ -988,9 +990,11 @@ def leaf_key_purpose(der: bytes) -> Dict:
             ids = None
         if not ids or any(c[0] != 0x06 or not _oid_ok(eku[c[1]:c[2]]) for c in ids):   # SEQUENCE SIZE (1..MAX) OF KeyPurposeId
             return no("extended_key_usage_malformed")
-        if not any(eku[c[1]:c[2]] in _SIGNING_EKUS for c in ids):
+        hit = next((_SIGNING_EKUS[eku[c[1]:c[2]]] for c in ids if eku[c[1]:c[2]] in _SIGNING_EKUS), None)
+        if hit is None:   # anyExtendedKeyUsage alone is not a purpose here (1.10.0, SPEC §6 step 7)
             return no("extended_key_usage_not_signing")
-    return {"signing": True, "reason": None}
+        return {"signing": True, "reason": None, "matched": hit}
+    return {"signing": True, "reason": None, "matched": None}
 
 
 def _jwk_from_pubkey(pub) -> Dict:
