@@ -323,7 +323,8 @@ mutations from 59 sources, each with its class in both verifiers, 0 disagreement
 from a copy of the reference, 2 520 miss their class (measured 2026-10-18). The quick subset (5 660) runs in CI.
 `verifiers/states_controls.py` (1.6.0) runs the same corpus through the controls of the states (SPEC §6.9): no
 `contradicted` without a check that ran and failed, no `verified` over a check that did not run, the `valid` equation,
-pinned sets that never create a contradiction — 22 967 receipts, 0 violations; each of six deliberately broken rules of
+pinned sets that never create a contradiction — 22 967 receipts, 0 violations (24 651 receipts, 0 violations on
+2026-11-20, revision 1.9.1); each of six deliberately broken rules of
 the derivation turns it red.
 
 **Differential oracle** (`verifiers/differential_oracle.py`, 22/09/2026): the two verifiers must

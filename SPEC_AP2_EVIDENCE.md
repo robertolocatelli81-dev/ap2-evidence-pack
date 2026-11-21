@@ -940,7 +940,11 @@ rules of earlier revisions this one does not change: an x5c chain never decided 
 — vector `issuer_x5c_chain_broken` is valid with `issuer_identity` contradicted), and §5 makes a block with a `SKIP` entry
 not `ok` although no check failed (`producer_backend_missing`). Measured on 18/10/2026 by `verifiers/states_controls.py`
 (the schema-mutant corpus plus the vectors under four pinned-set inputs, 22 967 receipts): the equation above holds on
-every receipt; the pre-registered one fails on 7, all of them receipts of those two packs.
+every receipt; the pre-registered one fails on 7, all of them receipts of those two packs. Measured again on 2026-11-20
+on revision 1.9.1 (24 651 receipts): the equation above holds on every receipt; the pre-registered one fails on 5, three
+receipts of `producer_backend_missing` and two of `issuer_x5c_chain_broken` under `trust_anchor` — the two receipts of
+`issuer_x5c_chain_broken` under a pinned producer set that failed it up to 1.9.0 (7 on 1.9.0, measured the same day) are
+not `valid` since 1.9.1 (a pinned set without a producer block, §6 step 6), as both equations say.
 
 **What no state can say.** A producer block that was removed and one that was never added give the same digest and
 the same states (`producer_signature: not_evaluated`, `not_present`): only the SHA-256 of the whole file, or
