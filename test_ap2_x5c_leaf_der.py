@@ -214,7 +214,15 @@ def _both_algs(value):   # the signature AlgorithmIdentifier of tbsCertificate a
 
 
 _P = 2 ** 256 - 2 ** 224 + 2 ** 192 + 2 ** 96 - 1   # P-256: x = 5 is the x of a point, _Y5 its y
-_Y5 = pow((5 ** 3 - 3 * 5 + 0x5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b) % _P, (_P + 1) // 4, _P)
+_B = 0x5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b
+_Y5 = pow((5 ** 3 - 3 * 5 + _B) % _P, (_P + 1) // 4, _P)
+_Y0 = pow(_B, (_P + 1) // 4, _P)   # (0, _Y0) is a point: x = p reduces to it
+_X1 = 0x9e78d4ef60d05f750f6636209092bc43cbdd6b47e11a9de20a9feb2a50bb96c   # (_X1, 1) is a point: y + p fits 32 octets
+assert (_Y5 ** 2 - 5 ** 3 + 15 - _B) % _P == 0 and (_Y0 ** 2 - _B) % _P == 0 and (1 - _X1 ** 3 + 3 * _X1 - _B) % _P == 0
+
+
+def _xy(x, y):
+    return b"\x04" + x.to_bytes(32, "big") + y.to_bytes(32, "big")
 
 
 def _spki_point(point):
@@ -291,6 +299,11 @@ CASES = [
     ("key_x_not_reduced", 0, lambda d: mutate(d, _spki_point(b"\x04" + (5 + _P).to_bytes(32, "big") + _Y5.to_bytes(32, "big"))), "key"),
     ("key_y_is_p", 0, lambda d: mutate(d, _spki_point(b"\x04" + (5).to_bytes(32, "big") + _P.to_bytes(32, "big"))), "key"),
     ("key_x_reduced_control", 0, lambda d: mutate(d, _spki_point(b"\x04" + (5).to_bytes(32, "big") + _Y5.to_bytes(32, "big"))), None),
+    # the bounds: x = p (a point once reduced, so only the walk refuses it), y + p of the point (_X1, 1), and their controls
+    ("key_x_is_p", 0, lambda d: mutate(d, _spki_point(_xy(_P, _Y0))), "key"),
+    ("key_x_zero_control", 0, lambda d: mutate(d, _spki_point(_xy(0, _Y0))), None),
+    ("key_y_not_reduced", 0, lambda d: mutate(d, _spki_point(_xy(_X1, 1 + _P))), "key"),
+    ("key_y_reduced_control", 0, lambda d: mutate(d, _spki_point(_xy(_X1, 1))), None),
     ("key_p384_curve", 0, lambda d: mutate(d, lambda t: node(t, TBS + (6, 0))[1].__setitem__(1, [0x06, bytes.fromhex("2b81040022")])), "key"),
     ("name_empty_rdn", 0, lambda d: mutate(d, lambda t: node(t, TBS + (5,))[1].__setitem__(0, [0x31, []])), "name"),
     ("name_type_twice", 0, lambda d: mutate(d, _rdn((_OID_CN, [0x0C, b"a"]), (_OID_CN, [0x0C, b"b"]))), "name"),
@@ -487,6 +500,8 @@ class Identity(unittest.TestCase):
                 mutate(leaf(), _name_value(0x0C, b"#a#")), mutate(leaf(), _validity(b"491231235959Z")), mutate(leaf(), _validity(b"500101000000Z")),
                 _qseal(), mutate(leaf(), _rdn((bytes.fromhex("550462"), [0x0C, b"x"]))),
                 mutate(leaf(), _spki_point(b"\x04" + (5 + _P).to_bytes(32, "big") + _Y5.to_bytes(32, "big"))),
+                mutate(leaf(), _spki_point(_xy(_P, _Y0))), mutate(leaf(), _spki_point(_xy(_X1, 1 + _P))),
+                mutate(leaf(), _spki_point(_xy(0, _Y0))), mutate(leaf(), _spki_point(_xy(_X1, 1))),
                 mutate(leaf(), _name_value(0x0C, "caf\u00e9\x1f".encode()))] + [
                 mutate(leaf(), _rdn((bytes.fromhex(o), [0x0C, b"x"]))) for o in ("2705", "2805", "4f05", "5005")]
         p = subprocess.run([NODE, "--input-type=module", "-e", _JS_CERT % json.dumps("file://" + quote(JS))],

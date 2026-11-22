@@ -539,14 +539,21 @@ class CoordinateBelowP(unittest.TestCase):
     Measured 2026-11-22: cryptography's EllipticCurvePublicNumbers reduced an x written as x + p to a point, node:crypto's
     createPublicKey refused that JWK."""
     P = 2 ** 256 - 2 ** 224 + 2 ** 192 + 2 ** 96 - 1
-    Y5 = pow((5 ** 3 - 3 * 5 + 0x5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b) % P, (P + 1) // 4, P)   # x = 5: a point
+    B = 0x5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b
+    Y5 = pow((5 ** 3 - 3 * 5 + B) % P, (P + 1) // 4, P)   # (5, Y5) is a point
+    Y0 = pow(B, (P + 1) // 4, P)   # (0, Y0) is a point: x = p reduces to it
+    X1 = 0x9e78d4ef60d05f750f6636209092bc43cbdd6b47e11a9de20a9feb2a50bb96c   # (X1, 1) is a point: y + p fits 32 octets
+    BAD = ((5 + P, Y5), (P, Y0), (X1, 1 + P))
+    GOOD = ((5, Y5), (0, Y0), (X1, 1))
 
     def _jwk(self, x, y):
         return {"kty": "EC", "crv": "P-256", "x": T._b64u(x.to_bytes(32, "big")), "y": T._b64u(y.to_bytes(32, "big"))}
 
     def test_reference_refuses_a_coordinate_not_below_p(self):
-        self.assertEqual(ap2._pubkey_from_jwk(self._jwk(5, self.Y5)).public_numbers().x, 5)   # control: the reduced point
-        for x, y in ((5 + self.P, self.Y5), (5, self.P)):
+        for x, y in self.GOOD:   # controls: the reduced points
+            n = ap2._pubkey_from_jwk(self._jwk(x, y)).public_numbers()
+            self.assertEqual((n.x, n.y), (x, y))
+        for x, y in self.BAD:
             with self.assertRaisesRegex(ap2.Ap2EvidenceError, "not a point of P-256"):
                 ap2._pubkey_from_jwk(self._jwk(x, y))
 
@@ -554,9 +561,9 @@ class CoordinateBelowP(unittest.TestCase):
     def test_node_refuses_it_too(self):   # the JS verifier gives the JWK to createPublicKey (es256Verify)
         js = ('import { createPublicKey } from "node:crypto"; for (const j of JSON.parse(process.argv[1])) { let ok = true; '
               'try { createPublicKey({ key: j, format: "jwk" }); } catch { ok = false; } console.log(ok); }')
-        jwks = [self._jwk(5, self.Y5), self._jwk(5 + self.P, self.Y5), self._jwk(5, self.P)]
+        jwks = [self._jwk(x, y) for x, y in self.GOOD + self.BAD]
         p = subprocess.run([_NODE, "--input-type=module", "-e", js, json.dumps(jwks)], capture_output=True, text=True, timeout=120)
-        self.assertEqual(p.stdout.split(), ["true", "false", "false"], p.stderr)
+        self.assertEqual(p.stdout.split(), ["true"] * 3 + ["false"] * 3, p.stderr)
 
 
 if __name__ == "__main__":
