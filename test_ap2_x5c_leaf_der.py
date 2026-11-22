@@ -433,8 +433,9 @@ class Identity(unittest.TestCase):
             (_name_value(0x1E, "Zo\u00eb".encode("utf-16-be")), "CN=Zo\u00eb"),
             (_name_value(0x1C, "\U0001F600".encode("utf-32-be")), "CN=\U0001F600"),
             (_rdn((bytes.fromhex("2a864886f70d010901"), [0x16, b"a@b.example"])), "emailAddress=a@b.example"),
-            (_rdn((bytes.fromhex("550461"), [0x0C, b"VATIT-123"])), "organizationIdentifier=VATIT-123"),   # X.520 §6.4.4
-            (_rdn((bytes.fromhex("550462"), [0x0C, b"x"])), "2.5.4.98=#0c0178"),   # a type outside the table, dotted
+            # organizationIdentifier (X.520 §6.4.4) is not in the IANA registry: dotted (RFC 4514 §2.3), as a type outside the table
+            (_rdn((bytes.fromhex("550461"), [0x0C, b"VATIT-123"])), "2.5.4.97=#0c0956415449542d313233"),
+            (_rdn((bytes.fromhex("550462"), [0x0C, b"x"])), "2.5.4.98=#0c0178"),
             (_rdn((bytes.fromhex("550405"), [0x13, b"C0806592"])), "serialNumber=C0806592"),
             (lambda t: node(t, TBS + (5,)).__setitem__(1, []), ""),
         ]
@@ -444,8 +445,11 @@ class Identity(unittest.TestCase):
 
     def test_qualified_seal_subject(self):
         """A synthetic PSD2 qualified seal subject (EN 319 412-1 §5.1.4: organizationIdentifier `PSD` + country + `-` +
-        identifier): organizationIdentifier by name, in both verifiers (test_same_in_js holds the same leaf)."""
-        self.assertEqual(self._id(_qseal())["subject"], "C=IT,O=Banca Esempio S.p.A.,organizationIdentifier=PSDIT-BI-12345,CN=Banca Esempio seal")
+        identifier): organizationIdentifier, which the IANA LDAP Descriptors registry does not hold, is written dotted
+        with `#` and the hexadecimal of its UTF8String (RFC 4514 §2.3, §2.4), in both verifiers (test_same_in_js holds
+        the same leaf)."""
+        self.assertEqual(self._id(_qseal())["subject"],
+                         "C=IT,O=Banca Esempio S.p.A.,2.5.4.97=#0c0e50534449542d42492d3132333435,CN=Banca Esempio seal")
 
     def test_serial_and_times(self):
         d = mutate(leaf(), _set(TBS + (1,), value=b"\x00\xff"))

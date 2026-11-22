@@ -578,15 +578,15 @@ const SIGNATURE_ALGORITHMS = new Set(["300a06082a8648ce3d040302", "300a06082a864
   "300506032b6570"]);   // Ed25519, RFC 8410 §3
 const P256_SPKI_PREFIX = "3059301306072a8648ce3d020106082a8648ce3d030107034200" + "04";   // RFC 5480 §2.1.1, §2.2
 const P256_P = (1n << 256n) - (1n << 224n) + (1n << 192n) + (1n << 96n) - 1n;   // the prime of P-256: each coordinate is in [0, p - 1] (SEC 1 §2.3.6)
-// RFC 4514 §3 and the string attribute types of the IANA LDAP Descriptors registry (SPEC §2 (d), 1.10.0)
+// RFC 4514 §3 and the string attribute types of the IANA LDAP Descriptors registry that SPEC §2 (d) lists (1.10.0); every
+// other type is written dotted (RFC 4514 §2.3: a short name "known to be registered", else the dotted OID)
 const NAME_TYPES = new Map([["2.5.4.3", "CN"], ["2.5.4.7", "L"], ["2.5.4.8", "ST"], ["2.5.4.10", "O"], ["2.5.4.11", "OU"], ["2.5.4.6", "C"],
   ["2.5.4.9", "STREET"], ["0.9.2342.19200300.100.1.25", "DC"], ["0.9.2342.19200300.100.1.1", "UID"], ["2.5.4.15", "businessCategory"],
   ["2.5.4.13", "description"], ["2.5.4.27", "destinationIndicator"], ["2.5.4.46", "dnQualifier"], ["2.5.4.44", "generationQualifier"],
   ["2.5.4.42", "givenName"], ["2.5.4.51", "houseIdentifier"], ["2.5.4.43", "initials"], ["2.5.4.25", "internationalISDNNumber"],
   ["2.5.4.41", "name"], ["2.5.4.19", "physicalDeliveryOfficeName"], ["2.5.4.17", "postalCode"], ["2.5.4.18", "postOfficeBox"], ["2.5.4.5",
   "serialNumber"], ["2.5.4.4", "sn"], ["2.5.4.20", "telephoneNumber"], ["2.5.4.12", "title"], ["2.5.4.24", "x121Address"], ["2.5.4.65",
-  "pseudonym"], ["1.2.840.113549.1.9.1", "emailAddress"],
-  ["2.5.4.97", "organizationIdentifier"]]);   // not in the IANA registry: this format's addition (SPEC §2 (d), X.520 §6.4.4)
+  "pseudonym"], ["1.2.840.113549.1.9.1", "emailAddress"]]);
 function oidDotted(c) {
   const out = []; let v = 0n;
   for (const b of c) { v = (v << 7n) | BigInt(b & 0x7f); if (!(b & 0x80)) { out.push(v); v = 0n; } }
