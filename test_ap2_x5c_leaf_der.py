@@ -437,6 +437,10 @@ class Identity(unittest.TestCase):
             (_rdn((bytes.fromhex("550461"), [0x0C, b"VATIT-123"])), "2.5.4.97=#0c0956415449542d313233"),
             (_rdn((bytes.fromhex("550462"), [0x0C, b"x"])), "2.5.4.98=#0c0178"),
             (_rdn((bytes.fromhex("550405"), [0x13, b"C0806592"])), "serialNumber=C0806592"),
+            # a UTF8String beyond ASCII read as UTF-8, U+001F escaped, and the first arc of a dotted type at 0.39, 1.0, 1.39, 2.0
+            (_name_value(0x0C, "caf\u00e9\x1f".encode()), "CN=caf\u00e9\\1F"),
+            (_rdn((bytes.fromhex("2705"), [0x0C, b"x"])), "0.39.5=#0c0178"), (_rdn((bytes.fromhex("2805"), [0x0C, b"x"])), "1.0.5=#0c0178"),
+            (_rdn((bytes.fromhex("4f05"), [0x0C, b"x"])), "1.39.5=#0c0178"), (_rdn((bytes.fromhex("5005"), [0x0C, b"x"])), "2.0.5=#0c0178"),
             (lambda t: node(t, TBS + (5,)).__setitem__(1, []), ""),
         ]
         for fn, want in cases:
@@ -482,7 +486,9 @@ class Identity(unittest.TestCase):
                 mutate(leaf(), _spki_point(b"\x04" + b"\x00" * 63 + b"\x01")), mutate(leaf(), _set(TBS + (1,), value=b"\x00\xff")),
                 mutate(leaf(), _name_value(0x0C, b"#a#")), mutate(leaf(), _validity(b"491231235959Z")), mutate(leaf(), _validity(b"500101000000Z")),
                 _qseal(), mutate(leaf(), _rdn((bytes.fromhex("550462"), [0x0C, b"x"]))),
-                mutate(leaf(), _spki_point(b"\x04" + (5 + _P).to_bytes(32, "big") + _Y5.to_bytes(32, "big")))]
+                mutate(leaf(), _spki_point(b"\x04" + (5 + _P).to_bytes(32, "big") + _Y5.to_bytes(32, "big"))),
+                mutate(leaf(), _name_value(0x0C, "caf\u00e9\x1f".encode()))] + [
+                mutate(leaf(), _rdn((bytes.fromhex(o), [0x0C, b"x"]))) for o in ("2705", "2805", "4f05", "5005")]
         p = subprocess.run([NODE, "--input-type=module", "-e", _JS_CERT % json.dumps("file://" + quote(JS))],
                            input=json.dumps([d.hex() for d in ders]), capture_output=True, text=True, timeout=600)
         self.assertEqual(json.loads(p.stdout), [_py_cert(d) for d in ders])
