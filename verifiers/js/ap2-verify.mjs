@@ -20,15 +20,18 @@ class Refused extends Error {}
 class UnknownMember extends Refused {}
 class FormatUnsupported extends Refused {}   // 1.6.0: an anchor mechanism a later revision may define   // 1.6.0 — SPEC §9.1/§6.9: a key outside a closed list = a refusal of class unknown_member
 
-function holdsPemCertificate(path) {   // SPEC §6.10: at least one CERTIFICATE (X509 / TRUSTED) PEM block, strict base64 of a DER SEQUENCE
-  let s; try { s = readFileSync(path).toString("latin1"); } catch { return false; }
-  for (const m of s.matchAll(/-----BEGIN ((?:X509 |TRUSTED )?CERTIFICATE)-----\r?\n([A-Za-z0-9+\/=\r\n]+?)-----END \1-----/g)) {
-    const body = m[2].replace(/[\r\n]/g, "");
+// SPEC §6.10: the bytes of a regular file that holds at least one CERTIFICATE (X509 / TRUSTED) PEM block whose base64 characters
+// decode to a DER SEQUENCE; else null. The same test as the reference's _pem_certificate_file: bytes outside the base64 alphabet
+// are ignored, and a device or a FIFO is never read (verifyEvidence is called without the command line's check).
+function pemCertificateFile(path) {
+  let raw; try { if (!statSync(path).isFile()) return null; raw = readFileSync(path); } catch { return null; }
+  for (const m of raw.toString("latin1").matchAll(/-----BEGIN ((?:X509 |TRUSTED )?CERTIFICATE)-----[^\n]*\n([^]+?)-----END \1-----/g)) {
+    const body = m[2].replace(/[^A-Za-z0-9+\/=]/g, "");
     if (body.length % 4 || !/^[A-Za-z0-9+\/]*={0,2}$/.test(body)) continue;
     const der = Buffer.from(body, "base64");
-    if (der.length >= 2 && der[0] === 0x30) return true;
+    if (der.length >= 2 && der[0] === 0x30) return raw;
   }
-  return false;
+  return null;
 }
 
 // ---- strict JSON parser (keeps number lexemes; refuses what the profile refuses) ----
@@ -1056,6 +1059,9 @@ function verifyEvidenceInner(path, opts) {
   if (opts.minAnchors !== undefined && opts.minAnchors !== null && !(Number.isSafeInteger(opts.minAnchors) && opts.minAnchors >= 1))   // SPEC §3.3: an integer >= 1 —
     throw new TypeError("minAnchors must be an integer >= 1 (got " + String(opts.minAnchors) + ")");   // NaN once disabled the policy in silence
   if (opts.trustAnchor !== undefined && opts.trustAnchor !== null) throw new TypeError("trustAnchor: this verifier cannot validate x5c chains (SPEC §6 step 7) — a flag that does nothing is refused (1.6.0)");
+  // 1.10.0 — SPEC §6.10, as the reference's ValueError: a tsaCert that holds no certificate is the caller's error, not a statement about the pack
+  const tsaCertBytes = opts.tsaCert !== undefined && opts.tsaCert !== null ? pemCertificateFile(opts.tsaCert) : null;
+  if (opts.tsaCert !== undefined && opts.tsaCert !== null && tsaCertBytes === null) throw new TypeError("tsaCert: no PEM certificate in " + JSON.stringify(opts.tsaCert) + " (SPEC §6.10)");
   // 1.6.0 — SPEC §6.9: every refusal names its class; a refused pack receives no states and no policy
   const refuse = (m, cls = "malformed") => ({ digest_ok: false, artifacts: [], producer_signatures: { present: false, ok: null, pq_protected: false, trusted: null }, pq_protected: false, bindings_ok: false, rfc3161: { claimed: false, verified: null }, anchors: [], anchors_verified: 0, provenance_classes: [], self_asserted_only: true, chain_verified: null, policy_ok: false, valid: false, honest_scope: null, refused: m, admission: "refused", refusal_class: cls, states_vocabulary: STATES_VOCABULARY, states: null, policy: null, mldsa_backend: HAVE_MLDSA });  // r8: the honesty flag is fail-closed inside a refusal too
   let ev; try { const raw = readEvidenceBytes(path); if (raw === null) return refuse("evidence file exceeds bound"); const text = UTF8.decode(raw); if (text.startsWith("﻿")) return refuse("BOM"); ev = parseStrict(text); } catch (e) { return refuse(String(e.message ?? e)); }
@@ -1186,7 +1192,7 @@ function verifyEvidenceInner(path, opts) {
     valid: Boolean(artResults.length && digestOk && allOk && bindingsOk && rfc.verified !== false && policyOk && (nbRep === null || nbRep.state !== "failed")), honest_scope: ev.honest_scope ?? null,
     admission: "admitted", refusal_class: null, states_vocabulary: STATES_VOCABULARY, states, policy: { met: unmet.length === 0, unmet: POLICY_UNMET.filter((u) => unmet.includes(u)), ...(bindingMissing ? { require_binding_missing: bindingMissing } : {}) },
     mldsa_backend: HAVE_MLDSA, ...(nbRep === null ? {} : { not_before: nbRep }),
-    ...(opts.tsaCert ? { tsa_cert_sha256: createHash("sha256").update(readFileSync(opts.tsaCert)).digest("hex") } : {}) };   // 1.10.0 — SPEC §6.9
+    ...(tsaCertBytes ? { tsa_cert_sha256: createHash("sha256").update(tsaCertBytes).digest("hex") } : {}) };   // 1.10.0 — SPEC §6.9: of the bytes the check read
 }
 function main(argv) {
   // 1.5.2 review: a usage line that stderr does not take (/dev/full) is 74, as in the Python CLI (console.error dropped the error and exited 2)
@@ -1204,11 +1210,11 @@ function main(argv) {
     else if (tok === "--accept-integral-floats" && eqv === null) opts.acceptIntegralFloats = true;   // 1.7.2 — SPEC §3.1
     else if (tok.startsWith("-") || path !== null) usage(); else path = tok; }
   if (!path) usage();
-  try { statSync(path); accessSync(path, FS.R_OK); } catch { usage(); }   // 1.10.0 — SPEC §3.1: a path that names nothing or cannot be read is a usage error; a FIFO, a device, a directory stay a refusal
+  try { if (statSync(path).isFile()) accessSync(path, FS.R_OK); } catch { usage(); }   // 1.10.0 — SPEC §3.1: a path that names nothing, or a regular file that cannot be read, is a usage error; a FIFO, a device, a directory stay a refusal, whatever their permissions
   // 1.6.0 review: a --tsa-cert that cannot be read is a usage error, as in the reference (it named no certificate)
   if (opts.tsaCert !== undefined) { let ok = false; try { ok = statSync(opts.tsaCert).isFile(); accessSync(opts.tsaCert, FS.R_OK); } catch { ok = false; } if (!ok) usage(); }
   // SPEC §6.10: a readable file that holds no PEM certificate names none — a usage error, the same test as the reference's _holds_pem_certificate
-  if (opts.tsaCert !== undefined && !holdsPemCertificate(opts.tsaCert)) usage();
+  if (opts.tsaCert !== undefined && pemCertificateFile(opts.tsaCert) === null) usage();
   const r = verifyEvidence(path, opts); emit(JSON.stringify(r, null, 1), r.valid ? 0 : 1);
 }
 // exitCode, not process.exit(): exit() right after console.log to a PIPE drops every byte of the receipt past the pipe buffer (64 KiB on Linux)

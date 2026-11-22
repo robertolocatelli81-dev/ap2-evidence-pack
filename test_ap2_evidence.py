@@ -535,6 +535,10 @@ class TestFileObjects(unittest.TestCase):
             with self.subTest(restriction=v):
                 with self.assertRaisesRegex(ValueError, "no PEM certificate"):
                     ap2.verify_restrictions(self.VECTOR, tsa_cert=v)
+        with self.assertRaisesRegex(ValueError, "no PEM certificate"):   # the caller's error comes before the pack's refusal
+            ap2.verify_restrictions(os.path.join(self.d, "missing.json"), tsa_cert=empty)
+        with self.assertRaisesRegex(ValueError, "no PEM certificate"):
+            ap2.verify_evidence(os.path.join(self.d, "missing.json"), tsa_cert=empty)
         crt = os.path.join(_HERE, "spec", "vectors", "ap2", "anchor_probe_tsa.crt")   # must-pass twin
         self.assertTrue(ap2.verify_evidence(self.VECTOR, tsa_cert=crt)["valid"])
 
@@ -548,11 +552,86 @@ class TestFileObjects(unittest.TestCase):
             want = hashlib.sha256(f.read()).hexdigest()
         self.assertEqual(ap2.verify_evidence(pack, tsa_cert=crt).get("tsa_cert_sha256"), want)
         self.assertNotIn("tsa_cert_sha256", ap2.verify_evidence(pack))   # absent when no certificate was given
+        self.assertNotIn("tsa_cert_sha256", ap2.verify_evidence(pack, trust_anchor=crt))   # a trust anchor is not the TSA certificate
         if shutil.which("node"):
             js = os.path.join(_HERE, "verifiers", "js", "ap2-verify.mjs")
             for argv, exp in (([pack, "--tsa-cert", crt], want), ([pack], None)):
                 out = subprocess.run(["node", js] + argv, capture_output=True, text=True, timeout=60)
                 self.assertEqual(json.loads(out.stdout).get("tsa_cert_sha256"), exp, argv)
+
+    def _three_clis(self, p):
+        import shutil
+        js = os.path.join(_HERE, "verifiers", "js", "ap2-verify.mjs")
+        return ([sys.executable, os.path.join(_HERE, "ap2_evidence.py"), "verify", p],
+                [sys.executable, os.path.join(_HERE, "ap2_evidence.py"), "restriction", p]) + \
+               (([shutil.which("node"), js, p],) if shutil.which("node") else ())
+
+    def test_a_path_that_is_no_regular_file_stays_a_refusal_whatever_its_permissions(self):   # 1.10.0 review — SPEC §3.1
+        import subprocess
+        dd = os.path.join(self.d, "dir000"); os.mkdir(dd); os.chmod(dd, 0)
+        ff = os.path.join(self.d, "fifo000"); os.mkfifo(ff); os.chmod(ff, 0)
+        self.addCleanup(os.chmod, dd, 0o700)
+        for p in (dd, ff):   # stat needs no read permission: `not readable` came first and made them a usage error
+            for argv in self._three_clis(p):
+                with self.subTest(argv=argv[1:]):
+                    r = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+                    self.assertEqual(r.returncode, 1, r.stderr)
+                    self.assertEqual(json.loads(r.stdout)["admission"], "refused")
+                    if "restriction" not in argv:   # the restriction receipt names the class, not the reason
+                        self.assertIn("not a regular file", r.stdout)
+
+    def test_a_path_with_a_nul_byte_is_a_refusal_receipt(self):   # 1.10.0 review: os.stat raised ValueError, a traceback
+        r = ap2.verify_evidence("a\0b")
+        self.assertEqual((r["admission"], r["refusal_class"]), ("refused", "malformed"), r)
+
+    def test_a_certificate_file_openssl_reads_is_no_usage_error(self):   # 1.10.0 review — SPEC §6.10: never stricter than openssl
+        import shutil
+        import subprocess
+        pack = os.path.join(_HERE, "spec", "vectors", "ap2", "anchor_valid.json")
+        with open(os.path.join(_HERE, "spec", "vectors", "ap2", "anchor_probe_tsa.crt"), "rb") as f:
+            lines = f.read().strip().split(b"\n")
+        body = lines[1:-1]
+        spell = {"trailing blank": [lines[0]] + [x + b" " for x in body] + [lines[-1]],
+                 "trailing tab": [lines[0]] + [x + b"\t" for x in body] + [lines[-1]],
+                 "leading blank": [lines[0]] + [b" " + x for x in body] + [lines[-1]],
+                 "blank inside a line": [lines[0], body[0][:10] + b" " + body[0][10:]] + body[1:] + [lines[-1]],
+                 "blank after BEGIN": [lines[0] + b" "] + body + [lines[-1]],
+                 "control byte at a line end": [lines[0]] + [x + b"\x01" for x in body] + [lines[-1]],
+                 "CRLF": [x + b"\r" for x in lines],
+                 "label TRUSTED CERTIFICATE": [lines[0].replace(b"CERT", b"TRUSTED CERT")] + body + [lines[-1].replace(b"CERT", b"TRUSTED CERT")],
+                 "label X509 CERTIFICATE": [lines[0].replace(b"CERT", b"X509 CERT")] + body + [lines[-1].replace(b"CERT", b"X509 CERT")]}
+        for name, ls in spell.items():
+            p = os.path.join(self.d, "spelled.pem")
+            with open(p, "wb") as f:
+                f.write(b"\n".join(ls) + b"\n")
+            with self.subTest(spelling=name):
+                r = ap2.verify_evidence(pack, tsa_cert=p)   # openssl reads it: 1.9.0 said verified, a usage error was a regression
+                self.assertEqual(r["states"]["time_anchor"]["state"], "verified", r["states"]["time_anchor"])
+                out = subprocess.run([sys.executable, os.path.join(_HERE, "ap2_evidence.py"), "verify", pack, "--tsa-cert", p], capture_output=True, text=True, timeout=60)
+                self.assertEqual(out.returncode, 0, out.stderr[-200:])
+                if shutil.which("node"):
+                    out = subprocess.run(["node", os.path.join(_HERE, "verifiers", "js", "ap2-verify.mjs"), pack, "--tsa-cert", p], capture_output=True, text=True, timeout=60)
+                    self.assertEqual(out.returncode, 0, out.stderr[-200:])
+
+    @unittest.skipUnless(__import__("shutil").which("node"), "node absent")
+    def test_the_js_function_refuses_a_tsa_file_without_a_certificate(self):   # 1.10.0 review — SPEC §6.10: verifyEvidence without the CLI's check
+        import subprocess
+        pack = os.path.join(_HERE, "spec", "vectors", "ap2", "anchor_valid.json")
+        crt = os.path.join(_HERE, "spec", "vectors", "ap2", "anchor_probe_tsa.crt")
+        empty = os.path.join(self.d, "empty.pem"); open(empty, "wb").close()
+        prog = ("const { verifyEvidence } = await import(process.argv[2]);"
+                "try { const r = verifyEvidence(process.argv[3], { tsaCert: process.argv[4] }); console.log('receipt ' + (r.tsa_cert_sha256 ? 'sha' : 'nosha')); }"
+                "catch (e) { console.log(e.constructor.name + ' ' + e.message); }")
+        js = "file://" + os.path.join(_HERE, "verifiers", "js", "ap2-verify.mjs")
+        script = os.path.join(self.d, "call.mjs")   # a file: under `node -e` the verifier takes itself for the entry point
+        with open(script, "w") as f:
+            f.write(prog)
+        for v in (empty, os.path.join(self.d, "missing.pem"), self.d, "/dev/zero", ""):   # /dev/zero was read until memory ran out
+            with self.subTest(tsaCert=v):
+                out = subprocess.run(["node", script, js, pack, v], capture_output=True, text=True, timeout=60)
+                self.assertTrue(out.stdout.startswith("TypeError tsaCert: no PEM certificate"), (out.stdout, out.stderr[-200:]))
+        out = subprocess.run(["node", script, js, pack, crt], capture_output=True, text=True, timeout=60)
+        self.assertEqual(out.stdout.strip(), "receipt sha", out.stderr[-200:])   # must-pass twin
 
     def test_the_bound(self):   # trailing spaces change no digest: at the bound it verifies, one byte more is refused unread
         with open(self.VECTOR, "rb") as f:

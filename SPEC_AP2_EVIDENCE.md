@@ -488,9 +488,10 @@ values of the producer block (RFC 4648) are strict: alphabet only, no whitespace
 padding on base64url, canonical trailing bits; a segment spelled any other way is a
 verification failure of that artifact/signature, not a re-encoding.
 
-A path that names no file, or a file this process is not allowed to read, is not an evidence file: the command line
+A path that names no file, or a regular file this process is not allowed to read, is not an evidence file: the command line
 reports it as a usage error (exit 2, one line on stderr, no receipt), as for `--tsa-cert` (1.10.0; up to 1.9.0 it was a
-refusal of class `malformed`, a statement about a pack that was never read).
+refusal of class `malformed`, a statement about a pack that was never read). A FIFO, a device or a directory is the
+refusal above (`not a regular file`) whatever its permissions.
 
 The same profile applies to the JSON INSIDE the SD-JWTs — the issuer JWT header and
 payload, every disclosure, the KB-JWT header and payload: strict UTF-8, no BOM, no
@@ -1027,8 +1028,8 @@ receipt of both verifiers also carries:
   `bindings_ok`, `policy_ok`, `valid` false) BY CONSTRUCTION, not by measurement — a reader of those fields alone sees an
   altered pack; it must read `admission` (§10).
 - `tsa_cert_sha256` (1.10.0): present on an admitted pack only when a TSA certificate file was given (`--tsa-cert`,
-  `tsa_cert`): the lowercase hex SHA-256 of that file's bytes, so a receipt that says `tsa_invalid` or
-  `tsa_not_checked` names the certificate it was read against (another TSA's certificate and an altered token give the
+  `tsa_cert`): the lowercase hex SHA-256 of that file's bytes, as the check of §6.10 read them, so a receipt that says
+  `tsa_invalid` names the certificate it was read against (another TSA's certificate and an altered token give the
   same reason). Both verifiers write it; the JavaScript one, which checks no TSA signature, records the file it was given.
 - `states_vocabulary`: `"ap2-evidence-pack/states-1"`, the identifier of the vocabulary below, which this text defines.
   An identifier never changes meaning: a revision that changes a state or a reason defines a new one. The vocabulary is
@@ -1120,7 +1121,7 @@ the same states (`producer_signature: not_evaluated`, `not_present`): only the S
 ### 6.10 Exit codes and the receipt (NORMATIVE, 1.6.0)
 
 `0`: `valid`. `1`: not `valid`, OR refused — read `admission`. `2`: a usage error (no receipt; 1.6.0: also a `--tsa-cert` or `--trust-anchor` that is not a readable regular
-file; and one that holds no PEM block labelled CERTIFICATE, X509 CERTIFICATE or TRUSTED CERTIFICATE whose body is strict base64 of a DER SEQUENCE — until 1.10.0 an empty or non-PEM file reached openssl and read `tsa_invalid` / `chain_unresolved`, a statement about the pack, with no certificate given; the library functions `verify_evidence` and `verify_restrictions` raise `ValueError` for the same files, and for one that is not a regular file). `74`: one of two cases,
+file; and one that holds no PEM block labelled CERTIFICATE, X509 CERTIFICATE or TRUSTED CERTIFICATE whose base64 characters decode to a DER SEQUENCE (bytes outside the base64 alphabet are ignored: the blanks and control bytes openssl drops from a PEM line make no usage error; a file that passes and that openssl cannot read is `tsa_invalid` / `chain_unresolved`, as before) — until 1.10.0 an empty or non-PEM file reached openssl and read `tsa_invalid` / `chain_unresolved`, a statement about the pack, with no certificate given; the library functions `verify_evidence` and `verify_restrictions` raise `ValueError` for the same files, and for one that is not a regular file; `verifyEvidence` of the JavaScript verifier throws `TypeError`). `74`: one of two cases,
 told apart by what is on stdout:
 
 - a check the caller asked for could not be RUN on this machine (openssl that cannot be started, is killed by a signal or

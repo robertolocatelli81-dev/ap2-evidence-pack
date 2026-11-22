@@ -287,7 +287,11 @@ def read_evidence_file(path: str):
     MAX_EVIDENCE_BYTES bytes: measured 25/09/2026, a FIFO in its place blocked both verifiers and a symlink to /dev/zero
     passed the size check (a device reports size 0) and was read until memory ran out, in both."""
     try:
-        if not stat.S_ISREG(os.stat(path).st_mode):   # refused BEFORE it is opened (opening a device can act on it)
+        try:
+            st0 = os.stat(path)
+        except ValueError as e:   # 1.10.0: a path with a NUL byte names no file — a refusal, as FileNotFoundError is (it was a traceback)
+            raise OSError(str(e)) from e
+        if not stat.S_ISREG(st0.st_mode):   # refused BEFORE it is opened (opening a device can act on it)
             raise Ap2EvidenceError("unreadable evidence file: not a regular file")
         fd = os.open(path, _OPEN_FLAGS)
         try:                                          # fstat on the open descriptor: closes the race with a swap in between
@@ -3302,9 +3306,14 @@ def _verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = F
     a receipt: the receipt is completed (that subject `not_evaluated/instrument_failure`) and Ap2WriteError carries it."""
     if min_anchors is not None and (type(min_anchors) is not int or min_anchors < 1):   # SPEC §3.3: an integer >= 1 —
         raise ValueError(f"min_anchors must be an integer >= 1 (got {min_anchors!r})")      # 0, NaN or "2" never weakens the policy in silence
+    tsa_cert_sha256 = None
     for name, v in (("tsa_cert", tsa_cert), ("trust_anchor", trust_anchor)):   # 1.10.0 — SPEC §6.10: the caller's material, not the pack's:
-        if v is not None and not _holds_pem_certificate(v):                     # a file with no certificate was `tsa_invalid` / `chain_unresolved`
-            raise ValueError(f"{name}: no PEM certificate in {v!r} (SPEC §6.10)")
+        if v is not None:                                                       # a file with no certificate was `tsa_invalid` / `chain_unresolved`
+            data = _pem_certificate_file(v)
+            if data is None:
+                raise ValueError(f"{name}: no PEM certificate in {v!r} (SPEC §6.10)")
+            if name == "tsa_cert":
+                tsa_cert_sha256 = hashlib.sha256(data).hexdigest()   # SPEC §6.9: of the bytes this check read
     try:
         ev = read_evidence_file(path)
     except Ap2EvidenceError as e:   # 1.1.0: a hostile or unreadable file is a refusal receipt, never a traceback
@@ -3624,9 +3633,8 @@ def _verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = F
             "mldsa_backend": bool(_sigsuite.MLDSA_AVAILABLE)}
     if nb_rep is not None:   # 1.8.0 — SPEC §12.3: only when the pack carries the block
         receipt["not_before"] = nb_rep
-    if tsa_cert is not None:   # 1.10.0 — SPEC §6.9: which certificate file the TSA checks ran under (tsa_invalid: another TSA, or a token altered?)
-        with open(tsa_cert, "rb") as fh:
-            receipt["tsa_cert_sha256"] = hashlib.sha256(fh.read()).hexdigest()
+    if tsa_cert_sha256 is not None:   # 1.10.0 — SPEC §6.9: which certificate file the TSA checks ran under (tsa_invalid: another TSA, or a token altered?)
+        receipt["tsa_cert_sha256"] = tsa_cert_sha256
     if not_run:   # 1.6.0 — SPEC §6.10: a check asked for could not be run here — the COMPLETE receipt travels with the error
         raise Ap2WriteError(not_run[0], receipt=receipt)
     return receipt
@@ -4361,37 +4369,44 @@ def _stderr_settled(rc: int) -> int:
 
 
 def _pack_unreadable(path):   # 1.10.0 — SPEC §3.1: a path that names nothing, or that cannot be read, is a usage error (exit 2);
-    try:                       # a FIFO, a device or a directory stays a refusal of §3.1
-        os.stat(path)
-        return not os.access(path, os.R_OK)
+    try:                       # a FIFO, a device or a directory stays a refusal of §3.1, whatever its permissions
+        return stat.S_ISREG(os.stat(path).st_mode) and not os.access(path, os.R_OK)
     except (OSError, ValueError):
         return True
 
 
-_PEM_CERT_BLOCK = re.compile(rb"-----BEGIN ((?:X509 |TRUSTED )?CERTIFICATE)-----\r?\n([A-Za-z0-9+/=\r\n]+?)-----END \1-----")
+# openssl drops white space and control bytes from a PEM line: this test is meant never to refuse a file openssl reads, so it
+# keeps the base64 alphabet of the body and ignores every other byte (nine spellings in test_ap2_evidence.py)
+_PEM_NOT_B64 = bytes(sorted(set(range(256)) - set(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=")))
+_PEM_CERT_BLOCK = re.compile(rb"-----BEGIN ((?:X509 |TRUSTED )?CERTIFICATE)-----[^\n]*\n(.+?)-----END \1-----", re.DOTALL)
 
 
-def _holds_pem_certificate(path: str) -> bool:
+def _holds_pem_certificate(path) -> bool:
+    return _pem_certificate_file(path) is not None
+
+
+def _pem_certificate_file(path) -> Optional[bytes]:
     """SPEC §6.10: a `--tsa-cert` / `--trust-anchor` file names a certificate only if it holds at least one PEM block
-    labelled CERTIFICATE (or X509 / TRUSTED CERTIFICATE, as openssl reads them) whose body is strict base64 of a DER
-    SEQUENCE. An empty or non-PEM file used to reach openssl and come back as `tsa_invalid` / `chain_unresolved`, a
+    labelled CERTIFICATE (or X509 / TRUSTED CERTIFICATE, as openssl reads them) whose base64 characters decode to a DER
+    SEQUENCE: the file's bytes then, else None. Bytes outside the base64 alphabet are ignored, as openssl ignores white
+    space there (a certificate pasted with trailing blanks verified in 1.9.0 and must not become a usage error). An empty or non-PEM file used to reach openssl and come back as `tsa_invalid` / `chain_unresolved`, a
     statement about the pack, when no certificate was given (measured 2026-11-22 on the 1.9.0 wheel). The same test as
-    holdsPemCertificate in the JS verifier; a block that passes it and is not a certificate is still read by openssl."""
+    pemCertificateFile in the JS verifier; a block that passes it and is not a certificate is still read by openssl."""
     try:
         if not stat.S_ISREG(os.stat(path).st_mode):   # the library is called without the CLI's check: /dev/zero is never read whole
-            return False
+            return None
         with open(path, "rb") as fh:
             data = fh.read()
     except (OSError, ValueError):
-        return False
+        return None
     for m in _PEM_CERT_BLOCK.finditer(data):
-        body = m.group(2).replace(b"\r", b"").replace(b"\n", b"")
+        body = m.group(2).translate(None, _PEM_NOT_B64)
         if len(body) % 4 or not re.fullmatch(rb"[A-Za-z0-9+/]*={0,2}", body):
             continue
         der = base64.b64decode(body)
         if len(der) >= 2 and der[0] == 0x30:
-            return True
-    return False
+            return data
+    return None
 
 
 def main(argv: Optional[List[str]] = None) -> int:
