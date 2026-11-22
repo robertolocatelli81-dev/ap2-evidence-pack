@@ -972,8 +972,11 @@ class TestCliAndReceipt(PackCase):
             f.write("[]")
         r = self.cli("restriction", junk)
         self.assertEqual((r.returncode, json.loads(r.stdout)["admission"]), (1, "refused"))
+        empty = os.path.join(self.d, "empty.pem")
+        open(empty, "wb").close()
         for argv in (["restriction"], ["restriction", ""], ["restriction", ok, "--require-anchor"], ["restriction", ok, "--tsa-cert"],
-                     ["restriction", ok, "--tsa-cert", os.path.join(self.d, "missing.pem")], ["restriction", ok, ok], ["restriction", "--help"]):
+                     ["restriction", ok, "--tsa-cert", os.path.join(self.d, "missing.pem")], ["restriction", ok, "--tsa-cert", empty],
+                     ["restriction", ok, ok], ["restriction", "--help"]):   # SPEC §6.10: `empty` is readable and names no certificate
             with self.subTest(argv=argv):
                 r = self.cli(*argv)
                 self.assertEqual((r.returncode, r.stdout), (2, ""), r.stderr)

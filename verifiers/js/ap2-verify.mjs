@@ -11,7 +11,7 @@
 // `not_before` as the reference; `paymentCommitment` / `checkDisclosure` exported. No TSA verification here, so NB3 never
 // closes the window (declared, as tsa_verified).
 // Usage: ap2-verify.mjs <evidence.json> [--trusted-producer-key ALG=B64]... [--require-producer] [--require-pq] [--require-anchor] [--min-anchors N] [--tsa-cert PEM] [--trust-set-complete] [--accept-integral-floats]
-import { statSync, accessSync, openSync, fstatSync, readSync, closeSync, writeSync, constants as FS } from "node:fs";
+import { statSync, accessSync, readFileSync, openSync, fstatSync, readSync, closeSync, writeSync, constants as FS } from "node:fs";
 import { createHash, createPublicKey, verify as cryptoVerify } from "node:crypto";
 
 const MAX_DEPTH = 512, MAX_BYTES = 64 * 1024 * 1024, SAFE = 2 ** 53 - 1;
@@ -19,6 +19,17 @@ const UTF8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 class Refused extends Error {}
 class UnknownMember extends Refused {}
 class FormatUnsupported extends Refused {}   // 1.6.0: an anchor mechanism a later revision may define   // 1.6.0 — SPEC §9.1/§6.9: a key outside a closed list = a refusal of class unknown_member
+
+function holdsPemCertificate(path) {   // SPEC §6.10: at least one CERTIFICATE (X509 / TRUSTED) PEM block, strict base64 of a DER SEQUENCE
+  let s; try { s = readFileSync(path).toString("latin1"); } catch { return false; }
+  for (const m of s.matchAll(/-----BEGIN ((?:X509 |TRUSTED )?CERTIFICATE)-----\r?\n([A-Za-z0-9+\/=\r\n]+?)-----END \1-----/g)) {
+    const body = m[2].replace(/[\r\n]/g, "");
+    if (body.length % 4 || !/^[A-Za-z0-9+\/]*={0,2}$/.test(body)) continue;
+    const der = Buffer.from(body, "base64");
+    if (der.length >= 2 && der[0] === 0x30) return true;
+  }
+  return false;
+}
 
 // ---- strict JSON parser (keeps number lexemes; refuses what the profile refuses) ----
 // 1.7.2 (SPEC §3.1, the SD-JWT layer): the integer a literal with a fraction or an exponent denotes when its value is an
@@ -1064,6 +1075,8 @@ function verifyEvidenceInner(path, opts) {
   try {   // 1.4.0 — SPEC §9.1: the top-level object, the anchor block, the producer block and every binding entry are CLOSED
     checkClosed(ev, "top level", TOP_KEYS);
     if ("rfc3161_timestamp" in ev) checkClosed(ev.rfc3161_timestamp, "rfc3161_timestamp", RFC3161_KEYS);
+    if ("rfc3161_timestamp" in ev && ev.rfc3161_timestamp.anchored === false && Object.hasOwn(ev.rfc3161_timestamp, "tsr_b64"))   // 1.10.0 — SPEC §1/§9.1
+      throw new Refused("rfc3161_timestamp: tsr_b64 is not allowed under anchored false (SPEC §9.1)");
     if ("producer_signatures" in ev) checkClosed(ev.producer_signatures, "producer_signatures", PRODUCER_KEYS);
     (ev.bindings ?? []).forEach((b, i) => checkClosed(b, "bindings[" + i + "]", BINDING_KEYS));
     (ev.anchors ?? []).forEach((an, i) => {   // 1.5.0 — SPEC §3.3/§9.1: closed entries, the mechanism first (the reference's order)
@@ -1172,7 +1185,8 @@ function verifyEvidenceInner(path, opts) {
     self_asserted_only: artResults.length === 0 || artResults.some((r) => r.self_asserted !== false), chain_verified: null, policy_ok: policyOk,
     valid: Boolean(artResults.length && digestOk && allOk && bindingsOk && rfc.verified !== false && policyOk && (nbRep === null || nbRep.state !== "failed")), honest_scope: ev.honest_scope ?? null,
     admission: "admitted", refusal_class: null, states_vocabulary: STATES_VOCABULARY, states, policy: { met: unmet.length === 0, unmet: POLICY_UNMET.filter((u) => unmet.includes(u)), ...(bindingMissing ? { require_binding_missing: bindingMissing } : {}) },
-    mldsa_backend: HAVE_MLDSA, ...(nbRep === null ? {} : { not_before: nbRep }) };
+    mldsa_backend: HAVE_MLDSA, ...(nbRep === null ? {} : { not_before: nbRep }),
+    ...(opts.tsaCert ? { tsa_cert_sha256: createHash("sha256").update(readFileSync(opts.tsaCert)).digest("hex") } : {}) };   // 1.10.0 — SPEC §6.9
 }
 function main(argv) {
   // 1.5.2 review: a usage line that stderr does not take (/dev/full) is 74, as in the Python CLI (console.error dropped the error and exited 2)
@@ -1190,8 +1204,11 @@ function main(argv) {
     else if (tok === "--accept-integral-floats" && eqv === null) opts.acceptIntegralFloats = true;   // 1.7.2 — SPEC §3.1
     else if (tok.startsWith("-") || path !== null) usage(); else path = tok; }
   if (!path) usage();
+  try { statSync(path); accessSync(path, FS.R_OK); } catch { usage(); }   // 1.10.0 — SPEC §3.1: a path that names nothing or cannot be read is a usage error; a FIFO, a device, a directory stay a refusal
   // 1.6.0 review: a --tsa-cert that cannot be read is a usage error, as in the reference (it named no certificate)
   if (opts.tsaCert !== undefined) { let ok = false; try { ok = statSync(opts.tsaCert).isFile(); accessSync(opts.tsaCert, FS.R_OK); } catch { ok = false; } if (!ok) usage(); }
+  // SPEC §6.10: a readable file that holds no PEM certificate names none — a usage error, the same test as the reference's _holds_pem_certificate
+  if (opts.tsaCert !== undefined && !holdsPemCertificate(opts.tsaCert)) usage();
   const r = verifyEvidence(path, opts); emit(JSON.stringify(r, null, 1), r.valid ? 0 : 1);
 }
 // exitCode, not process.exit(): exit() right after console.log to a PIPE drops every byte of the receipt past the pipe buffer (64 KiB on Linux)

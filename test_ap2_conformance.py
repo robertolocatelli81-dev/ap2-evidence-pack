@@ -220,7 +220,7 @@ class TestAp2ConformanceVectors(unittest.TestCase):
                                                "gen_time": "20200601000000Z", "tsa_verified": True}
         try:
             ev["rfc3161_timestamp"] = {"anchored": True, "tsr_b64": "AA=="}; _json.dump(ev, open(p, "w"))
-            r2 = ap2.verify_evidence(p, trust_anchor=anchor, tsa_cert="x")
+            r2 = ap2.verify_evidence(p, trust_anchor=anchor, tsa_cert=anchor)   # 1.10.0: a file holding a certificate (SPEC §6.10)
         finally:
             ap2._verify_rfc3161 = orig
         self.assertFalse(r2["self_asserted_only"]); self.assertTrue(r2["chain_verified"])
@@ -255,12 +255,23 @@ class TestAp2ConformanceVectors(unittest.TestCase):
     @unittest.skipUnless(shutil.which("node"), "node absent: the JS verifier is not measured, so 'one grammar' is not measurable")
     def test_cli_grammar_is_one_with_the_js_verifier(self):
         import subprocess
+        import tempfile
+        td = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, td, True)
+        # SPEC §6.10: regular, readable, and no certificate in it
+        _EMPTY = os.path.join(td, "empty.pem"); open(_EMPTY, "wb").close()
+        _NOT_PEM = os.path.join(td, "garbage.pem"); open(_NOT_PEM, "wb").write(b"garbage\n")
+        _PEM_NOT_SEQ = os.path.join(td, "notseq.pem"); open(_PEM_NOT_SEQ, "wb").write(b"-----BEGIN CERTIFICATE-----\nAgEB\n-----END CERTIFICATE-----\n")
+        _PEM_BAD_LEN = os.path.join(td, "badlen.pem"); open(_PEM_BAD_LEN, "wb").write(b"-----BEGIN CERTIFICATE-----\nMAA\n-----END CERTIFICATE-----\n")   # 30 00 if read leniently
+        _PEM_ONE_BYTE = os.path.join(td, "onebyte.pem"); open(_PEM_ONE_BYTE, "wb").write(b"-----BEGIN CERTIFICATE-----\nMA==\n-----END CERTIFICATE-----\n")
+        _PEM_PAD_MID = os.path.join(td, "padmid.pem"); open(_PEM_PAD_MID, "wb").write(b"-----BEGIN CERTIFICATE-----\nMAA=MAAA\n-----END CERTIFICATE-----\n")   # 30 00 in node and CPython 3.11
+        _PEM_LABELS = os.path.join(td, "labels.pem"); open(_PEM_LABELS, "wb").write(b"-----BEGIN CERTIFICATE-----\nMAAA\n-----END TRUSTED CERTIFICATE-----\n")   # openssl reads no block
         V = os.path.join(_HERE, "spec", "vectors", "ap2", "valid_signed.json")
         clis = [[sys.executable, os.path.join(_HERE, "ap2_evidence.py"), "verify"],
                 ["node", os.path.join(_HERE, "verifiers", "js", "ap2-verify.mjs")]]
         for extra in ([], [V, "--no-such"], [V, V], [""], ["--help"], ["-h"], ["--", V], [V, "--require-pq=1"], [V, "--trusted-producer-key", ""],
                       [V, "--trusted-producer-key"], [V, "--trusted-producer-key", "--require-pq"], [V, "--trusted-producer-key", "abc"], [V, "--trusted-producer-key", "", "--trusted-producer-key", "ed25519=AA=="], [V, "--tsa-cert", ""],
-                      [V, "--tsa-cert", os.path.join(_HERE, "no-such.pem")], [V, "--tsa-cert", os.devnull], [V, "--tsa-cert", _HERE]):   # 1.6.0 review: a certificate that cannot be read
+                      [V, "--tsa-cert", os.path.join(_HERE, "no-such.pem")], [V, "--tsa-cert", os.devnull], [V, "--tsa-cert", _HERE], [V, "--tsa-cert", _EMPTY], [V, "--tsa-cert", _NOT_PEM], [V, "--tsa-cert", _PEM_NOT_SEQ],
+                      [V, "--tsa-cert", _PEM_BAD_LEN], [V, "--tsa-cert", _PEM_ONE_BYTE], [V, "--tsa-cert", _PEM_PAD_MID], [V, "--tsa-cert", _PEM_LABELS]):   # 1.6.0 review: a certificate that cannot be read
             for cli in clis:
                 out = subprocess.run(cli + extra, capture_output=True, text=True)
                 self.assertEqual(out.returncode, 2, (cli[0], extra, out.stdout[:80], out.stderr[-120:])); self.assertEqual(out.stdout, "")
@@ -270,7 +281,7 @@ class TestAp2ConformanceVectors(unittest.TestCase):
         for cli in clis:   # the control of the 1.6.0 review cases: a readable certificate is no usage error
             out = subprocess.run(cli + [V, "--tsa-cert", os.path.join(_HERE, "spec", "vectors", "ap2", "anchor_probe_tsa.crt")], capture_output=True, text=True)
             self.assertEqual(out.returncode, 0, (cli[0], out.stderr[-120:]))
-        for extra in (["--trust-anchor", os.path.join(_HERE, "no-such.pem")], ["--trust-anchor", os.devnull]):   # the reference only (JS: always usage)
+        for extra in (["--trust-anchor", os.path.join(_HERE, "no-such.pem")], ["--trust-anchor", os.devnull], ["--trust-anchor", _EMPTY], ["--trust-anchor", _NOT_PEM]):   # the reference only (JS: always usage)
             out = subprocess.run(clis[0] + [V] + extra, capture_output=True, text=True)
             self.assertEqual((out.returncode, out.stdout), (2, ""), extra)
             self.assertIn("cannot read", out.stderr)

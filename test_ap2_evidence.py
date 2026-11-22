@@ -506,6 +506,54 @@ class TestFileObjects(unittest.TestCase):
         for p in (f, z, dd):
             self.assert_refused(p, "not a regular file")
 
+    def test_a_path_that_names_no_readable_file_is_a_usage_error(self):   # 1.10.0 — SPEC §3.1: no pack was read, no receipt
+        import shutil
+        import subprocess
+        missing = os.path.join(self.d, "missing.json")
+        noread = os.path.join(self.d, "noread.json"); shutil.copy(self.VECTOR, noread); os.chmod(noread, 0)
+        cases = [missing] + ([noread] if not os.access(noread, os.R_OK) else [])   # root reads it anyway: not a case there
+        js = os.path.join(_HERE, "verifiers", "js", "ap2-verify.mjs")
+        for p in cases:
+            for argv in ([sys.executable, os.path.join(_HERE, "ap2_evidence.py"), "verify", p],
+                         [sys.executable, os.path.join(_HERE, "ap2_evidence.py"), "restriction", p]) + \
+                        (([shutil.which("node"), js, p],) if shutil.which("node") else ()):
+                with self.subTest(argv=argv[1:]):
+                    r = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+                    self.assertEqual((r.returncode, r.stdout), (2, ""), r.stderr)
+        os.chmod(noread, 0o600)
+        self.assertEqual(self.cli(noread)[0], 0)   # must-pass twin: the same file, readable, verifies
+
+    def test_relying_party_material_without_a_certificate_is_a_value_error(self):   # 1.10.0 — SPEC §6.10, the library
+        empty = os.path.join(self.d, "empty.pem"); open(empty, "wb").close()
+        junk = os.path.join(self.d, "junk.pem"); open(junk, "wb").write(b"garbage\n")
+        bad = [empty, junk, os.path.join(self.d, "missing.pem"), self.d, os.devnull, "/dev/zero"]
+        for v in bad:
+            for kw in ({"tsa_cert": v}, {"trust_anchor": v}):
+                with self.subTest(kw=kw):
+                    with self.assertRaisesRegex(ValueError, "no PEM certificate"):
+                        ap2.verify_evidence(self.VECTOR, **kw)
+            with self.subTest(restriction=v):
+                with self.assertRaisesRegex(ValueError, "no PEM certificate"):
+                    ap2.verify_restrictions(self.VECTOR, tsa_cert=v)
+        crt = os.path.join(_HERE, "spec", "vectors", "ap2", "anchor_probe_tsa.crt")   # must-pass twin
+        self.assertTrue(ap2.verify_evidence(self.VECTOR, tsa_cert=crt)["valid"])
+
+    def test_the_receipt_names_the_tsa_certificate_file(self):   # 1.10.0 — SPEC §6.9: tsa_invalid read against which certificate
+        import hashlib
+        import shutil
+        import subprocess
+        pack = os.path.join(_HERE, "spec", "vectors", "ap2", "anchor_valid.json")
+        crt = os.path.join(_HERE, "spec", "vectors", "ap2", "anchor_probe_tsa.crt")
+        with open(crt, "rb") as f:
+            want = hashlib.sha256(f.read()).hexdigest()
+        self.assertEqual(ap2.verify_evidence(pack, tsa_cert=crt).get("tsa_cert_sha256"), want)
+        self.assertNotIn("tsa_cert_sha256", ap2.verify_evidence(pack))   # absent when no certificate was given
+        if shutil.which("node"):
+            js = os.path.join(_HERE, "verifiers", "js", "ap2-verify.mjs")
+            for argv, exp in (([pack, "--tsa-cert", crt], want), ([pack], None)):
+                out = subprocess.run(["node", js] + argv, capture_output=True, text=True, timeout=60)
+                self.assertEqual(json.loads(out.stdout).get("tsa_cert_sha256"), exp, argv)
+
     def test_the_bound(self):   # trailing spaces change no digest: at the bound it verifies, one byte more is refused unread
         with open(self.VECTOR, "rb") as f:
             raw = f.read()

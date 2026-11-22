@@ -8,7 +8,7 @@ pack that was `valid` under a pinned producer set without a producer block is no
 was released.
 
 Each item below was reproduced on the tag v1.9.0 (de28c3a) and on v1.8.0 (d5601e4) with a script made for it. Of the
-50 tests added, the 39 that state the new behaviour fail on v1.9.0, as a failure or as an error (a constant or a
+54 tests added, the 43 that state the new behaviour fail on v1.9.0, as a failure or as an error (a constant or a
 function they read does not exist there; the thirteen of `test_ap2_x5c_leaf_der.py`, its controls included, read
 functions that 1.9.0 does not have); the other 11 are seven controls (one is the chain of AP2's sample certificate,
 which this version does not change), the unchanged direction (`build` refusing, a refusal of openssl staying `false`,
@@ -163,6 +163,26 @@ on both. Measured on Python 3.9, 3.11 and 3.13, one result per test method.
   with `build`, skipped; without `build`, skipped; on an archive unpacked, untracked, inside the work tree of another
   repository, skipped (with `rev-parse --is-inside-work-tree`, the first form of this check, both tests errored there:
   a third test of the file measures it).
+- SPEC §1 and §9.1, both verifiers: `tsr_b64` under `rfc3161_timestamp.anchored: false` is a refusal (`malformed`,
+  "tsr_b64 is not allowed under anchored false"). Up to 1.9.0 §1 wrote the unanchored block as `{"anchored": false,
+  "note"?}`, closed, while §9.1 listed `tsr_b64` for both values and the verifiers followed §9.1: such a pack was
+  admitted with `time_anchor` `not_evaluated / not_present` and the token was never read. §1 now also lists `tsa_url`
+  under `anchored: false`, which the builder writes when a TSA reply is refused.
+- SPEC §3.1, command line of both verifiers (`verify`, and `restriction` in the reference): an evidence path that names
+  no file, or a file this process may not read, is a usage error (exit 2, one line on stderr, nothing on stdout), as
+  `--tsa-cert` has been since 1.6.0. Up to 1.9.0 it was a receipt with `admission: refused`, `refusal_class:
+  malformed` and exit 1, a statement about a pack nobody read. A FIFO, a device or a directory stays the refusal of
+  §3.1 (`not a regular file`); `verify_evidence()` still returns a refusal receipt for every path (never a traceback).
+- SPEC §6.10, both verifiers: a `--tsa-cert` or `--trust-anchor` file that is readable but holds no PEM block labelled
+  CERTIFICATE, X509 CERTIFICATE or TRUSTED CERTIFICATE whose body is strict base64 of a DER SEQUENCE is a usage error
+  (exit 2), in `verify` and in `restriction`. Up to 1.9.0 an empty or non-PEM file reached openssl and the receipt said
+  `tsa_invalid` / `chain_unresolved`, a statement about the pack when no certificate was given (measured 2026-11-22 on
+  the 1.9.0 wheel). The library: `verify_evidence(tsa_cert=…, trust_anchor=…)` and `verify_restrictions(tsa_cert=…)`
+  raise `ValueError` for the same files and for a path that is not a readable regular file (`/dev/zero` is not read).
+- SPEC §6.9, both verifiers: a receipt member `tsa_cert_sha256`, present on an admitted pack only when a TSA certificate
+  file was given — the SHA-256 of that file. Up to 1.9.0 a receipt with `tsa_invalid` did not say which certificate it
+  was read against, and another TSA's certificate and an altered token give the same reason. `restriction` receipts do
+  not carry it.
 
 ## 1.9.0 — 2026-11-20 — AP2 chains in their native form; receipts bound to the closed mandate; a binding policy; false greens closed
 

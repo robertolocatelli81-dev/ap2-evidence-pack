@@ -140,7 +140,7 @@ in words ("the scope of ap2-evidence-pack 1.0.0-1.0.2 … a pack built by 1.0.x"
 1.8.0 verifiers refuse the six 1.0 vectors an independent reader copied. Reading 1.0.x packs is not offered: their rules
 are those 1.1.0 corrected (r1–r11 in the CHANGELOG), and a verifier that applied them would give their false greens back.
 | `evidence_digest_sha256` | MUST | hex SHA-256 over the canonical content (§3) |
-| `rfc3161_timestamp` | MUST at build (a verifier treats an absent block as `anchored: false`) | `{"anchored": false, "note"?: string}` or `{"anchored": true, "tsr_b64": <b64 DER TimeStampResp>, "tsa_url"?: string, "note"?: string}` — closed (§9.1); `tsa` is accepted as the 1.0–1.3 spelling of `tsa_url` |
+| `rfc3161_timestamp` | MUST at build (a verifier treats an absent block as `anchored: false`) | `{"anchored": false, "tsa_url"?: string, "note"?: string}` or `{"anchored": true, "tsr_b64": <b64 DER TimeStampResp>, "tsa_url"?: string, "note"?: string}` — closed (§9.1; 1.10.0: `tsr_b64` under `anchored: false` is a refusal, 1.0–1.9 accepted it and checked nothing); `tsa` is accepted as the 1.0–1.3 spelling of `tsa_url` |
 | `producer_signatures` | MAY | hybrid producer-signature block (§5), closed (§9.1) |
 | `anchors` | MAY (1.5.0) | non-empty list of additional time anchors (§3.3), closed (§9.1) |
 
@@ -487,6 +487,10 @@ canonical form escapes it). base64url segments of the SD-JWTs (RFC 7515 §2) and
 values of the producer block (RFC 4648) are strict: alphabet only, no whitespace, no
 padding on base64url, canonical trailing bits; a segment spelled any other way is a
 verification failure of that artifact/signature, not a re-encoding.
+
+A path that names no file, or a file this process is not allowed to read, is not an evidence file: the command line
+reports it as a usage error (exit 2, one line on stderr, no receipt), as for `--tsa-cert` (1.10.0; up to 1.9.0 it was a
+refusal of class `malformed`, a statement about a pack that was never read).
 
 The same profile applies to the JSON INSIDE the SD-JWTs — the issuer JWT header and
 payload, every disclosure, the KB-JWT header and payload: strict UTF-8, no BOM, no
@@ -1022,6 +1026,10 @@ receipt of both verifiers also carries:
   not evaluated: `states` and `policy` are `null`, and its twelve fields keep the values of a refusal (`digest_ok`,
   `bindings_ok`, `policy_ok`, `valid` false) BY CONSTRUCTION, not by measurement — a reader of those fields alone sees an
   altered pack; it must read `admission` (§10).
+- `tsa_cert_sha256` (1.10.0): present on an admitted pack only when a TSA certificate file was given (`--tsa-cert`,
+  `tsa_cert`): the lowercase hex SHA-256 of that file's bytes, so a receipt that says `tsa_invalid` or
+  `tsa_not_checked` names the certificate it was read against (another TSA's certificate and an altered token give the
+  same reason). Both verifiers write it; the JavaScript one, which checks no TSA signature, records the file it was given.
 - `states_vocabulary`: `"ap2-evidence-pack/states-1"`, the identifier of the vocabulary below, which this text defines.
   An identifier never changes meaning: a revision that changes a state or a reason defines a new one. The vocabulary is
   aligned with draft-krausz-verification-state-03 §3.1, §3.3 and §5.4.2 (an individual Internet-Draft, work in progress);
@@ -1112,7 +1120,7 @@ the same states (`producer_signature: not_evaluated`, `not_present`): only the S
 ### 6.10 Exit codes and the receipt (NORMATIVE, 1.6.0)
 
 `0`: `valid`. `1`: not `valid`, OR refused — read `admission`. `2`: a usage error (no receipt; 1.6.0: also a `--tsa-cert` or `--trust-anchor` that is not a readable regular
-file). `74`: one of two cases,
+file; and one that holds no PEM block labelled CERTIFICATE, X509 CERTIFICATE or TRUSTED CERTIFICATE whose body is strict base64 of a DER SEQUENCE — until 1.10.0 an empty or non-PEM file reached openssl and read `tsa_invalid` / `chain_unresolved`, a statement about the pack, with no certificate given; the library functions `verify_evidence` and `verify_restrictions` raise `ValueError` for the same files, and for one that is not a regular file). `74`: one of two cases,
 told apart by what is on stdout:
 
 - a check the caller asked for could not be RUN on this machine (openssl that cannot be started, is killed by a signal or
@@ -1240,7 +1248,7 @@ after JSON unescaping — `"subj\u0065ct"` IS `subject`).
 |---|---|---|
 | top level | `evidence_format` (string, MUST), `subject` (string, MUST), `created_utc` (string, MUST), `artifacts` (list, MUST), `bindings` (list; absent reads as `[]`), `honest_scope` (string, MUST), `evidence_digest_sha256` (string, MUST), `rfc3161_timestamp` (object), `producer_signatures` (object), `anchors` (non-empty list, 1.5.0), `not_before` (object, 1.8.0, closed at every level as §12.2 states) | refusal |
 | `anchors[i]` (1.5.0) | `mechanism` (string, MUST, one of the mechanisms of §3.3: `"rfc3161"`); for `rfc3161`: `tsr_b64` (string, MUST), `tsa_url` (string), `note` (string); an entry that is not an object | refusal (an unknown `mechanism` is named: `anchors[i]: mechanism "x" is not defined by this revision (SPEC §3.3)`) |
-| `rfc3161_timestamp` | `anchored` (boolean, MUST), `tsr_b64` (string; when `anchored` is true and it is ABSENT the §6.4 rule applies: `rfc3161_verified: false`, not a refusal), `tsa_url` (string), `tsa` (string, 1.0–1.3 spelling), `note` (string) | refusal |
+| `rfc3161_timestamp` | `anchored` (boolean, MUST), `tsr_b64` (string; when `anchored` is true and it is ABSENT the §6.4 rule applies: `rfc3161_verified: false`, not a refusal; when `anchored` is false and it is PRESENT: refusal, 1.10.0), `tsa_url` (string), `tsa` (string, 1.0–1.3 spelling), `note` (string) | refusal |
 | `producer_signatures` | `scheme` (`"hybrid"` or `"classical-only"`, MUST), `over` (`"evidence_digest_sha256"`, MUST), `signatures` (list, MUST) | refusal |
 | `producer_signatures.signatures[i]` | `sig_alg` (string, MUST), `public_key_b64` (string, MUST), `signature_b64` (string, MUST), `post_quantum` (boolean, MUST, `true` iff `sig_alg == "ml-dsa-65"`); an entry that is not an object | FAIL entry; an UNKNOWN key: refusal (1.6.0, below) |
 | `bindings[i]` | `in` (string), `claim` (string), `commits_to` (string), `encoding` (`"hex"` or `"b64url"`) — all four MUST; `over` (exactly `"issuer_jwt"`, 1.9.0, §4); an entry that is not an object | refusal |
@@ -1363,7 +1371,7 @@ party compares them with the issuer's published keys out of band and records tha
 `--tsa-cert` gives `time_anchor: not_evaluated/instrument_failure` and counts no anchor, and `--trust-anchor` is a usage
 error: both checks need the reference verifier (openssl).
 
-**Time.** `time_anchor: not_present` means the pack claims no anchor (a token under `anchored: false` is not checked).
+**Time.** `time_anchor: not_present` means the pack claims no anchor (1.10.0: a token under `anchored: false` is a refusal, §9.1).
 `anchors_verified` counts the distinct anchors whose token binds this digest; with `--tsa-cert` only those whose TSA
 signature also verifies (§3.3). `tsa_not_checked` is a binding a self-issued token satisfies (§3.2): it says nothing about
 a TSA's clock. A time-based ground needs `time_anchor: verified` under the certificate of a TSA the relying party trusts,

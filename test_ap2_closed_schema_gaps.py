@@ -61,8 +61,7 @@ class TestClosedSchemaGaps(unittest.TestCase):
         ref, _ = self._both(self.base)
         self.assertTrue(ref["valid"], ref)
         cases = [("rfc3161_timestamp", {"anchored": False, "tsa": "https://tsa.example.invalid", "note": "n"}),       # 1.0–1.3 spelling
-                 ("rfc3161_timestamp", {"anchored": False, "tsa_url": "https://tsa.example.invalid"}),
-                 ("rfc3161_timestamp", {"anchored": False, "tsr_b64": "AA=="})]                                      # not anchored: not read
+                 ("rfc3161_timestamp", {"anchored": False, "tsa_url": "https://tsa.example.invalid"})]
         for top, val in cases:
             with self.subTest(top=top, val=val):
                 ev = copy.deepcopy(self.base); ev[top] = val
@@ -75,6 +74,17 @@ class TestClosedSchemaGaps(unittest.TestCase):
                 r, _ = self._both(M.rehash(ev))
                 self.assertTrue(r["valid"], r)
                 self.assertNotIn("error", r["artifacts"][0])
+
+    def test_a_token_under_anchored_false_is_a_refusal(self):   # 1.10.0 — SPEC §1/§9.1: 1.0–1.9 accepted it and read nothing
+        for tok in ("AA==", ""):
+            with self.subTest(tok=tok):
+                ev = copy.deepcopy(self.base); ev["rfc3161_timestamp"] = {"anchored": False, "tsr_b64": tok}
+                r, _ = self._both(ev)
+                self.assertEqual(r["admission"], "refused", r)
+                self.assertIn("tsr_b64 is not allowed under anchored false", r["refused"])
+        ev = copy.deepcopy(self.base); ev["rfc3161_timestamp"] = {"anchored": True, "tsr_b64": "AA=="}   # must-pass twin: read, not refused
+        r, _ = self._both(ev)
+        self.assertNotEqual(r["admission"], "refused", r)
 
     def test_a_list_of_strings_with_a_non_string_is_an_artifact_error(self):
         for bad in ([1], ["ab", None], [[]]):

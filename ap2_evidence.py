@@ -3302,6 +3302,9 @@ def _verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = F
     a receipt: the receipt is completed (that subject `not_evaluated/instrument_failure`) and Ap2WriteError carries it."""
     if min_anchors is not None and (type(min_anchors) is not int or min_anchors < 1):   # SPEC §3.3: an integer >= 1 —
         raise ValueError(f"min_anchors must be an integer >= 1 (got {min_anchors!r})")      # 0, NaN or "2" never weakens the policy in silence
+    for name, v in (("tsa_cert", tsa_cert), ("trust_anchor", trust_anchor)):   # 1.10.0 — SPEC §6.10: the caller's material, not the pack's:
+        if v is not None and not _holds_pem_certificate(v):                     # a file with no certificate was `tsa_invalid` / `chain_unresolved`
+            raise ValueError(f"{name}: no PEM certificate in {v!r} (SPEC §6.10)")
     try:
         ev = read_evidence_file(path)
     except Ap2EvidenceError as e:   # 1.1.0: a hostile or unreadable file is a refusal receipt, never a traceback
@@ -3349,6 +3352,8 @@ def _verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = F
         _check_closed(ev, "top level", _TOP_KEYS)
         if "rfc3161_timestamp" in ev:
             _check_closed(ev["rfc3161_timestamp"], "rfc3161_timestamp", _RFC3161_KEYS)
+            if ev["rfc3161_timestamp"]["anchored"] is False and "tsr_b64" in ev["rfc3161_timestamp"]:   # 1.10.0 — SPEC §1/§9.1: a token no check would read
+                raise Ap2EvidenceError("rfc3161_timestamp: tsr_b64 is not allowed under anchored false (SPEC §9.1)")
         if "producer_signatures" in ev:
             _check_closed(ev["producer_signatures"], "producer_signatures", _PRODUCER_KEYS)
         for i, b in enumerate(ev.get("bindings", [])):
@@ -3619,6 +3624,9 @@ def _verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = F
             "mldsa_backend": bool(_sigsuite.MLDSA_AVAILABLE)}
     if nb_rep is not None:   # 1.8.0 — SPEC §12.3: only when the pack carries the block
         receipt["not_before"] = nb_rep
+    if tsa_cert is not None:   # 1.10.0 — SPEC §6.9: which certificate file the TSA checks ran under (tsa_invalid: another TSA, or a token altered?)
+        with open(tsa_cert, "rb") as fh:
+            receipt["tsa_cert_sha256"] = hashlib.sha256(fh.read()).hexdigest()
     if not_run:   # 1.6.0 — SPEC §6.10: a check asked for could not be run here — the COMPLETE receipt travels with the error
         raise Ap2WriteError(not_run[0], receipt=receipt)
     return receipt
@@ -4047,6 +4055,8 @@ def _existed_by(receipt: Dict) -> Optional[str]:
 def verify_restrictions(path: str, tsa_cert: Optional[str] = None, accept_integral_floats: bool = False) -> Dict:
     """See `_verify_restrictions`. 1.7.2 (SPEC §3.1): `accept_integral_floats` is passed to the pack's verification and
     applies to the tokens the evaluation reads (§11); the receipt says so when it is set."""
+    if tsa_cert is not None and not _holds_pem_certificate(tsa_cert):   # 1.10.0 — SPEC §6.10, as verify_evidence
+        raise ValueError(f"tsa_cert: no PEM certificate in {tsa_cert!r} (SPEC §6.10)")
     if type(accept_integral_floats) is not bool:
         raise ValueError(f"accept_integral_floats must be a boolean (got {accept_integral_floats!r})")
     tok = _INTEGRAL_READ.set([] if accept_integral_floats else None)
@@ -4350,6 +4360,40 @@ def _stderr_settled(rc: int) -> int:
         return EX_IOERR
 
 
+def _pack_unreadable(path):   # 1.10.0 — SPEC §3.1: a path that names nothing, or that cannot be read, is a usage error (exit 2);
+    try:                       # a FIFO, a device or a directory stays a refusal of §3.1
+        os.stat(path)
+        return not os.access(path, os.R_OK)
+    except (OSError, ValueError):
+        return True
+
+
+_PEM_CERT_BLOCK = re.compile(rb"-----BEGIN ((?:X509 |TRUSTED )?CERTIFICATE)-----\r?\n([A-Za-z0-9+/=\r\n]+?)-----END \1-----")
+
+
+def _holds_pem_certificate(path: str) -> bool:
+    """SPEC §6.10: a `--tsa-cert` / `--trust-anchor` file names a certificate only if it holds at least one PEM block
+    labelled CERTIFICATE (or X509 / TRUSTED CERTIFICATE, as openssl reads them) whose body is strict base64 of a DER
+    SEQUENCE. An empty or non-PEM file used to reach openssl and come back as `tsa_invalid` / `chain_unresolved`, a
+    statement about the pack, when no certificate was given (measured 2026-11-22 on the 1.9.0 wheel). The same test as
+    holdsPemCertificate in the JS verifier; a block that passes it and is not a certificate is still read by openssl."""
+    try:
+        if not stat.S_ISREG(os.stat(path).st_mode):   # the library is called without the CLI's check: /dev/zero is never read whole
+            return False
+        with open(path, "rb") as fh:
+            data = fh.read()
+    except (OSError, ValueError):
+        return False
+    for m in _PEM_CERT_BLOCK.finditer(data):
+        body = m.group(2).replace(b"\r", b"").replace(b"\n", b"")
+        if len(body) % 4 or not re.fullmatch(rb"[A-Za-z0-9+/]*={0,2}", body):
+            continue
+        der = base64.b64decode(body)
+        if len(der) >= 2 and der[0] == 0x30:
+            return True
+    return False
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     if sys.stderr is None:
         sys.stderr = _ClosedStderr()
@@ -4533,6 +4577,8 @@ def _main(argv: Optional[List[str]] = None) -> int:
                 if not sep or not alg or not key:
                     p.error(f"--trusted-producer-key expects ALG=B64 (got {spec!r})")
                 trusted.setdefault(alg, []).append(key)
+        if _pack_unreadable(a.evidence):
+            p.error(f"cannot read the evidence file {a.evidence!r}")
         for flag, path in (("--tsa-cert", a.tsa_cert), ("--trust-anchor", a.trust_anchor)):   # 1.6.0 review: a relying-party
             if path is not None:   # file that cannot be read was handed to openssl and reported as `tsa_invalid` / `chain_unresolved`
                 try:               # (a statement about the pack); now a usage error, as for `build` (r5)
@@ -4541,6 +4587,8 @@ def _main(argv: Optional[List[str]] = None) -> int:
                     ok = False
                 if not ok:
                     p.error(f"{flag}: cannot read {path!r} (not a readable regular file)")
+                if not _holds_pem_certificate(path):   # SPEC §6.10: a readable file that holds no certificate names none
+                    p.error(f"{flag}: cannot read {path!r} (no PEM certificate in it)")
         try:
             r = verify_evidence(a.evidence, trusted_producer_keys=trusted, require_pq=a.require_pq,
                                 require_producer=a.require_producer, require_anchor=a.require_anchor, tsa_cert=a.tsa_cert,
@@ -4563,6 +4611,8 @@ def _main(argv: Optional[List[str]] = None) -> int:
     if a.cmd == "restriction":   # SPEC §11.2: exit 0 iff every restriction record of a valid pack is verified
         if a.evidence == "" or a.evidence.startswith("-"):
             p.error(f"evidence path needs a value (got {a.evidence!r})")
+        if _pack_unreadable(a.evidence):
+            p.error(f"cannot read the evidence file {a.evidence!r}")
         if a.tsa_cert is not None:
             try:
                 ok = stat.S_ISREG(os.stat(a.tsa_cert).st_mode) and os.access(a.tsa_cert, os.R_OK)
@@ -4570,6 +4620,8 @@ def _main(argv: Optional[List[str]] = None) -> int:
                 ok = False
             if not ok:
                 p.error(f"--tsa-cert: cannot read {a.tsa_cert!r} (not a readable regular file)")
+            if not _holds_pem_certificate(a.tsa_cert):   # SPEC §6.10, as for verify
+                p.error(f"--tsa-cert: cannot read {a.tsa_cert!r} (no PEM certificate in it)")
         try:
             r = verify_restrictions(a.evidence, tsa_cert=a.tsa_cert, accept_integral_floats=a.accept_integral_floats)
         except Ap2WriteError as e:
