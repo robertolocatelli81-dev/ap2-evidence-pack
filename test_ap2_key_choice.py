@@ -533,5 +533,31 @@ class KeyChoiceCli(unittest.TestCase):
         self.assertEqual(_JwksHandler.hits, [])
 
 
+
+class CoordinateBelowP(unittest.TestCase):
+    """1.10.0: a JWK coordinate is a field element of P-256, in [0, p - 1] (RFC 7518 §6.2.1.2-3 write it by SEC 1 §2.3.5).
+    Measured 2026-11-22: cryptography's EllipticCurvePublicNumbers reduced an x written as x + p to a point, node:crypto's
+    createPublicKey refused that JWK."""
+    P = 2 ** 256 - 2 ** 224 + 2 ** 192 + 2 ** 96 - 1
+    Y5 = pow((5 ** 3 - 3 * 5 + 0x5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b) % P, (P + 1) // 4, P)   # x = 5: a point
+
+    def _jwk(self, x, y):
+        return {"kty": "EC", "crv": "P-256", "x": T._b64u(x.to_bytes(32, "big")), "y": T._b64u(y.to_bytes(32, "big"))}
+
+    def test_reference_refuses_a_coordinate_not_below_p(self):
+        self.assertEqual(ap2._pubkey_from_jwk(self._jwk(5, self.Y5)).public_numbers().x, 5)   # control: the reduced point
+        for x, y in ((5 + self.P, self.Y5), (5, self.P)):
+            with self.assertRaisesRegex(ap2.Ap2EvidenceError, "not a point of P-256"):
+                ap2._pubkey_from_jwk(self._jwk(x, y))
+
+    @unittest.skipUnless(_NODE, "node not installed")
+    def test_node_refuses_it_too(self):   # the JS verifier gives the JWK to createPublicKey (es256Verify)
+        js = ('import { createPublicKey } from "node:crypto"; for (const j of JSON.parse(process.argv[1])) { let ok = true; '
+              'try { createPublicKey({ key: j, format: "jwk" }); } catch { ok = false; } console.log(ok); }')
+        jwks = [self._jwk(5, self.Y5), self._jwk(5 + self.P, self.Y5), self._jwk(5, self.P)]
+        p = subprocess.run([_NODE, "--input-type=module", "-e", js, json.dumps(jwks)], capture_output=True, text=True, timeout=120)
+        self.assertEqual(p.stdout.split(), ["true", "false", "false"], p.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

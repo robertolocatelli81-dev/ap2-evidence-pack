@@ -688,6 +688,9 @@ def _pubkey_from_jwk(jwk: Dict):
         raise Ap2EvidenceError("JWK x/y must be exactly 32 bytes")
     x = int.from_bytes(xb, "big")
     y = int.from_bytes(yb, "big")
+    if x >= _P256_P or y >= _P256_P:   # 1.10.0: RFC 7518 §6.2.1.2-3 write a coordinate by SEC 1 §2.3.5, a field element in
+        # [0, p - 1]; cryptography reduced x + p and node:crypto refuses it (measured 2026-11-22)
+        raise Ap2EvidenceError("JWK x/y is not a point of P-256")
     try:   # 1.7.3: measured on 1.7.2, a JWK whose (x, y) is not a point of P-256 — a --key file, a header jwk, a JWKS key or
         # cnf.jwk — was a ValueError traceback out of `build` (exit 1, no reason); verify already reported it as the artifact's error
         return ec.EllipticCurvePublicNumbers(x, y, ec.SECP256R1()).public_key()

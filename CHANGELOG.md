@@ -121,6 +121,14 @@ pass on both. Measured on Python 3.9, 3.11 and 3.13, one result per test method.
   libraries refuse, its rule named in both receipts; a leaf whose key is the point at infinity, a receipt from the JS
   verifier; an anchor with serial 0 that still anchors a chain while a leaf with serial 0 is refused: the serial rule is
   the leaf's only); all 12 fail on 1.9.0, Python 3.9, 3.11 and 3.13.
+- SPEC §3.1, the reference: a JWK coordinate is below the prime p of P-256 (RFC 7518 §6.2.1.2 and §6.2.1.3 write it by
+  SEC 1 §2.3.5, a field element in [0, p − 1]). Up to 1.9.0 the reference gave the JWK to cryptography's
+  EllipticCurvePublicNumbers, which reduced an x written x + p to a point, while node:crypto refused the same JWK
+  (measured 2026-11-22 on 1.9.0, function by function, node 22.23.2 and 24.19.0): the same class as the x5c leaf's key
+  above. Written so, x + p fits 32 octets only when x is below 2^256 − p, about one point of P-256 in 2^32; a signature
+  under such a key, which this measure did not produce, would verify in the reference only. Now `JWK x/y is not a
+  point of P-256`, as for a point off the curve, in the one function that reads a JWK as a key (`_pubkey_from_jwk`: a
+  `--key` file, a header `jwk`, a JWKS key, `cnf.jwk`). `test_ap2_key_choice.py`: 2 tests.
 - SPEC §6 step 6, §5, §6.9, both verifiers: a pinned producer set (`--trusted-producer-key`, `trusted_producer_keys`)
   implies `require_producer`. Up to 1.9.0 the set was applied only to a block that was present: the producer block
   removed from a pack whose key was pinned gave `valid: true`, `policy.unmet: []`. Now `policy_ok` and `valid` are

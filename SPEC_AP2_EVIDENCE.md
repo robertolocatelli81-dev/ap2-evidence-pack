@@ -492,7 +492,10 @@ present with `null` is NOT the same as an absent key: `_sd` absent or a list of 
 `_sd_alg` absent or exactly `"sha-256"`, and only at the top level of the issuer payload; an array placeholder
 `{"...": d}` with `d` a string, and the key `...` nowhere else (1.8.1, §6 step 2); a disclosed claim name a string; `cnf` absent or an object, `cnf.jwk` absent or an
 object (an empty object is a holder key that fails to parse, not an unknown holder);
-JWK `x`/`y` exactly 32 bytes each (RFC 7518 §6.2.1); `key.provenance_class` in the §2 enum;
+JWK `x`/`y` exactly 32 bytes each (RFC 7518 §6.2.1) and, since 1.10.0, each below the prime p of P-256 (§6.2.1.2 and
+§6.2.1.3 write a coordinate by SEC 1 §2.3.5, whose input is a field element in [0, p − 1]; up to 1.9.0 the reference's
+library reduced an x written x + p to a point, node:crypto refused it; now `JWK x/y is not a point of P-256` in the
+reference, refused by node:crypto in the JS verifier); `key.provenance_class` in the §2 enum;
 `rfc3161_timestamp.anchored` a boolean; `producer_signatures.signatures[].sig_alg` a
 string (any other type is a FAIL entry). A violation inside an artifact is that
 artifact's error (the pack is not `valid`); a violation of a top-level shape is a refusal.
