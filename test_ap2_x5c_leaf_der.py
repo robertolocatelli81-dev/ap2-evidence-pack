@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Roberto Locatelli
 """1.10.0, SPEC §2 (d): the x5c leaf is walked as DER (ITU-T X.690 02/2021) with the shape of RFC 5280 §4.1, by the same
-rules in both verifiers, before cryptography (reference) or node:crypto (JS verifier) reads it.
+rules in both verifiers; since 1.10.0 neither cryptography (reference) nor node:crypto (JS verifier) reads it, they are
+asked only whether its key is a point of P-256.
 
 Up to 1.9.0 each verifier left the question to its library, and they disagree: measured on 2026-11-21 with one leaf
 (seed 11, 12 000 cases), after the minimal-length check of the same release, 52 of 5205 one-bit and one-byte changes were
@@ -15,8 +16,7 @@ What is measured here:
 - one case per rule, built on a fresh leaf, gives that rule in both verifiers (the same name);
 - a pack whose leaf breaks a rule is that artifact's error in both verifiers (and on 1.9.0 the JS verifier said valid);
 - 1500 generated changes of three leaves (octets, bits, and the cases above): the same answer from the two walks, and
-  a leaf is a certificate for the reference exactly when it is one for the JS verifier — on these changes; what the
-  two libraries still decide differently after the walk is listed in SPEC §2 (d) and is not measured here;
+  a leaf is a certificate for the reference exactly when it is one for the JS verifier — on these changes;
 - the bound on nesting (`depth`): sixteen constructed elements pass, seventeen and 1500 do not, in both (without the
   bound the reference ended in a RecursionError on 1500 and the JS verifier accepted the leaf);
 - a leaf that node:crypto refuses on its own names its rule in the JS receipt too (the walk runs first), and a leaf

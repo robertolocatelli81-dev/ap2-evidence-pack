@@ -699,8 +699,9 @@ def _pubkey_from_jwk(jwk: Dict):
 
 
 class _Leaf:
-    """1.10.0 (SPEC §2 (d)): an x5c leaf as the walk reads it — no library reads the certificate; the public key is a P-256
-    point checked by cryptography."""
+    """1.10.0 (SPEC §2 (d)): an x5c leaf as the walk reads it — no library reads the certificate to say what it is;
+    the public key is a P-256 point checked by cryptography (with a trust anchor, `openssl verify` reads the chain for
+    `chain_verified` only: _verify_x5c_chain)."""
 
     def __init__(self, der: bytes, read: Dict):
         self.der, self.subject, self.issuer, self.serial = der, read["subject"], read["issuer"], read["serial"]
@@ -788,7 +789,8 @@ def _der_strict_children(buf: bytes, start: int, end: int) -> List[Tuple[int, in
 
 
 # 1.10.0 (SPEC §2 (d)): the x5c leaf walked as DER (ITU-T X.690 02/2021) with the shape of RFC 5280 §4.1, the same rules
-# in both verifiers, before the library reads it. Up to 1.9.0 each verifier left it to its library (cryptography: strict
+# in both verifiers; what a receipt says of the leaf is read by this walk (the library is asked only whether the key is
+# a point of P-256). Up to 1.9.0 each verifier left it to its library (cryptography: strict
 # DER; node:crypto / OpenSSL: BER): measured 2026-11-21, 52 of 5205 one-bit and one-byte changes of one leaf were a
 # certificate for one verifier only.
 _LEAF_PRIMITIVE = frozenset((0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x0C, 0x12, 0x13, 0x14, 0x16, 0x17, 0x18, 0x1C, 0x1E,
@@ -1060,7 +1062,7 @@ def _leaf_why(e: Exception) -> str:
 def x5c_leaf_der_problem(der: bytes) -> Optional[str]:
     """1.10.0 (SPEC §2 (d)): None when the leaf is DER with the shape of RFC 5280 §4.1, else the name of the rule broken
     (length, tag, depth, boolean, integer, null, oid, bit_string, string, time, set_order, tbs, version, serial,
-    extension, attribute_value). The same function in the JS verifier: x5cLeafDerProblem."""
+    extension, attribute_value, name, algorithm, key). The same function in the JS verifier: x5cLeafDerProblem."""
     try:
         _x5c_leaf_read(der)
     except _NotDer as e:

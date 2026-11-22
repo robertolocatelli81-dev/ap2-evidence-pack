@@ -56,8 +56,9 @@ pass on both. Measured on Python 3.9, 3.11 and 3.13, one result per test method.
   edges), eleven TBS walks written by hand (one and two `[3]` fields, two that are not the Extensions syntax, one with
   long-form lengths, six that are not DER) and 3000 byte mutations of
   a leaf, the same answer in both verifiers, and the whole path under openssl with eight leaves.
-- SPEC §2 (d), both verifiers: the x5c leaf is DER, by one set of rules written in the SPEC, before each verifier's
-  library reads it. Up to 1.9.0 each left the question to its library, and they disagree: measured 2026-11-21 on 1.9.0,
+- SPEC §2 (d), both verifiers: the x5c leaf is DER, by one set of rules written in the SPEC, and what a receipt says
+  of it is read by that walk, not by a library. Up to 1.9.0 each left the question to its library, and they
+  disagree: measured 2026-11-21 on 1.9.0,
   a leaf whose serial has the length `81 nn` where the short form fits, signed again, was a certificate for the JS
   verifier (node:crypto reads BER; `valid: true`) and not for the reference (cryptography refuses it; that artifact's
   error). With minimal lengths alone, 52 of 5205 one-bit and one-byte changes of one leaf were still a certificate for
@@ -81,7 +82,9 @@ pass on both. Measured on Python 3.9, 3.11 and 3.13, one result per test method.
   different `x5c_leaf`: what each library still decided and wrote after the walk (AlgorithmIdentifier parameters, an
   empty or repeated RDN value, a TeletexString above `7F`, a BMPString surrogate pair, a GeneralizedTime of year 0000,
   how a multi-valued RDN, an unknown attribute type, a control character, an empty name or an early date was written),
-  all of it in 1.9.0 too. Closed here: no library reads the leaf any more. Both verifiers read subject, issuer, serial
+  all of it in 1.9.0 too. Closed here: no library reads the leaf to decide whether it is a certificate or what a receipt
+  says of it (with a trust anchor the reference still gives the chain to `openssl verify`, for `chain_verified` only).
+  Both verifiers read subject, issuer, serial
   and validity from the walk with the rendering SPEC §2 (d) writes (RFC 4514 §2; short names of RFC 4514 §3 and of a
   list of string attribute types of the IANA LDAP Descriptors registry, written in SPEC §2 (d) — the registry holds
   others, `mail` and `dmdName` among them —, every other type dotted with `#` and the hexadecimal of the value), and

@@ -9,8 +9,9 @@
 > and §6.9, a validated x5c chain clears `self_asserted_only` only when its leaf is issued for signing (keyUsage and
 > extendedKeyUsage, RFC 5280 §4.2.1.3 and §4.2.1.12), `x5c_leaf.key_purpose` in both verifiers, reason
 > `key_purpose_not_signing` (added to the reasons of `ap2-evidence-pack/states-1`, as 1.8.1 added
-> `signer_certificate_absent`); §2 (d), the x5c leaf is DER by one set of rules in both verifiers, walked before
-> their libraries read it (`x5c leaf is not DER: <rule>`), and §6 step 7 applies X.690 §11.2.2 to keyUsage; §6 step 6,
+> `signer_certificate_absent`); §2 (d), the x5c leaf is DER by one set of rules in both verifiers, and what a receipt
+> says of it is read by that walk, not by a library (`x5c leaf is not DER: <rule>`), and §6 step 7 applies X.690
+> §11.2.2 to keyUsage; §6 step 6,
 > §5 and §6.9, a pinned producer set implies `require_producer`: a pack without a producer block is not `valid` under it, `policy.unmet` `trusted_producer_keys` (vector `stripped_signature`:
 > `trusted_producer_keys` added to its `policy.unmet`, `valid` unchanged); §7, one vector added for §6 step 2,
 > `issuer_alg_not_es256`, and one for §6 step 7, `issuer_x5c_key_purpose_not_signing` (fifty-nine).
@@ -244,8 +245,11 @@ of a `jwks_fetched` key (a capture-time fact).
 1.10.0, what DER means for the leaf `x5c[0]`, wherever it is read (an `x5c_header` key, an `x5c` beside another key
 source, the key purpose of §6 step 7). Both verifiers walk the whole certificate with the same rules, and a leaf that
 breaks one is not a certificate here: that artifact's error, `x5c leaf is not DER: <rule>`, in both. Since 1.10.0 no
-library reads the leaf: what a receipt says of it (`x5c_leaf`: subject, issuer, serial, validity) is read from the walk
-by the rules below, and the library is asked only whether the public key, read from the walk too, is a point of P-256. The rules are those of ITU-T X.690 (02/2021, in force with its Erratum 1 of 09/2021, read on itu.int on
+library reads the leaf to decide whether it is a certificate or what a receipt says of it (`x5c_leaf`: subject, issuer,
+serial, validity): that is read from the walk by the rules below, and the library is asked only whether the public key,
+read from the walk too, is a point of P-256. With a trust anchor (§6 step 7) the reference still gives the chain, leaf
+included, to `openssl verify`, which reads it for `chain_verified` only. The rules are those of ITU-T X.690 (02/2021,
+in force with its Erratum 1 of 09/2021, read on itu.int on
 2026-11-21) and of RFC 5280 §4.1 for the shape of a certificate:
 - every element: a one-octet tag (no tag number above 30, X.690 §8.1.2.4), the definite length in the fewest octets
   (§10.1), inside its parent, nothing after the certificate; the tags are a closed list — universal BOOLEAN, INTEGER, BIT

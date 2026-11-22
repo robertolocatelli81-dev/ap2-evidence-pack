@@ -516,7 +516,8 @@ function derStrictTLV(buf, off, end) { const t = derTLV(buf, off);
   if (t.end > end || (t.start - off > 2 && (buf[off + 2] === 0 || t.end - t.start < 128))) throw new Refused("der: not DER"); return t; }
 function derStrictChildren(buf, tlv) { const out = []; let o = tlv.start; while (o < tlv.end) { const c = derStrictTLV(buf, o, tlv.end); out.push(c); o = c.next; } return out; }
 // 1.10.0 — SPEC §2 (d): the x5c leaf walked as DER (ITU-T X.690 02/2021) with the shape of RFC 5280 §4.1, the same rules
-// as the reference's x5c_leaf_der_problem, before node:crypto (OpenSSL reads BER) sees it. Measured 2026-11-21: 52 of
+// as the reference's x5c_leaf_der_problem; node:crypto (OpenSSL reads BER) does not read the leaf, it is asked only
+// whether the key is a point of P-256 (readLeaf). Measured 2026-11-21, when node:crypto still read it: 52 of
 // 5205 one-bit and one-byte changes of one leaf were a certificate for one verifier only.
 const LEAF_PRIMITIVE = new Set([0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x0c, 0x12, 0x13, 0x14, 0x16, 0x17, 0x18, 0x1c, 0x1e, 0x81, 0x82]);
 const LEAF_CONSTRUCTED = new Set([0x30, 0x31, 0xa0, 0xa1, 0xa2, 0xa3]);
