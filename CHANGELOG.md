@@ -49,7 +49,7 @@ on both. Measured on Python 3.9, 3.11 and 3.13, one result per test method.
   `chain_broken`). Each `x5c_leaf` carries `key_purpose` (`{"signing", "reason", "matched"}`, `matched` the purpose that matched) in both verifiers, with or without an
   anchor; the differential oracle compares it. The walk reads DER (minimal definite lengths, X.690 §10.1; every
   element inside its parent; nothing after the certificate): a long length form where the short one fits is malformed
-  or unreadable, in both verifiers. Verdicts: no vector changes (of the six x5c leaves of `spec/vectors`, three
+  or unreadable, in both verifiers. Verdicts: no vector changes (of the six x5c leaves the vectors of 1.9.0 hold in `spec/vectors/ap2`, three
   distinct certificates, four carry a critical keyUsage with digitalSignature and no extendedKeyUsage, two carry neither
   extension: `signing: true` for all six). `test_ap2_x5c_purpose.py`: 16 tests, three of them for the next entry and
   three for AP2's sample certificate (its purpose in both verifiers, its chain to the sample issuer at a time inside
@@ -57,7 +57,7 @@ on both. Measured on Python 3.9, 3.11 and 3.13, one result per test method.
   the rule written from the generator's parameters, 43 extension values written by hand (malformed, duplicated, DER
   edges), eleven TBS walks written by hand (one and two `[3]` fields, two that are not the Extensions syntax, one with
   long-form lengths, six that are not DER) and 3000 byte mutations of
-  a leaf, the same answer in both verifiers, and the whole path under openssl with eight leaves.
+  a leaf, the same answer in both verifiers, and the whole path under openssl with ten leaves.
 - SPEC §2 (d), both verifiers: the x5c leaf is DER, by one set of rules written in the SPEC, and what a receipt says
   of it is read by that walk, not by a library. Up to 1.9.0 each left the question to its library, and they
   disagree: measured 2026-11-21 on 1.9.0,
