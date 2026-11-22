@@ -301,10 +301,14 @@ by the rules below, and the library is asked only whether the public key, read f
   "the parameters MUST be absent"); RSASSA-PSS, SHA-1 and every other algorithm are refused — `algorithm`; the
   subjectPublicKeyInfo of the leaf is an EC key on the named curve P-256 with an uncompressed point (`30 59 30 13 06 07
   2a 86 48 ce 3d 02 01 06 08 2a 86 48 ce 3d 03 01 07 03 42 00 04` and 64 octets: RFC 5480 §2.1.1 namedCurve and §2.2,
-  ES256 only) — `key`. RFC 4514, 4055, 5758, 8410 were read on rfc-editor.org on 2026-11-21 (Proposed Standards, none
-  obsoleted).
+  ES256 only), and each of the two coordinates below the prime p of P-256 (RFC 5480 §2.2: "As specified
+  in [SEC1]", there SEC 1 version 1.0 of September 2000; version 2.0 of May 2009, which secg.org lists as superseding
+  it, read with 1.0 on 2026-11-22: in both §2.3.4 step 3 reads x and y by §2.3.6, "Output 'invalid' and stop if a does
+  not lie in the interval [0, p − 1]") — `key`. RFC 4514, 4055, 5758, 8410 were read on rfc-editor.org on 2026-11-21
+  (Proposed Standards, none obsoleted).
 Not read by this walk: the contents of an OCTET STRING (an extension value: keyUsage and extendedKeyUsage are read by §6
-step 7, which also applies X.690 §11.2.2 to it) and of a BIT STRING (the public key, the signature). Up to 1.9.0 each verifier left the question to its library:
+step 7, which also applies X.690 §11.2.2 to it) and of a BIT STRING (the signature; of the public key the walk reads
+the 65 octets of the `key` rule). Up to 1.9.0 each verifier left the question to its library:
 cryptography (strict DER) for the reference, node:crypto (OpenSSL, which reads BER) for the JS verifier.
 
 1.10.0, what a receipt says of the leaf, read from the walk the same way in both verifiers:

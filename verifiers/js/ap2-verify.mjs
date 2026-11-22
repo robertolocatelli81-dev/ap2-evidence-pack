@@ -577,6 +577,7 @@ const SIGNATURE_ALGORITHMS = new Set(["300a06082a8648ce3d040302", "300a06082a864
   "300b06092a864886f70d01010b", "300b06092a864886f70d01010c", "300b06092a864886f70d01010d",   // the same, absent (RFC 4055 §5)
   "300506032b6570"]);   // Ed25519, RFC 8410 §3
 const P256_SPKI_PREFIX = "3059301306072a8648ce3d020106082a8648ce3d030107034200" + "04";   // RFC 5480 §2.1.1, §2.2
+const P256_P = (1n << 256n) - (1n << 224n) + (1n << 192n) + (1n << 96n) - 1n;   // the prime of P-256: each coordinate is in [0, p - 1] (SEC 1 §2.3.6)
 // RFC 4514 §3 and the string attribute types of the IANA LDAP Descriptors registry (SPEC §2 (d), 1.10.0)
 const NAME_TYPES = new Map([["2.5.4.3", "CN"], ["2.5.4.7", "L"], ["2.5.4.8", "ST"], ["2.5.4.10", "O"], ["2.5.4.11", "OU"], ["2.5.4.6", "C"],
   ["2.5.4.9", "STREET"], ["0.9.2342.19200300.100.1.25", "DC"], ["0.9.2342.19200300.100.1.1", "UID"], ["2.5.4.15", "businessCategory"],
@@ -656,6 +657,8 @@ function x5cLeafShape(buf) {
   if (sigIn !== buf.subarray(cert[1].at, cert[1].end).toString("hex") || !SIGNATURE_ALGORITHMS.has(sigIn)) throw new NotDer("algorithm");
   const key = buf.subarray(tbs[i + 5].at, tbs[i + 5].end);
   if (key.length !== P256_SPKI_PREFIX.length / 2 + 64 || !key.toString("hex").startsWith(P256_SPKI_PREFIX)) throw new NotDer("key");   // 1.10.0: EC P-256, uncompressed
+  if (BigInt("0x" + key.subarray(key.length - 64, key.length - 32).toString("hex")) >= P256_P || BigInt("0x" + key.subarray(key.length - 32).toString("hex")) >= P256_P)
+    throw new NotDer("key");   // SEC 1 §2.3.4 step 3 and §2.3.6: a coordinate not in [0, p - 1] is "invalid"
   return { subject: nameRender(buf, tbs[i + 4]), issuer: nameRender(buf, tbs[i + 2]),
     serial: BigInt("0x" + buf.subarray(tbs[i].start, tbs[i].end).toString("hex")).toString(16),
     not_valid_before: timeRender(validity[0].tag, buf.subarray(validity[0].start, validity[0].end)),

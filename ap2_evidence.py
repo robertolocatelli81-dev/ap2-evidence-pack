@@ -900,6 +900,7 @@ _SIGNATURE_ALGORITHMS = frozenset(bytes.fromhex(h) for h in (
     "300b06092a864886f70d01010b", "300b06092a864886f70d01010c", "300b06092a864886f70d01010d",   # the same, absent (RFC 4055 §5)
     "300506032b6570"))   # Ed25519, RFC 8410 §3
 _P256_SPKI_PREFIX = bytes.fromhex("3059301306072a8648ce3d020106082a8648ce3d030107034200" "04")   # RFC 5480 §2.1.1, §2.2
+_P256_P = 2 ** 256 - 2 ** 224 + 2 ** 192 + 2 ** 96 - 1   # the prime of P-256: each coordinate is in [0, p - 1] (SEC 1 §2.3.6)
 # RFC 4514 §3 and the string attribute types of the IANA LDAP Descriptors registry (SPEC §2 (d), 1.10.0)
 _NAME_TYPES = {"2.5.4.3": "CN", "2.5.4.7": "L", "2.5.4.8": "ST", "2.5.4.10": "O", "2.5.4.11": "OU", "2.5.4.6": "C",
                "2.5.4.9": "STREET", "0.9.2342.19200300.100.1.25": "DC", "0.9.2342.19200300.100.1.1": "UID",
@@ -1038,6 +1039,8 @@ def _x5c_leaf_read(buf: bytes) -> Dict:
     key = buf[tbs[i + 5][3]:tbs[i + 5][2]]
     if len(key) != len(_P256_SPKI_PREFIX) + 64 or not key.startswith(_P256_SPKI_PREFIX):   # 1.10.0: EC P-256, uncompressed
         raise _NotDer("key")
+    if int.from_bytes(key[-64:-32], "big") >= _P256_P or int.from_bytes(key[-32:], "big") >= _P256_P:
+        raise _NotDer("key")   # SEC 1 §2.3.4 step 3 and §2.3.6: a coordinate not in [0, p - 1] is "invalid"
     return {"subject": _name_render(buf, tbs[i + 4]), "issuer": _name_render(buf, tbs[i + 2]),
             "serial": format(int.from_bytes(buf[tbs[i][1]:tbs[i][2]], "big"), "x"),
             "not_valid_before": _time_render(validity[0][0], buf[validity[0][1]:validity[0][2]]),

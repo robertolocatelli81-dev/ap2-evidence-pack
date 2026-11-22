@@ -213,6 +213,10 @@ def _both_algs(value):   # the signature AlgorithmIdentifier of tbsCertificate a
     return f
 
 
+_P = 2 ** 256 - 2 ** 224 + 2 ** 192 + 2 ** 96 - 1   # P-256: x = 5 is the x of a point, _Y5 its y
+_Y5 = pow((5 ** 3 - 3 * 5 + 0x5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b) % _P, (_P + 1) // 4, _P)
+
+
 def _spki_point(point):
     def f(tree):
         node(tree, TBS + (6, 1))[1] = b"\x00" + point
@@ -283,6 +287,10 @@ CASES = [
     ("algorithm_rsa_absent_control", 0, lambda d: mutate(d, _both_algs([0x30, [[0x06, bytes.fromhex("2a864886f70d01010b")]]])), None),
     ("algorithm_ed25519_control", 0, lambda d: mutate(d, _both_algs([0x30, [[0x06, bytes.fromhex("2b6570")]]])), None),
     ("key_compressed_point", 0, lambda d: mutate(d, _spki_point(b"\x02" + b"\x11" * 32)), "key"),
+    # a point of P-256 written with x + p (x = 5): cryptography's EllipticCurvePublicNumbers reduces it, node:crypto refuses it
+    ("key_x_not_reduced", 0, lambda d: mutate(d, _spki_point(b"\x04" + (5 + _P).to_bytes(32, "big") + _Y5.to_bytes(32, "big"))), "key"),
+    ("key_y_is_p", 0, lambda d: mutate(d, _spki_point(b"\x04" + (5).to_bytes(32, "big") + _P.to_bytes(32, "big"))), "key"),
+    ("key_x_reduced_control", 0, lambda d: mutate(d, _spki_point(b"\x04" + (5).to_bytes(32, "big") + _Y5.to_bytes(32, "big"))), None),
     ("key_p384_curve", 0, lambda d: mutate(d, lambda t: node(t, TBS + (6, 0))[1].__setitem__(1, [0x06, bytes.fromhex("2b81040022")])), "key"),
     ("name_empty_rdn", 0, lambda d: mutate(d, lambda t: node(t, TBS + (5,))[1].__setitem__(0, [0x31, []])), "name"),
     ("name_type_twice", 0, lambda d: mutate(d, _rdn((_OID_CN, [0x0C, b"a"]), (_OID_CN, [0x0C, b"b"]))), "name"),
@@ -469,7 +477,8 @@ class Identity(unittest.TestCase):
                 mutate(leaf(), _rdn((bytes.fromhex("550461"), [0x0C, b"VATIT-123"]))), mutate(leaf(), lambda t: node(t, TBS + (5,)).__setitem__(1, [])),
                 mutate(leaf(), _spki_point(b"\x04" + b"\x00" * 63 + b"\x01")), mutate(leaf(), _set(TBS + (1,), value=b"\x00\xff")),
                 mutate(leaf(), _name_value(0x0C, b"#a#")), mutate(leaf(), _validity(b"491231235959Z")), mutate(leaf(), _validity(b"500101000000Z")),
-                _qseal(), mutate(leaf(), _rdn((bytes.fromhex("550462"), [0x0C, b"x"])))]
+                _qseal(), mutate(leaf(), _rdn((bytes.fromhex("550462"), [0x0C, b"x"]))),
+                mutate(leaf(), _spki_point(b"\x04" + (5 + _P).to_bytes(32, "big") + _Y5.to_bytes(32, "big")))]
         p = subprocess.run([NODE, "--input-type=module", "-e", _JS_CERT % json.dumps("file://" + quote(JS))],
                            input=json.dumps([d.hex() for d in ders]), capture_output=True, text=True, timeout=600)
         self.assertEqual(json.loads(p.stdout), [_py_cert(d) for d in ders])

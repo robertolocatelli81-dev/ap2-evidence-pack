@@ -87,11 +87,16 @@ pass on both. Measured on Python 3.9, 3.11 and 3.13, one result per test method.
   value), and ask their library only whether the public key, read from the walk, is a point of P-256. New rules, each a
   refusal named in both: `name` (an empty RDN, an attribute type twice in an RDN), `algorithm` (the two signature
   AlgorithmIdentifiers equal and one of ecdsa-with-SHA256/384/512 without parameters, sha256/384/512WithRSAEncryption
-  with NULL or none, Ed25519), `key` (EC P-256, uncompressed point), `string` also for a TeletexString above `7F`, a
+  with NULL or none, Ed25519), `key` (EC P-256, uncompressed point, each coordinate below p: SEC 1 §2.3.6), `string`
+  also for a TeletexString above `7F`, a
   BMPString surrogate and a UniversalString code point above `10FFFF` or a surrogate, `time` also for a GeneralizedTime
   before 2050 (RFC 5280 §4.1.2.5). Measured after, 2026-11-21, with the same structural generator (seeds 1 to 4, 16 020
   leaves): 0 certificates for one verifier only, 0 accepted with a different `x5c_leaf` (on d76b66c, seeds 1 to 3: 989 and
-  569). node:crypto is no longer asked to read the certificate, so it no longer aborts on a key that is the point at
+  569). That generator never writes a coordinate of the key at or above p: a review of 3f829de (2026-11-22) found that
+  a leaf whose x is written x + p, signed by its CA, was a certificate for the reference (cryptography's
+  `EllipticCurvePublicNumbers` reduces x modulo p) and `key` for the JS verifier (node:crypto 22.23.2 and 24.19.0
+  refuse it); 1.9.0 and d76b66c refused it in both (measured again the same day). The `key` rule now asks each
+  coordinate below p, in both walks. node:crypto is no longer asked to read the certificate, so it no longer aborts on a key that is the point at
   infinity: that leaf is `key` in both (the abort, reproduced the same day on node 22.23.2 and 22.23.5, the latest 22,
   with SIGABRT; node 24.22.3 throws instead). Stricter than cryptography 50 by choice (each counted on those runs): a
   serial that is negative or zero, a PrintableString or IA5String outside its alphabet, a time or a name value of a type
