@@ -544,7 +544,7 @@ class CoordinateBelowP(unittest.TestCase):
     Y0 = pow(B, (P + 1) // 4, P)   # (0, Y0) is a point: x = p reduces to it
     X1 = 0x9e78d4ef60d05f750f6636209092bc43cbdd6b47e11a9de20a9feb2a50bb96c   # (X1, 1) is a point: y + p fits 32 octets
     BAD = ((5 + P, Y5), (P, Y0), (X1, 1 + P))
-    GOOD = ((5, Y5), (0, Y0), (X1, 1))
+    GOOD = ((5, Y5), (0, Y0), (X1, 1), (X1, P - 1))   # (X1, p - 1): the largest coordinate, a point
 
     def _jwk(self, x, y):
         return {"kty": "EC", "crv": "P-256", "x": T._b64u(x.to_bytes(32, "big")), "y": T._b64u(y.to_bytes(32, "big"))}
@@ -563,7 +563,7 @@ class CoordinateBelowP(unittest.TestCase):
               'try { createPublicKey({ key: j, format: "jwk" }); } catch { ok = false; } console.log(ok); }')
         jwks = [self._jwk(x, y) for x, y in self.GOOD + self.BAD]
         p = subprocess.run([_NODE, "--input-type=module", "-e", js, json.dumps(jwks)], capture_output=True, text=True, timeout=120)
-        self.assertEqual(p.stdout.split(), ["true"] * 3 + ["false"] * 3, p.stderr)
+        self.assertEqual(p.stdout.split(), ["true"] * 4 + ["false"] * 3, p.stderr)
 
 
 if __name__ == "__main__":

@@ -701,7 +701,7 @@ def _pubkey_from_jwk(jwk: Dict):
 class _Leaf:
     """1.10.0 (SPEC §2 (d)): an x5c leaf as the walk reads it — no library reads the certificate to say what it is;
     the public key is a P-256 point checked by cryptography (with a trust anchor, `openssl verify` reads the chain for
-    `chain_verified` only: _verify_x5c_chain)."""
+    `chain_verified` and the reason `chain_broken` only: _verify_x5c_chain)."""
 
     def __init__(self, der: bytes, read: Dict):
         self.der, self.subject, self.issuer, self.serial = der, read["subject"], read["issuer"], read["serial"]

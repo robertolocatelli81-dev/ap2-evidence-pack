@@ -304,6 +304,8 @@ CASES = [
     ("key_x_zero_control", 0, lambda d: mutate(d, _spki_point(_xy(0, _Y0))), None),
     ("key_y_not_reduced", 0, lambda d: mutate(d, _spki_point(_xy(_X1, 1 + _P))), "key"),
     ("key_y_reduced_control", 0, lambda d: mutate(d, _spki_point(_xy(_X1, 1))), None),
+    # the bound from below: p - 1 is a coordinate, (_X1, p - 1) = (_X1, -1) a point (a check against p - 1 would refuse it)
+    ("key_y_p_minus_1_control", 0, lambda d: mutate(d, _spki_point(_xy(_X1, _P - 1))), None),
     ("key_p384_curve", 0, lambda d: mutate(d, lambda t: node(t, TBS + (6, 0))[1].__setitem__(1, [0x06, bytes.fromhex("2b81040022")])), "key"),
     ("name_empty_rdn", 0, lambda d: mutate(d, lambda t: node(t, TBS + (5,))[1].__setitem__(0, [0x31, []])), "name"),
     ("name_type_twice", 0, lambda d: mutate(d, _rdn((_OID_CN, [0x0C, b"a"]), (_OID_CN, [0x0C, b"b"]))), "name"),
@@ -502,6 +504,7 @@ class Identity(unittest.TestCase):
                 mutate(leaf(), _spki_point(b"\x04" + (5 + _P).to_bytes(32, "big") + _Y5.to_bytes(32, "big"))),
                 mutate(leaf(), _spki_point(_xy(_P, _Y0))), mutate(leaf(), _spki_point(_xy(_X1, 1 + _P))),
                 mutate(leaf(), _spki_point(_xy(0, _Y0))), mutate(leaf(), _spki_point(_xy(_X1, 1))),
+                mutate(leaf(), _spki_point(_xy(_X1, _P - 1))),
                 mutate(leaf(), _name_value(0x0C, "caf\u00e9\x1f".encode()))] + [
                 mutate(leaf(), _rdn((bytes.fromhex(o), [0x0C, b"x"]))) for o in ("2705", "2805", "4f05", "5005")]
         p = subprocess.run([NODE, "--input-type=module", "-e", _JS_CERT % json.dumps("file://" + quote(JS))],

@@ -248,7 +248,8 @@ breaks one is not a certificate here: that artifact's error, `x5c leaf is not DE
 library reads the leaf to decide whether it is a certificate or what a receipt says of it (`x5c_leaf`: subject, issuer,
 serial, validity): that is read from the walk by the rules below, and the library is asked only whether the public key,
 read from the walk too, is a point of P-256. With a trust anchor (§6 step 7) the reference still gives the chain, leaf
-included, to `openssl verify`, which reads it for `chain_verified` only. The rules are those of ITU-T X.690 (02/2021,
+included, to `openssl verify`, which reads it for `chain_verified` and, when it reports a certificate signature
+failure, the reason `chain_broken` (§6.9) only. The rules are those of ITU-T X.690 (02/2021,
 in force with its Erratum 1 of 09/2021, read on itu.int on
 2026-11-21) and of RFC 5280 §4.1 for the shape of a certificate:
 - every element: a one-octet tag (no tag number above 30, X.690 §8.1.2.4), the definite length in the fewest octets

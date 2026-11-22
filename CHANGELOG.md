@@ -84,7 +84,8 @@ on both. Measured on Python 3.9, 3.11 and 3.13, one result per test method.
   empty or repeated RDN value, a TeletexString above `7F`, a BMPString surrogate pair, a GeneralizedTime of year 0000,
   how a multi-valued RDN, an unknown attribute type, a control character, an empty name or an early date was written),
   all of it in 1.9.0 too. Closed here: no library reads the leaf to decide whether it is a certificate or what a receipt
-  says of it (with a trust anchor the reference still gives the chain to `openssl verify`, for `chain_verified` only).
+  says of it (with a trust anchor the reference still gives the chain to `openssl verify`, for `chain_verified` and the reason
+  `chain_broken` only).
   Both verifiers read subject, issuer, serial
   and validity from the walk with the rendering SPEC §2 (d) writes (RFC 4514 §2; short names of RFC 4514 §3 and of a
   list of string attribute types of the IANA LDAP Descriptors registry, written in SPEC §2 (d) — the registry holds
