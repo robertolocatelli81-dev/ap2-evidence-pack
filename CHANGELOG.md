@@ -8,11 +8,12 @@ pack that was `valid` under a pinned producer set without a producer block is no
 was released.
 
 Each item below was reproduced on the tag v1.9.0 (de28c3a) and on v1.8.0 (d5601e4) with a script made for it. Of the
-46 tests added, the 37 that state the new behaviour fail on v1.9.0, as a failure or as an error (a constant or a
-function they read does not exist there; the twelve of `test_ap2_x5c_leaf_der.py`, its controls included, read functions
-that 1.9.0 does not have); the other 9 are seven controls (one is the chain of AP2's sample certificate, which this
-version does not change) and the unchanged direction (`build` refusing, a refusal of openssl staying `false`), which
-pass on both. Measured on Python 3.9, 3.11 and 3.13, one result per test method.
+50 tests added, the 39 that state the new behaviour fail on v1.9.0, as a failure or as an error (a constant or a
+function they read does not exist there; the thirteen of `test_ap2_x5c_leaf_der.py`, its controls included, read
+functions that 1.9.0 does not have); the other 11 are seven controls (one is the chain of AP2's sample certificate,
+which this version does not change), the unchanged direction (`build` refusing, a refusal of openssl staying `false`,
+node:crypto refusing a JWK coordinate not below p) and the skip condition of `test_ap2_wheel_contents.py`, which pass
+on both. Measured on Python 3.9, 3.11 and 3.13, one result per test method.
 
 - SPEC §6 step 2, both verifiers: the issuer signature is verified only under the `alg` the signed header names, ES256.
   Up to 1.9.0 `verify` checked ES256 whatever the header said (`build` refused it): a pack whose issuer header, signed
@@ -100,7 +101,8 @@ pass on both. Measured on Python 3.9, 3.11 and 3.13, one result per test method.
   a leaf whose x is written x + p, signed by its CA, was a certificate for the reference (cryptography's
   `EllipticCurvePublicNumbers` reduces x modulo p) and `key` for the JS verifier (node:crypto 22.23.2 and 24.19.0
   refuse it); 1.9.0 and d76b66c refused it in both (measured again the same day). The `key` rule now asks each
-  coordinate below p, in both walks. node:crypto is no longer asked to read the certificate, so it no longer aborts on a key that is the point at
+  coordinate below p, in both walks.
+  node:crypto is no longer asked to read the certificate, so it no longer aborts on a key that is the point at
   infinity: that leaf is `key` in both (the abort, reproduced the same day on node 22.23.2 and 22.23.5, the latest 22,
   with SIGABRT; node 24.22.3 throws instead). Stricter than cryptography 50 by choice (each counted on those runs): a
   serial that is negative or zero, a PrintableString or IA5String outside its alphabet, a time or a name value of a type
@@ -117,15 +119,17 @@ pass on both. Measured on Python 3.9, 3.11 and 3.13, one result per test method.
   `#` and hexadecimal, 3 where types it wrote dotted are now named (`2.5.4.5=` `serialNumber=`,
   `1.2.840.113549.1.9.1=` `emailAddress=`, and on an EV certificate `2.5.4.15=` `businessCategory=`, whose two
   jurisdiction types, outside the table, are now `#` and hexadecimal) — and 4 from what node:crypto wrote (OpenSSL's
-  `organizationIdentifier=` on those 3, `jurisdictionST=` and `jurisdictionC=` on the EV certificate, now dotted). keyUsage also follows X.690 §11.2.2 (trailing 0 bits removed): `03 02 00 80` is now
+  `organizationIdentifier=` on those 3, `jurisdictionST=` and `jurisdictionC=` on the EV certificate, now dotted).
+  keyUsage also follows X.690 §11.2.2 (trailing 0 bits removed): `03 02 00 80` is now
   `key_usage_malformed`
   (2 of 170 real certificates with keyUsage break it, two root CAs of one issuer). No vector changes.
-  `test_ap2_x5c_leaf_der.py`: 12 tests (one case per rule in both verifiers, 1500 generated changes compared on the
+  `test_ap2_x5c_leaf_der.py`: 13 tests (one case per rule in both verifiers, 1500 generated changes compared on the
   whole identity of the leaf, the rendering of names, serials and times in both verifiers, a pack whose leaf
   has `critical` `01`: `valid: true` for the JS verifier on 1.9.0, an artifact error in both now; a leaf that both
   libraries refuse, its rule named in both receipts; a leaf whose key is the point at infinity, a receipt from the JS
   verifier; an anchor with serial 0 that still anchors a chain while a leaf with serial 0 is refused: the serial rule is
-  the leaf's only); all 12 fail on 1.9.0, Python 3.9, 3.11 and 3.13.
+  the leaf's only; a synthetic PSD2 qualified seal subject, its organizationIdentifier dotted); all 13 fail on 1.9.0,
+  Python 3.9, 3.11 and 3.13.
 - SPEC §3.1, the reference: a JWK coordinate is below the prime p of P-256 (RFC 7518 §6.2.1.2 and §6.2.1.3 write it by
   SEC 1 §2.3.5, a field element in [0, p − 1]). Up to 1.9.0 the reference gave the JWK to cryptography's
   EllipticCurvePublicNumbers, which reduced an x written x + p to a point, while node:crypto refused the same JWK
