@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (1.10.0) — fixes after an internal review of 1.8.0, measured again on 1.9.0 on 2026-11-20
+## 1.10.0 — 2026-11-22 — fixes after an internal review of 1.8.0, measured again on 1.9.0 on 2026-11-20
 
 A minor version, not a patch: it adds refusals (README "Versioning": "new refusals may change in a minor release"), a
 reason of `ap2-evidence-pack/states-1` (`key_purpose_not_signing`) and a receipt member (`x5c_leaf.key_purpose`), and a

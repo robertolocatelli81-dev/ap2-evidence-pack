@@ -1,9 +1,9 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Copyright 2026 Roberto Locatelli -->
 
-# ap2-evidence-pack — normative format v1.0 (2026-09-05), specification revision 1.9.0 (2026-11-20)
+# ap2-evidence-pack — normative format v1.0 (2026-09-05), specification revision 1.10.0 (2026-11-22)
 
-> Unreleased revision 1.10.0 (after 1.9.0, 2026-11-20): §6 step 2, the issuer signature is verified only under the
+> Revision 1.10.0 (2026-11-22): §6 step 2, the issuer signature is verified only under the
 > `alg` the signed header names (`issuer_alg_not_es256`); §3.2, an openssl that does not answer on the key-identifier
 > path, or a temporary file of that path that cannot be written, is a check not run (`null`), not a `false`; §6 step 7
 > and §6.9, a validated x5c chain clears `self_asserted_only` only when its leaf is issued for signing (keyUsage and
