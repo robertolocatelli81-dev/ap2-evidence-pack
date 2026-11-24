@@ -1525,7 +1525,12 @@ def _snapshot_key(parsed: Dict, supplied_jwk: Optional[Dict] = None,
         if len(raw) > 1024 * 1024:
             raise Ap2EvidenceError("JWKS response exceeds 1MB cap (refused fail-closed)")
         try:
-            jwks = json.loads(raw.decode())
+            text = raw.decode()
+            if _nesting_depth(text) > MAX_JSON_DEPTH:   # 1.11.0 (SPEC §3.1): counted before the parser, the same on every Python
+                raise Ap2EvidenceError(f"JWKS body is not JSON: json_too_deep: nesting exceeds {MAX_JSON_DEPTH}")
+            jwks = json.loads(text)
+        except Ap2EvidenceError:
+            raise
         except Exception as e:  # noqa: BLE001
             raise Ap2EvidenceError(f"JWKS body is not JSON: {type(e).__name__}") from e
         # 1.7.1 (NEMESIS2): a body that parses but is not {"keys": [object, ...]} (RFC 7517 §5) is a refusal; measured on 1.7.0
@@ -2402,7 +2407,7 @@ def _write_pack_file(path: str, obj) -> None:
     if st is not None and not stat.S_ISREG(st.st_mode):
         if stat.S_ISDIR(st.st_mode):
             raise IsADirectoryError(errno.EISDIR, os.strerror(errno.EISDIR))
-        with open(path, "w", encoding="utf-8") as f:
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
             json.dump(obj, f, ensure_ascii=False, indent=1, sort_keys=True)
         return
     real = os.path.realpath(path)
@@ -2420,7 +2425,7 @@ def _write_pack_file(path: str, obj) -> None:
     try:
         if st is not None:
             os.fchmod(fd, stat.S_IMODE(st.st_mode))   # the pack keeps its permissions
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
             fd = None
             json.dump(obj, f, ensure_ascii=False, indent=1, sort_keys=True)
             f.flush()
@@ -2678,7 +2683,7 @@ def add_anchor(path: str, tsa_url: str) -> Dict:
         try:   # a fresh, unpredictable name created O_EXCL (a fixed name could be a planted symlink: measured, it overwrote its target)
             fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".ap2-stamp-", suffix=".tmp")
             os.fchmod(fd, mode)   # the pack keeps its permissions (0600 became 0644)
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
                 json.dump(ev, f, ensure_ascii=False, indent=1, sort_keys=True)
                 f.flush(); os.fsync(f.fileno())
             os.replace(tmp, path); tmp = None
@@ -3579,8 +3584,13 @@ def _verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = F
     # meet it (`trusted_producer_keys` unmet, `policy_ok` false). Up to 1.9.0 only a PRESENT block was held to the set:
     # measured 2026-11-20, the block removed from a pack whose key was pinned gave `valid: true`, `unmet: []`, both verifiers.
     pin_absent = trusted_producer_keys is not None and not producer["present"]
-    policy_ok = not unmet and not pin_absent
-    if trusted_producer_keys is not None and (pin_absent or producer.get("trusted") is not True):
+    # 1.11.0 (SPEC §5, §6 step 6): a pinned set that holds an ml-dsa-65 key requires a valid ml-dsa-65 signature under a
+    # pinned key — a block that verifies with every key pinned but carries none does not meet it. Up to 1.10.0 the ml-dsa-65
+    # entry removed and `scheme` relabelled classical-only gave `valid: true` with both keys pinned (measured 2026-11-24).
+    pin_pq_missing = (trusted_producer_keys is not None and bool(trusted_producer_keys.get("ml-dsa-65"))
+                      and producer.get("trusted") is True and not producer.get("pq_protected"))
+    policy_ok = not unmet and not pin_absent and not pin_pq_missing
+    if trusted_producer_keys is not None and (pin_absent or pin_pq_missing or producer.get("trusted") is not True):
         unmet.append("trusted_producer_keys")
     tsa_requested = tsa_cert is not None
     states = derive_states(digest_ok=digest_ok, art_results=art_results, binding_set_match=binding_set_match, ts_block=ts,
@@ -4103,7 +4113,7 @@ def _verify_restrictions(path: str, tsa_cert: Optional[str] = None) -> Dict:
         try:
             copy = os.path.join(tmp, "pack.json")
             try:
-                with open(copy, "w", encoding="utf-8") as fh:
+                with open(copy, "w", encoding="utf-8", newline="\n") as fh:
                     # ensure_ascii=False + compact separators: never longer than the file read (an escaped emoji would be),
                     # so a pack under the size bound stays under it; the parse is strict, so the copy means what the file meant
                     fh.write(json.dumps(ev, ensure_ascii=False, separators=(",", ":")))
@@ -4198,12 +4208,11 @@ def _to_devnull(stream) -> None:
 
 def _text_layer_bytes(stream, buf, text: str) -> bytes:
     """The bytes Python's own text layer over `buf` writes for `text` as the first thing written: its encoding and error
-    handler, "\\n" as os.linesep where the platform translates it (not Linux; not measured here), and a byte order mark
-    only where that layer puts one: utf-16 / utf-32 only on a stream seekable at offset 0 (a file), utf-8-sig on a pipe
-    too, none on a seekable stream past offset 0 (measured on Python 3.9, 3.11 and 3.13, 13/10/2026)."""
+    handler, and a byte order mark only where that layer puts one: utf-16 / utf-32 only on a stream seekable at offset 0
+    (a file), utf-8-sig on a pipe too, none on a seekable stream past offset 0 (measured on Python 3.9, 3.11 and 3.13,
+    13/10/2026). 1.11.0: "\\n" stays "\\n" on every system, as the JS verifier writes it and as the pack file is written;
+    up to 1.10.0 it became os.linesep, so a receipt or a message had "\\r\\n" on Windows."""
     import codecs
-    if os.linesep != "\n":
-        text = text.replace("\n", os.linesep)
     encoding = stream.encoding or "utf-8"
     enc = codecs.getincrementalencoder(encoding)(stream.errors or "strict")
     try:
@@ -4444,7 +4453,7 @@ def _main(argv: Optional[List[str]] = None) -> int:
     v = sub.add_parser("verify", allow_abbrev=False, add_help=False)
     v.add_argument("evidence")
     v.add_argument("--trusted-producer-key", action="append", default=None, metavar="ALG=B64",
-                   help="pin a producer public key as <sig_alg>=<base64> (e.g. ed25519=…, ml-dsa-65=…); may repeat. With any pin, an unpinned producer is not authentic")
+                   help="pin a producer public key as <sig_alg>=<base64> (e.g. ed25519=…, ml-dsa-65=…); may repeat. With any pin, an unpinned producer is not authentic, and a pack without a producer block is not valid; with an ml-dsa-65 pin, a block without a valid ml-dsa-65 signature under a pinned key is not valid (1.11.0). Pin one producer at a time")
     v.add_argument("--require-producer", action="store_true", help="policy: a valid producer signature is required")
     v.add_argument("--require-pq", action="store_true", help="policy: a valid, PINNED post-quantum producer signature is required")
     v.add_argument("--trust-set-complete", action="store_true", help="policy (1.6.0): the pinned producer keys are the COMPLETE trust set — a producer key outside it is then also a policy failure (policy.unmet trust_set_complete); never turns a key_unresolved into signature_invalid")
@@ -4509,13 +4518,25 @@ def _main(argv: Optional[List[str]] = None) -> int:
         def _read(flag, path, as_json=False):
             try:
                 with open(path, encoding="utf-8") as f:
-                    return json.load(f) if as_json else f.read()
+                    text = f.read()
             except OSError as e:
                 p.error(f"{flag}: cannot read {path!r} ({type(e).__name__})")
             except ValueError as e:
                 p.error(f"{flag}: {path!r} is not valid JSON ({e})")
-            except RecursionError:   # 1.7.1: measured on 1.7.0, a --key file 100000 arrays deep was a traceback (exit 1)
-                p.error(f"{flag}: {path!r} nests too deep to be parsed")
+            if not as_json:
+                return text
+            # 1.11.0 (SPEC §3.1): the nesting is counted on the text before the parser, bound MAX_JSON_DEPTH: a pack holding
+            # it would be refused, so it is the refusal build gives such a pack (exit 1), on every Python. Up to 1.10.0 the
+            # bound here was json's RecursionError, whose depth differs: measured 2026-11-24 on v1.10.0, a --key JWK with a
+            # member 5000 deep was exit 2 ("nests too deep to be parsed") on 3.9 and exit 1 on 3.13 and 3.14; 20000 deep,
+            # exit 2 on 3.13 and exit 1 on 3.14.
+            if _nesting_depth(text) > MAX_JSON_DEPTH:
+                raise Ap2EvidenceError(f"the pack would be refused by verify (SPEC §3.1): json_too_deep: nesting exceeds "
+                                       f"{MAX_JSON_DEPTH} — not built")
+            try:
+                return json.loads(text)
+            except ValueError as e:
+                p.error(f"{flag}: {path!r} is not valid JSON ({e})")
 
         arts = []
         for spec in a.artifacts:
@@ -4541,7 +4562,10 @@ def _main(argv: Optional[List[str]] = None) -> int:
             p.error(f"--key and --jwks-url both name {both[0]!r}: ambiguous (one key source per artifact)")
         keys = {}
         for name, path in key_pairs:
-            keys[name] = _read("--key", path, as_json=True)
+            try:
+                keys[name] = _read("--key", path, as_json=True)
+            except Ap2EvidenceError as e:
+                return _refused(str(e))
             if not isinstance(keys[name], dict) or not keys[name]:   # a list was an AttributeError traceback; null and {}
                 p.error(f"--key: {path!r} is not a non-empty JSON object (a JWK)")   # fell back to the header key in silence
         jwks = dict(jwks_pairs)

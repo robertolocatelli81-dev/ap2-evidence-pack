@@ -494,7 +494,7 @@ function verifyProducerBlock(block, message, trusted) {
       nFail++; results.push({ sig_alg: alg, status: "FAIL", post_quantum: alg === "ml-dsa-65", key_trusted: null, note: entryShapeNote(s) }); allPinned = false; continue; }
     const v = verifyProducer(alg, pub, s.signature_b64, message);
     const status = v === true ? "PASS" : v === null ? "SKIP" : "FAIL"; if (v === true) nPass++; else if (v === false) nFail++; else nSkip++;
-    let keyTrusted = null; if (trusted !== null) { const allowed = Object.hasOwn(trusted, alg) ? trusted[alg] : []; keyTrusted = allowed.includes(pub); if (!keyTrusted) allPinned = false; }
+    let keyTrusted = null; if (trusted !== null) { const allowed = Object.hasOwn(trusted, alg) ? [].concat(trusted[alg]) : []; keyTrusted = allowed.includes(pub); if (!keyTrusted) allPinned = false; }   // 1.11.0: a pin given as one string is that key, as in the reference (String.includes was a substring match)
     if (v === true && alg === "ml-dsa-65" && (trusted === null || keyTrusted)) pq = true;
     results.push({ sig_alg: alg, status, post_quantum: alg === "ml-dsa-65", key_trusted: keyTrusted });
   }
@@ -1177,8 +1177,12 @@ function verifyEvidenceInner(path, opts) {
   // 1.10.0 — SPEC §6 step 6, §6.9: a pinned producer set implies require_producer: a block ABSENT does not meet it
   // (up to 1.9.0 only a present block was held to the set: measured 2026-11-20, the block removed → valid: true, unmet [])
   const pinAbsent = (opts.trusted ?? null) !== null && !producer.present;
-  const policyOk = unmet.length === 0 && !pinAbsent;
-  if ((opts.trusted ?? null) !== null && (pinAbsent || producer.trusted !== true)) unmet.push("trusted_producer_keys");
+  // 1.11.0 — SPEC §5, §6 step 6: a pinned set that holds an ml-dsa-65 key requires a valid ml-dsa-65 signature under a pinned
+  // key (up to 1.10.0 the ml-dsa-65 entry removed and `scheme` relabelled classical-only was valid with both keys pinned)
+  const pinPqMissing = (opts.trusted ?? null) !== null && Object.hasOwn(opts.trusted, "ml-dsa-65") && opts.trusted["ml-dsa-65"].length > 0
+    && producer.trusted === true && !producer.pq_protected;
+  const policyOk = unmet.length === 0 && !pinAbsent && !pinPqMissing;
+  if ((opts.trusted ?? null) !== null && (pinAbsent || pinPqMissing || producer.trusted !== true)) unmet.push("trusted_producer_keys");
   const states = deriveStates({ digestOk, artResults, bindingSetMatch, tsBlock: ts, rfcBlock, anchorResults, tsaRequested: Boolean(opts.tsaCert),
     producer, pinned: (opts.trusted ?? null) !== null, trustAnchorGiven: false });
   if (opts.trustSetComplete && states.producer_signature.reasons.includes("key_unresolved")) unmet.push("trust_set_complete");

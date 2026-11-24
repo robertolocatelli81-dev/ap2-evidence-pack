@@ -222,7 +222,7 @@ class ProducerIdentity:
         if st is not None and not _stat.S_ISREG(st.st_mode):
             if _stat.S_ISDIR(st.st_mode):
                 raise IsADirectoryError(f"{path}: is a directory")
-            with open(path, "w", encoding="utf-8") as f:
+            with open(path, "w", encoding="utf-8", newline="\n") as f:
                 json.dump(data, f)
             return path
         real = os.path.realpath(path)
@@ -238,7 +238,7 @@ class ProducerIdentity:
             except FileExistsError:
                 continue
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
                 fd = None
                 json.dump(data, f)
                 f.flush()

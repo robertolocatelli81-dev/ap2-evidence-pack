@@ -1,0 +1,65 @@
+{
+ "description": "The same bytes as producer_pq_stripped_pinned under the ed25519 pin alone: the set of a classical-only producer holds no ml-dsa-65 key, so a classical-only block whose key it pins meets it (SPEC §5) — valid. Control of the 1.11.0 rule: unchanged from 1.10.0.",
+ "normative": {
+  "anchors_verified": 0,
+  "bindings_ok": true,
+  "digest_ok": true,
+  "policy_ok": true,
+  "pq_protected": false,
+  "producer_ok": true,
+  "producer_present": true,
+  "producer_trusted": true,
+  "rfc3161_claimed": false,
+  "rfc3161_verified": null,
+  "self_asserted_only": true,
+  "valid": true
+ },
+ "policy": {
+  "require_anchor": false,
+  "require_pq": false,
+  "require_producer": false,
+  "trusted_producer_keys": {
+   "ed25519": [
+    "k1x7jczT0v9N/WFl8yn00b5iNHW3buvy0vIniQ4yy8s="
+   ]
+  }
+ },
+ "states": {
+  "admission": "admitted",
+  "policy": {
+   "met": true,
+   "unmet": []
+  },
+  "refusal_class": null,
+  "subjects": {
+   "holder_binding": {
+    "reasons": [
+     "not_present"
+    ],
+    "state": "not_evaluated"
+   },
+   "issuer_identity": {
+    "reasons": [
+     "self_asserted",
+     "self_asserted"
+    ],
+    "state": "not_evaluated"
+   },
+   "producer_signature": {
+    "reasons": [],
+    "state": "verified"
+   },
+   "sealed_content": {
+    "reasons": [],
+    "state": "verified"
+   },
+   "time_anchor": {
+    "reasons": [
+     "not_present"
+    ],
+    "state": "not_evaluated"
+   }
+  }
+ },
+ "vector": "producer_pq_stripped_classical_pin"
+}

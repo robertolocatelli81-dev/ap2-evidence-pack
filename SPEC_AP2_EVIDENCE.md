@@ -1,7 +1,19 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Copyright 2026 Roberto Locatelli -->
 
-# ap2-evidence-pack — normative format v1.0 (2026-09-05), specification revision 1.10.0 (2026-11-22)
+# ap2-evidence-pack — normative format v1.0 (2026-09-05), specification revision 1.11.0 (2026-11-24)
+
+> Revision 1.11.0 (2026-11-24): §5, §6 step 6, §6.9 and §10, the downgrade of a hybrid producer block is named and closed.
+> Removing the `ml-dsa-65` entry of a hybrid block and setting `scheme` to `classical-only` leaves a block that verifies:
+> its classical signature is over the same digest, and `classical-only` is a scheme this format defines. Up to 1.10.0 such
+> a pack was `valid: true` with both producer keys pinned, also under `trust_set_complete` and `require_producer`;
+> only `require_pq` refused it (measured on 2026-11-24 on the PyPI wheel 1.10.0 and on the tag v1.10.0, both verifiers).
+> Now a pinned producer set that holds an `ml-dsa-65` key requires a valid `ml-dsa-65` signature under a pinned key: a
+> pack without one is not `valid`, `policy_ok` false, `policy.unmet` `trusted_producer_keys` (§5 says how a relying party
+> that accepts several producers keeps their sets apart). The canonical scope statement (§8) is unchanged. §7, two vectors
+> added (sixty-one). §3.1: a JSON file the reference reads besides the pack (a `--key` file, a fetched JWKS) is bounded by
+> the same nesting count, on the text before the parser, so its verdict no longer depends on the Python version. §1–§4
+> otherwise, §8, §9 and §11–§13 are unchanged; every vector of 1.10.0 keeps its expected file.
 
 > Revision 1.10.0 (2026-11-22): §6 step 2, the issuer signature is verified only under the
 > `alg` the signed header names (`issuer_alg_not_es256`); §3.2, an openssl that does not answer on the key-identifier
@@ -584,6 +596,14 @@ blocks, and refuses (exit 1, one line `{"error": …}` on stderr, no file) what 
 `--key` JWK with a member nested 600 deep or a member that is a float, a pack of 116 670 431 bytes (a token with one 50 MB
 disclosure); `stamp` and `sign_evidence`, a pack 200 bytes under the bound taken to 67 109 963 and 67 116 150 bytes.
 
+1.11.0: the reference counts the nesting of every JSON text it parses on the text itself, outside strings, before the
+parser — the pack (as before), a `--key` file of `build` (deeper than 512: the refusal `build` gives a pack that deep,
+exit 1, `json_too_deep: nesting exceeds 512`, no file) and a fetched JWKS body (`JWKS body is not JSON: json_too_deep:
+nesting exceeds 512`). Up to 1.10.0 the last two were bounded by the interpreter's RecursionError, whose depth is not the
+same on every Python: measured on 2026-11-24, `json.loads` of 5000 nested arrays raises it on CPython 3.9 and 3.11 and
+returns on 3.12, 3.13 and 3.14, and of 20000 returns on 3.14 only; a `--key` JWK with a member 5000 deep was exit 2 on
+3.9 and exit 1 on 3.13 (v1.10.0).
+
 ### 3.2 RFC 3161 token check (NORMATIVE when `anchored`)
 
 `rfc3161.verified` is `true` iff the token parses as a TimeStampResp, its status is
@@ -783,7 +803,20 @@ authenticity. When the relying party supplies a pinned trust set
 (`{sig_alg: [public_key_b64, ...]}`), `producer_trusted` is `true` only if every
 present signature's key is pinned; a valid-but-unpinned signature MUST reject
 the pack even with no policy flags set. 1.10.0: a pinned set implies `require_producer` — a pack without a producer
-block does not meet it (§6 step 6). Without a pinned set `producer_trusted`
+block does not meet it (§6 step 6). 1.11.0: a pinned set that holds an `ml-dsa-65` key (a key under `ml-dsa-65`: a
+string, or a list that is not empty) requires a valid `ml-dsa-65` signature under a pinned key — a block that is `ok`
+and `trusted` but has none does not meet the set (§6 step 6; `pq_protected` is `false` on it). This closes the
+**downgrade of a hybrid block**: remove its `ml-dsa-65` entry and set `scheme` to `classical-only`, and what is left
+verifies (the classical signature is over the same recomputed digest; `scheme` agrees with the entries), so up to 1.10.0
+that pack was `valid` under the very set that pinned the removed key — the strip showed only in `pq_protected` and
+`scheme`. A set without an `ml-dsa-65` key is unchanged: it accepts a `classical-only` block whose keys it pins, the
+block a signer writes when it has no ML-DSA-65 backend. **A pinned set is one producer's.** The format does not say which
+producer signed a pack, and a set does not say which of its keys a given pack must carry; so a set that joins the keys
+of a hybrid producer with those of a `classical-only` producer holds an `ml-dsa-65` key, and refuses every pack of the
+second (`trusted_producer_keys`) rather than accept a stripped pack of the first. A relying party that accepts packs from
+several producers keeps one set per producer and verifies each pack under the set of the producer it holds out-of-band
+responsible for it; for a producer that moved from `classical-only` to hybrid, its earlier packs are verified under the
+set it used then, without the `ml-dsa-65` key. Without a pinned set `producer_trusted`
 is `null` and the pack MUST NOT be treated as authentic. `pq_protected` is true
 only on a valid ML-DSA-65 signature whose key is pinned (or no pin set given).
 1.5.4: both are statements about a block that verified. When the block is not `ok`, `producer_trusted` is `null`
@@ -900,7 +933,10 @@ flags: `require_producer`, `require_pq`, `require_anchor`, and `min_anchors` (1.
    `require_producer`; `policy.unmet` names `trusted_producer_keys`, not `require_producer`, which the relying party did
    not pass — both when it passed both; up to 1.9.0 the set was applied only to a block that was present: measured
    2026-11-20 on 1.9.0, the block removed from a pack whose producer key was pinned gave `valid: true` and
-   `policy.unmet: []` in both verifiers); if `require_pq` and not (`pq_protected` and `producer_trusted` true);
+   `policy.unmet: []` in both verifiers); 1.11.0, if the pinned set holds an `ml-dsa-65` key and the block is `ok`,
+   `producer_trusted` true and `pq_protected` false (§5: no valid `ml-dsa-65` signature under a pinned key;
+   `policy.unmet` names `trusted_producer_keys`; a block that is not `ok` or not trusted already fails the set, step 8,
+   and keeps the `policy_ok` it had); if `require_pq` and not (`pq_protected` and `producer_trusted` true);
    if `anchors_verified` < `min_anchors` (§3.3; `require_anchor` alone is `min_anchors = 1`, so missing,
    unverifiable and failing anchors all reject — "claimed" never upgrades to "proven").
    The receipt also carries `mldsa_backend` (informative): whether that verifier can check
@@ -1042,7 +1078,8 @@ receipt of both verifiers also carries:
 - `policy` (admitted packs): `{"met": bool, "unmet": [...]}`. `unmet` names, in this order, each requirement of the
   relying party the pack does not meet: `require_producer`, `require_pq`, `require_anchor`, `min_anchors` (§6 step 6),
   `require_binding` (1.9.0, below), `trusted_producer_keys` (a pinned set is given and the producer block is absent —
-  1.10.0, §6 step 6 — or present and not `trusted`, §5) and `trust_set_complete` (below). `met` is true iff `unmet` is empty. `policy_ok` keeps its §6 step 6
+  1.10.0, §6 step 6 — or present and not `trusted`, §5, or — 1.11.0, §5 — `trusted` without a valid `ml-dsa-65`
+  signature while the set holds an `ml-dsa-65` key) and `trust_set_complete` (below). `met` is true iff `unmet` is empty. `policy_ok` keeps its §6 step 6
   meaning and, since 1.9.0, is also false when `require_binding` is unmet. A policy is a disposition of the relying party,
   not a state of the pack.
 - `require_binding` (1.9.0; `--require-binding IN->TO`, repeatable, both verifiers; `require_bindings`, a list of
@@ -1142,7 +1179,12 @@ openssl ABSENT is neither: as in 1.5.x the field is `null` (`tsa_verified`, `cha
 Run every `spec/vectors/ap2/<name>.json` under the policy in
 `<name>.expected.json` and reproduce the `normative` block exactly
 (`run_ap2_conformance.py` does this for the reference; exit 0 = conformant).
-The set contains fifty-nine vectors (1.10.0: + 2 — `issuer_x5c_key_purpose_not_signing`, the key purpose of §6 step 7:
+The set contains sixty-one vectors (1.11.0: + 2, the downgrade of §5 — `producer_pq_stripped_pinned`, `valid_signed`
+with its `ml-dsa-65` entry removed and `scheme` set to `classical-only`, under both keys of `valid_signed` pinned and no
+other policy: not `valid`, `policy_ok` false, `producer_signature` `verified`, `policy.unmet` `trusted_producer_keys`;
+`valid: true` and `policy.unmet: []` under 1.10.0 in both verifiers, measured 2026-11-24 — and
+`producer_pq_stripped_classical_pin`, the same bytes under the `ed25519` key alone, `valid`, as under 1.10.0; neither
+depends on the ML-DSA-65 backend, measured; 1.10.0: + 2 — `issuer_x5c_key_purpose_not_signing`, the key purpose of §6 step 7:
 an x5c leaf with keyUsage keyCertSign only and extendedKeyUsage serverAuth only under `trust_anchor`
 `issuer_purpose_ca.crt`, `valid`, `issuer_identity` `contradicted` `key_purpose_not_signing`, `self_asserted_only`
 true, needs openssl; on eade795, before the rule, `verified` `ca_certified` and `self_asserted_only` false, measured
@@ -1337,8 +1379,11 @@ does not emit their names. Since 1.6.0 the receipt states its verdict in four fi
 digest covers the sealed content (§3), not `rfc3161_timestamp`, `producer_signatures` or `anchors`, so a copy with a
 signature or an anchor removed, or re-signed, has the same digest (and a copy with its producer block removed has the
 states of a pack that never had one, §6.9). Record the SHA-256 of
-the whole file, or verify with pinned producer keys (since 1.10.0 they imply `require_producer`, §6 step 6), plus `require_anchor` or `min_anchors` when
-a ground rests on the pack's time.
+the whole file, or verify with pinned producer keys (since 1.10.0 they imply `require_producer`, §6 step 6; since 1.11.0 a
+set that holds the producer's `ml-dsa-65` key also requires its signature, so the downgrade of §5 — the `ml-dsa-65` entry
+removed, `scheme` relabelled `classical-only` — is not `valid` under it; with 1.10.0 and earlier, pass `require_pq`
+with the pins), plus `require_anchor` or `min_anchors` when a ground rests on the pack's time. Keep one pinned set per
+producer (§5): a set that joins a hybrid producer's keys with a `classical-only` producer's refuses the second's packs.
 
 **First, was the pack evaluated at all: `admission`.** `refused` means the verifier did not evaluate the pack; its
 `digest_ok`, `bindings_ok`, `policy_ok` and `valid` are `false` by construction, not measured, and a reader of those
@@ -1358,7 +1403,7 @@ run. `74` with nothing or a cut JSON means the receipt was not written. Read the
 | `contradicted` on `sealed_content`, `holder_binding`, `time_anchor` or `producer_signature` | a check ran and failed: the sealed content is not what was sealed, an artifact or a KB-JWT does not verify, a claimed anchor does not bind this digest, a producer signature fails; `valid` is `false` whatever the policy | do not rely on the pack; the submitting party may supply a conformant one |
 | `contradicted` on `issuer_identity` (`chain_broken`) | a certificate signature inside an x5c chain fails; `valid` is unchanged (a chain never decides `valid`, §6 step 7) | do not rely on that key's certificate for the issuer's identity |
 | `not_evaluated` | the property was not established HERE — never a pass, never tampering | supply what the reason names and verify again: `instrument_failure` — a verifier and machine that can run the check; `backend_missing` — a verifier with ML-DSA-65; `self_asserted` or `key_unresolved` on the producer — the producer's key, obtained out of band and pinned; `tsa_not_checked` or `tsa_invalid` — the certificate of a TSA you trust (`--tsa-cert`); `no_trust_anchor`, `chain_unresolved` or `self_asserted` on the issuer — your trust anchor, or the out-of-band key comparison below; `holder_key_unknown` — the holder binding is not established by this pack; `not_present` — the pack carries no such element |
-| `verified` | the check ran and passed, within its scope: `producer_signature` — signed by a key YOU pinned; `time_anchor` — every token binds this digest and is signed by a TSA whose certificate you gave, at its `gen_time`; `issuer_identity` (`ca_certified`) — a CA under your anchor certified each key, never that the key is the issuer's: `x5c_leaf` names the certificate holder, which you match to the issuer | rely on that property, in that scope |
+| `verified` | the check ran and passed, within its scope: `producer_signature` — signed by a key YOU pinned (by a classical key alone when your set holds no `ml-dsa-65` key: `pq_protected` and `producer_signatures.scheme` say which); `time_anchor` — every token binds this digest and is signed by a TSA whose certificate you gave, at its `gen_time`; `issuer_identity` (`ca_certified`) — a CA under your anchor certified each key, never that the key is the issuer's: `x5c_leaf` names the certificate holder, which you match to the issuer | rely on that property, in that scope |
 
 `policy.unmet` names what the pack lacks for THIS relying party (`require_producer`, `require_pq`, `require_anchor`,
 `min_anchors`, `trusted_producer_keys`, `trust_set_complete`): the content may be intact; ask for the missing element or

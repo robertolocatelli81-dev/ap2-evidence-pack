@@ -1,5 +1,51 @@
 # Changelog
 
+## 1.11.0 — 2026-11-24 — the downgrade of a hybrid producer block, the same bytes on every system, one nesting bound on every Python
+
+A minor version: it adds refusals (README "Versioning"). A pack that was `valid` under a pinned producer set holding an
+`ml-dsa-65` key, with no `ml-dsa-65` signature in its block, is not any more; nothing else that was `valid` changes, and
+every 1.10.0 vector keeps its expected file and is reproduced as before (all 59 by the reference, and by the JS
+verifier the 52 that do not need openssl). Of the 18 tests added, the 10 that state
+the new behaviour fail on v1.10.0 on Python 3.9, 3.13 and 3.14; the other 8 are controls that pass on both.
+
+- SPEC §5, §6 step 6, §6.9, §10, both verifiers: a pinned producer set that holds an `ml-dsa-65` key requires a valid
+  `ml-dsa-65` signature under a pinned key. Removing the `ml-dsa-65` entry of a hybrid block and setting `scheme` to
+  `classical-only` leaves a block that verifies; up to 1.10.0 that pack was `valid: true` with both producer keys
+  pinned, also with `--trust-set-complete` and `--require-producer`, and only `--require-pq` refused it (measured on
+  2026-11-24 on the PyPI wheel 1.10.0, SHA-256 `36a176df…accc`, and on the tag v1.10.0 in both verifiers; raised in
+  google-agentic-commerce/AP2#338). Now it is not `valid`, `policy_ok` is false and `policy.unmet` names
+  `trusted_producer_keys`, whatever ML-DSA-65 backend the verifier has. A set without an `ml-dsa-65` key accepts a
+  `classical-only` block whose key it pins, as before. SPEC §5 says that a pinned set is one producer's: a set that
+  joins a hybrid producer's keys with a `classical-only` producer's refuses the second's packs (no silent acceptance);
+  a relying party keeps one set per producer. The canonical scope statement (§8) is unchanged.
+  `test_ap2_pin_pq.py` (9 tests, the content changed and re-signed with the classical key alone among them); two vectors,
+  `producer_pq_stripped_pinned` and `producer_pq_stripped_classical_pin` (`make_vectors_1110.py`, derived from
+  `valid_signed` with no new key).
+- JS verifier: a pin passed to `verifyEvidence` as one string (`trusted: {ed25519: "<key>"}`) was compared with
+  `String.includes`, so `"x<key>y"` pinned `<key>`; it is now that one key, as in the reference. The command line always
+  passed lists and was not affected.
+- Files are written with `\n` on every system. `build`, `sign_evidence`, `stamp`, the private copy of `restriction` and
+  `ProducerIdentity.save` opened their file in text mode without `newline=`, so on Windows every line end was `\r\n`
+  (reported by cryptovalid-opencore's Windows port on 2026-11-24): the bytes of the pack, and the SHA-256 of the whole
+  file that SPEC §10 tells a relying party to record, differed from the same pack written elsewhere. `digest_ok` itself
+  does not depend on line ends (the digest is over the canonical form, §3): a pack with every `\n` turned into
+  `\r\n` verifies with `digest_ok: true` under 1.10.0 (measured on Linux). The receipt and the messages on
+  stdout/stderr keep `\n` too (the code turned it into `os.linesep`), as the JS verifier writes them.
+  `test_ap2_bytes_every_os.py` reads the code for text writes without `newline=` (six on v1.10.0) and the bytes written.
+- SPEC §3.1: a `--key` file of `build` and a fetched JWKS body are bounded like the pack, by the nesting counted on the
+  text before the parser (512). Up to 1.10.0 they were bounded by json's RecursionError, whose depth differs by Python:
+  measured on 2026-11-24, `json.loads` of 5000 nested arrays raises it on 3.9 and 3.11 and returns on 3.12–3.14, and of
+  20000 returns on 3.14 only; a `--key` JWK with a member 5000 deep was exit 2 on 3.9 and exit 1 on 3.13, 20000 deep
+  exit 2 on 3.13 and exit 1 on 3.14 (v1.10.0). Now a key file deeper than 512 is the refusal `build` gives a pack that
+  deep (exit 1, `json_too_deep: nesting exceeds 512`, no file) on every Python, and a JWKS body deeper than 512 is
+  `JWKS body is not JSON: json_too_deep: nesting exceeds 512`. `test_ap2_depth.py` updated (two keys of its table).
+- CI: every push to any branch; Linux on Python 3.9, 3.10, 3.11, 3.12, 3.13 and 3.14, macOS and Windows on 3.13, each
+  with node 24 and OpenSSL 3, and Linux 3.9 and 3.14 with node and openssl removed from the runner; every action pinned
+  by commit SHA. `release.yml` (new): on a tag, the wheel and the sdist built from `git archive` of the tag, their
+  SHA256SUMS checked on a line of its own, build provenance attested, a draft release; `pypi.yml` also checks that
+  attestation before it uploads. `verifiers/lax_python_ablation.sh` takes the interpreter from `PYTHON` and reads and
+  writes its copy as UTF-8.
+
 ## 1.10.0 — 2026-11-22 — fixes after an internal review of 1.8.0, measured again on 1.9.0 on 2026-11-20
 
 A minor version, not a patch: it adds refusals (README "Versioning": "new refusals may change in a minor release"), a

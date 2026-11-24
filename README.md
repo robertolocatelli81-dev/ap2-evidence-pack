@@ -45,13 +45,13 @@ Mandate token of AP2's documentation (google-agentic-commerce/AP2 at `e1ea56d`, 
 `test_ap2_restriction.py`):
 
 ```bash
-pip install ap2-evidence-pack==1.10.0
+pip install ap2-evidence-pack==1.11.0
 git clone --depth 1 https://github.com/robertolocatelli81-dev/ap2-evidence-pack && cd ap2-evidence-pack/spec/vectors/beacon
 python3 -c "import json, ap2_nist_beacon as B; L=lambda f: json.load(open(f))['pulse']; c=open('cert_chain2.pem').read(); [print(B.verify_pair(L(a), L(b), c, B.PINNED)['reason'] or 'verified', a) for a, b in (('chain2_2030310.json', 'chain2_2030309.json'), ('chain2_2030309.json', 'chain2_2030310.json'))]"
 cd ../../.. && python3 -c "import base64, json, ap2_evidence as A, test_ap2_restriction as T; h = json.loads(base64.urlsafe_b64decode(T.AP2_PAY_OPEN.split('.')[0] + '==')); print(h); print(A.check_jose_header(h, 'example+sd-jwt', ['ES256'])); print(A.check_jose_profile(h, 'sd-jwt-vc', ['ES256']))"
 ```
 
-Output (measured on 2026-11-22, Python 3.13, network off):
+Output (measured on 2026-11-24 on the 1.11.0 tree, Python 3.13, network off; the same five lines as 1.10.0 gave on 2026-11-22):
 
 ```
 verified chain2_2030310.json
@@ -234,7 +234,11 @@ integrity/authenticity survives the quantum transition (NIST IR 8547). Verificat
 fail-closed; authenticity requires the relying party to **pin** the producer public keys
 out of band (an embedded key proves consistency, never authenticity). Policy flags on
 `verify_evidence`: `require_producer`, `require_pq`, `require_anchor`, and since 1.5.0 `min_anchors`; since 1.10.0 a
-pinned set implies `require_producer` (a pack without a producer block is not `valid` under it, SPEC §6 step 6). The ML-DSA-65
+pinned set implies `require_producer` (a pack without a producer block is not `valid` under it, SPEC §6 step 6); since
+1.11.0 a pinned set that holds an `ml-dsa-65` key requires a valid `ml-dsa-65` signature under a pinned key, so a hybrid
+block with its `ml-dsa-65` entry removed and `scheme` relabelled `classical-only` is not `valid` under the keys it was
+signed with (up to 1.10.0 it was, unless `require_pq` was passed; SPEC §5). Keep one pinned set per producer: a set
+that also holds a `classical-only` producer's key refuses that producer's packs (SPEC §5). The ML-DSA-65
 path is checked against NIST ACVP sigVer vectors (`pqcrypto/vectors/`): every case of the ML-DSA-65 external/pure
 group of usnistgov/ACVP-Server (15), written by `pqcrypto/vectors/make_acvp_mldsa65.py` from NIST's JSON at a pinned
 commit — a local check against public test data, not a NIST validation. Running an ACVP subset in both stacks was

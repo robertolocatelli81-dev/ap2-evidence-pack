@@ -294,9 +294,12 @@ class TestBuildCommand(unittest.TestCase):
                 ("float member", json.dumps(dict(jwk, ext=1.5)), 1, "float"),
                 ("member 600 deep", json.dumps(dict(jwk, ext=json.loads("[" * 600 + "]" * 600))), 1, "json_too_deep"),
                 ("integer beyond 2^53", json.dumps(dict(jwk, ext=2 ** 60)), 1, "portable range"),
-                ("file 100000 arrays deep", "[" * 100000 + "]" * 100000, 2, "nests too deep"),
+                # 1.11.0 (SPEC §3.1): the nesting of a --key file is counted on the text, so a file too deep is the refusal of a
+                # pack that deep on every Python (up to 1.10.0: exit 2 where json's RecursionError came first, a depth that
+                # differs by Python, else exit 1)
+                ("file 100000 arrays deep", "[" * 100000 + "]" * 100000, 1, "json_too_deep"),
                 # NEMESIS1 1.7.1: parsed by json.load, then deeper than _canon's recursion (3.9/3.11: 987-990 = traceback)
-                ("member 988 deep", json.dumps(jwk)[:-1] + ', "ext": ' + "[" * 988 + "]" * 988 + "}", None, "json_too_deep"),
+                ("member 988 deep", json.dumps(jwk)[:-1] + ', "ext": ' + "[" * 988 + "]" * 988 + "}", 1, "json_too_deep"),
                 ("a list", "[" + json.dumps(jwk) + "]", 2, "not a non-empty JSON object"),
                 ("null", "null", 2, "not a non-empty JSON object"),
                 ("an empty object", "{}", 2, "not a non-empty JSON object")):
