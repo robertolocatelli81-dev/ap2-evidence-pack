@@ -271,10 +271,15 @@ def _limit_memory():
 def refusal_of(cmd, path):
     """The `refused` reason of one verifier on a file-object case: BLOCKED on timeout, CRASH:<exit> without a JSON receipt."""
     try:
+        # Linux: RLIMIT_DATA; macOS refuses to set it (1.11.0, CI run of 2026-11-24): the children's peak resident size is
+        # checked after the run instead; Windows has no resource module
+        linux = resource is not None and sys.platform.startswith("linux")
         out = subprocess.run(list(cmd) + [path], capture_output=True, text=True, timeout=HAZARD_TIMEOUT,
-                             preexec_fn=_limit_memory if resource is not None else None)
+                             preexec_fn=_limit_memory if linux else None)
     except subprocess.TimeoutExpired:
         return "BLOCKED"
+    if resource is not None and sys.platform == "darwin" and resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss >= HAZARD_MEM:
+        return "MEMORY"
     try:
         r = json.loads(out.stdout)
     except ValueError:

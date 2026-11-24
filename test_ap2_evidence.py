@@ -481,13 +481,19 @@ class TestFileObjects(unittest.TestCase):
         import subprocess
         try:
             import resource
-            lim = lambda: resource.setrlimit(resource.RLIMIT_DATA, (1500 << 20, 1500 << 20))  # noqa: E731 — /dev/zero read whole must not take the host down
         except ImportError:
-            lim = None
+            resource = None
+        # /dev/zero read whole must not take the host down: Linux enforces RLIMIT_DATA; macOS refuses to set it (the
+        # preexec_fn raised, CI run of 2026-11-24) and does not enforce it, so there the children's peak resident size is
+        # checked after the run instead (ru_maxrss, bytes on macOS); Windows has neither fork nor the resource module
+        linux = resource is not None and sys.platform.startswith("linux")
+        lim = (lambda: resource.setrlimit(resource.RLIMIT_DATA, (1500 << 20, 1500 << 20))) if linux else None  # noqa: E731
         try:
             r = subprocess.run([sys.executable, os.path.join(_HERE, "ap2_evidence.py"), "verify", path], capture_output=True, text=True, timeout=20, preexec_fn=lim)
         except subprocess.TimeoutExpired:
             return "BLOCKED", None
+        if resource is not None and sys.platform == "darwin":
+            self.assertLess(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss, 1500 << 20, path)
         try:
             return r.returncode, json.loads(r.stdout)
         except ValueError:

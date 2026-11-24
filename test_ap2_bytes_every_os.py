@@ -102,6 +102,17 @@ class Bytes(unittest.TestCase):
         with mock.patch.object(A.os, "linesep", "\r\n"):
             self.assertEqual(A._text_layer_bytes(stream, buf, '{\n "a": 1\n}\n'), b'{\n "a": 1\n}\n')
 
+    def test_message_bytes_are_utf8_on_an_ansi_code_page(self):
+        """Windows gives a pipe cp1252: "§" was written as 0xA7 there (CI run of 2026-11-24), not as the JS verifier writes it.
+        Under PYTHONIOENCODING the encoding it names is kept (test_receipt_not_written covers those)."""
+        buf = io.BytesIO()
+        stream = io.TextIOWrapper(buf, encoding="cp1252", newline="\n")
+        env = {k: v for k, v in os.environ.items() if k != "PYTHONIOENCODING"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(A._text_layer_bytes(stream, buf, "SPEC \u00a79.1\n"), "SPEC \u00a79.1\n".encode("utf-8"))
+        with mock.patch.dict(os.environ, dict(env, PYTHONIOENCODING="cp1252"), clear=True):
+            self.assertEqual(A._text_layer_bytes(stream, buf, "\u00a7"), b"\xa7")
+
     def test_cli_receipt_has_no_cr(self):
         p = subprocess.run([sys.executable, os.path.join(ROOT, "ap2_evidence.py"), "verify", VECTOR], capture_output=True, timeout=120)
         self.assertEqual(p.returncode, 0, p.stderr)

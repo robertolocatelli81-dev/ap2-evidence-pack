@@ -91,8 +91,22 @@ def write_vectors() -> None:
         _write_json(os.path.join(_HERE, name + ".expected.json"), exp)
 
 
+def unmeasurable_here() -> list:
+    """1.11.0: vectors whose `requires` names a tool absent on this machine (openssl): the reference cannot reproduce them
+    here with or without the backend, so their dependence is not measured here (a machine with the tool measures it)."""
+    import shutil
+    out = []
+    for f in sorted(os.listdir(_HERE)):
+        if f.endswith(".expected.json"):
+            with open(os.path.join(_HERE, f), encoding="utf-8") as fh:
+                if any(not shutil.which(t) for t in json.load(fh).get("requires", [])):
+                    out.append(f[:-len(".expected.json")])
+    return out
+
+
 def measured_backend_dependence() -> list:
-    """Vectors whose expected `normative` block the reference reproduces with the ML-DSA-65 backend and not without it."""
+    """Vectors whose expected `normative` block the reference reproduces with the ML-DSA-65 backend and not without it,
+    among those it can run here (`unmeasurable_here` lists the others)."""
     import run_ap2_conformance as rc
     sigsuite = ap2._sigsuite
     saved = sigsuite.MLDSA_AVAILABLE
@@ -104,6 +118,9 @@ def measured_backend_dependence() -> list:
         without = {r["vector"]: r["status"] for r in rc.run(honour_requirements=False)["results"]}
     finally:
         sigsuite.MLDSA_AVAILABLE = saved
+    skip = set(unmeasurable_here())
+    with_b = {v: s for v, s in with_b.items() if v not in skip}
+    without = {v: s for v, s in without.items() if v not in skip}
     bad = [v for v, s in with_b.items() if s != "PASS"]
     if bad:
         raise SystemExit(f"the reference does not reproduce {bad} WITH the backend: fix that first")
@@ -111,6 +128,8 @@ def measured_backend_dependence() -> list:
 
 
 def declare_backend() -> list:
+    if unmeasurable_here():   # a declaration is written only from a complete measurement
+        raise SystemExit(f"cannot measure {unmeasurable_here()} here (a required tool is absent): declare on a machine with it")
     dep = set(measured_backend_dependence())
     for name in sorted(f[:-len(".expected.json")] for f in os.listdir(_HERE) if f.endswith(".expected.json")):
         p = os.path.join(_HERE, name + ".expected.json")

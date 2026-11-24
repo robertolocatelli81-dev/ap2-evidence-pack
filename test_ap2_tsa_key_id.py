@@ -74,7 +74,7 @@ class Lab:
             f.write("[ tsa ]\ndefault_tsa = t1\n[ t1 ]\nserial = %s\ncrypto_device = builtin\nsigner_cert = %s\n"
                     "certs = %s\nsigner_key = %s\nsigner_digest = sha256\ndefault_policy = 1.2.3.4.1\ndigests = sha256\n"
                     "accuracy = secs:1\nordering = yes\ntsa_name = %s\ness_cert_id_chain = no\ness_cert_id_alg = sha256\n"
-                    % (j("serial"), j("tsa.crt"), j("ca.crt"), j("tsa.key"), "yes" if tsa_name else "no"))
+                    % (tuple(x.replace("\\", "/") for x in (j("serial"), j("tsa.crt"), j("ca.crt"), j("tsa.key"))) + ("yes" if tsa_name else "no",)))  # OpenSSL reads a backslash in a .cnf as an escape: Windows paths with forward slashes (1.11.0)
         _run("openssl", "ts", "-query", "-digest", DIGEST.hex(), "-sha256", "-cert", "-out", j("q.tsq"))
         _run("openssl", "ts", "-reply", "-queryfile", j("q.tsq"), "-config", j("tsa.cnf"), "-section", "t1",
              "-token_out", "-out", j("tok.der"))

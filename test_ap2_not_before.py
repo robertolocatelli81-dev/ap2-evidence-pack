@@ -49,6 +49,10 @@ def _b64u(b):
     return base64.urlsafe_b64encode(b).decode().rstrip("=")
 
 
+
+def _cnf(path):
+    return path.replace("\\", "/")  # OpenSSL reads a backslash in a .cnf as an escape: Windows paths with forward slashes (1.11.0)
+
 class Key:
     def __init__(self):
         self.sk = ec.generate_private_key(ec.SECP256R1())
@@ -97,8 +101,8 @@ class LocalTSA:
             f.write("01\n")
         self.cnf = os.path.join(d, "t.cnf")
         with open(self.cnf, "w") as f:
-            f.write(f"[ tsa ]\ndefault_tsa = t\n[ t ]\nserial = {self.serial}\ncrypto_device = builtin\nsigner_cert = {self.crt}\n"
-                    f"signer_key = {self.key}\nsigner_digest = sha256\ndefault_policy = 1.2.3.4.1\ndigests = sha256\nordering = no\n"
+            f.write(f"[ tsa ]\ndefault_tsa = t\n[ t ]\nserial = {_cnf(self.serial)}\ncrypto_device = builtin\nsigner_cert = {_cnf(self.crt)}\n"
+                    f"signer_key = {_cnf(self.key)}\nsigner_digest = sha256\ndefault_policy = 1.2.3.4.1\ndigests = sha256\nordering = no\n"
                     f"tsa_name = no\ness_cert_id_chain = no\ness_cert_id_alg = sha256\n")
 
     def stamp(self, digest_hex, tsa_url, timeout=20):

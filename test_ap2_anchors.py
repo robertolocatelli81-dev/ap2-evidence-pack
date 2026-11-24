@@ -34,6 +34,10 @@ def _rjson(p):
         return json.load(f)
 
 
+
+def _cnf(path):
+    return path.replace("\\", "/")  # OpenSSL reads a backslash in a .cnf as an escape: Windows paths with forward slashes (1.11.0)
+
 class LocalTSA:
     def __init__(self, d, cn):
         self.d = d; self.key, self.crt = os.path.join(d, cn + ".key"), os.path.join(d, cn + ".crt")
@@ -45,8 +49,8 @@ class LocalTSA:
             f.write("01\n")
         self.cnf = os.path.join(d, cn + ".cnf")
         with open(self.cnf, "w") as f:
-            f.write(f"[ tsa ]\ndefault_tsa = t\n[ t ]\nserial = {self.serial}\ncrypto_device = builtin\nsigner_cert = {self.crt}\n"
-                    f"signer_key = {self.key}\nsigner_digest = sha256\ndefault_policy = 1.2.3.4.1\ndigests = sha256\nordering = no\n"
+            f.write(f"[ tsa ]\ndefault_tsa = t\n[ t ]\nserial = {_cnf(self.serial)}\ncrypto_device = builtin\nsigner_cert = {_cnf(self.crt)}\n"
+                    f"signer_key = {_cnf(self.key)}\nsigner_digest = sha256\ndefault_policy = 1.2.3.4.1\ndigests = sha256\nordering = no\n"
                     f"tsa_name = no\ness_cert_id_chain = no\ness_cert_id_alg = sha256\n")
 
     def stamp(self, digest_hex, tsa_url, timeout=20):
@@ -467,7 +471,12 @@ class TestStampWrite(unittest.TestCase):
     def test_an_unwritable_directory_is_exit_74_not_a_traceback(self):
         # 1.5.2: the pack that cannot be written is EX_IOERR (74), no longer the refusal code 1 (CHANGELOG 1.5.2)
         ro = os.path.join(self.d, "ro"); os.makedirs(ro); p = os.path.join(ro, "p.json"); shutil.copy(self.pack, p)
-        os.chmod(ro, 0o555); self.addCleanup(os.chmod, ro, 0o755)
+        if os.name == "nt":   # 1.11.0: chmod does not stop a write into a directory there; the equivalent is the access list
+            who = os.environ["USERNAME"]
+            subprocess.run(["icacls", ro, "/deny", f"{who}:(AD,WD)"], check=True, capture_output=True)
+            self.addCleanup(subprocess.run, ["icacls", ro, "/remove:d", who], capture_output=True)
+        else:
+            os.chmod(ro, 0o555); self.addCleanup(os.chmod, ro, 0o755)
         rc, out, err = self._cli("stamp", p, "--tsa", "https://ok1")
         self.assertEqual(rc, 74); self.assertIn("not stamped", err); self.assertNotIn("Traceback", err)
 

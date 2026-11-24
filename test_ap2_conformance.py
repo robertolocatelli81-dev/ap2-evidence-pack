@@ -416,7 +416,8 @@ class TestExpectedFilesAndBackend(unittest.TestCase):
             self.skipTest("no ML-DSA-65 backend here: the dependence cannot be measured")
         declared = sorted(json.load(open(p, encoding="utf-8"))["vector"] for p in glob.glob(os.path.join(self.VDIR, "*.expected.json"))
                           if "requires_backend" in json.load(open(p, encoding="utf-8")))
-        self.assertEqual(declared, mv.measured_backend_dependence())
+        here = set(mv.unmeasurable_here())   # 1.11.0: without openssl its vectors cannot be measured here (CI cell without tools)
+        self.assertEqual([v for v in declared if v not in here], mv.measured_backend_dependence())
         self.assertEqual(len(declared), 21, declared)   # 1.6.0: 21 (the states block also depends on the backend)
         self.assertTrue(ap2._sigsuite.MLDSA_AVAILABLE)   # the measurement restored the backend
 
@@ -428,8 +429,13 @@ class TestExpectedFilesAndBackend(unittest.TestCase):
             r = rc.run()
             st = {x["vector"]: x["status"] for x in r["results"]}
             self.assertTrue(r["conformant"], r)
-            self.assertEqual(sum(v == "SKIP" for v in st.values()), 21, st)
-            self.assertEqual(sum(v == "PASS" for v in st.values()), 40, st)   # 1.11.0: + the two stripped-block vectors (a classical block alone: the same verdict without the backend, measured); 1.10.0: + issuer_alg_not_es256, issuer_x5c_key_purpose_not_signing (no producer block); 1.8.1: + the four new vectors (no producer block); 1.7.3: + the three key-source vectors (no producer block); 1.7.2: + sd_number_fraction, sd_number_integral_literal and their two _accepted twins (no producer block); 1.7.1: + sd_disclosures_too_deep (no producer block); 1.7.0: + sd_digest_repeated, sd_digest_repeated_sd, sd_claim_name_reserved (no producer block: no backend dependence)
+            import make_vectors_154 as mv   # 1.11.0: plus the vectors whose required tool (openssl) is absent here, SKIP too
+            declared = {json.load(open(p, encoding="utf-8"))["vector"] for p in glob.glob(os.path.join(self.VDIR, "*.expected.json"))
+                        if "requires_backend" in json.load(open(p, encoding="utf-8"))}
+            self.assertEqual(len(declared), 21)
+            skipped = declared | set(mv.unmeasurable_here())
+            self.assertEqual(sorted(v for v, x in st.items() if x == "SKIP"), sorted(skipped), st)
+            self.assertEqual(sum(v == "PASS" for v in st.values()), 61 - len(skipped), st)   # 40 where openssl is installed   # 1.11.0: + the two stripped-block vectors (a classical block alone: the same verdict without the backend, measured); 1.10.0: + issuer_alg_not_es256, issuer_x5c_key_purpose_not_signing (no producer block); 1.8.1: + the four new vectors (no producer block); 1.7.3: + the three key-source vectors (no producer block); 1.7.2: + sd_number_fraction, sd_number_integral_literal and their two _accepted twins (no producer block); 1.7.1: + sd_disclosures_too_deep (no producer block); 1.7.0: + sd_digest_repeated, sd_digest_repeated_sd, sd_claim_name_reserved (no producer block: no backend dependence)
             # the bench can fail: the same run with one marker removed reports that vector FAIL, not SKIP
             d = self._copy(); p = os.path.join(d, "valid_signed.expected.json")
             e = json.load(open(p, encoding="utf-8")); del e["requires_backend"]; json.dump(e, open(p, "w", encoding="utf-8"))

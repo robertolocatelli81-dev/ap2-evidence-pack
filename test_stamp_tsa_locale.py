@@ -53,7 +53,7 @@ class TestStampOnlyGrantedTokenForThisDigest(unittest.TestCase):
     def setUpClass(cls):
         cls.d = d = tempfile.mkdtemp(prefix="tsa_")
         with open(os.path.join(d, "tsa.cnf"), "w") as f:
-            f.write(CNF.format(d=d))
+            f.write(CNF.format(d=d.replace("\\", "/")))  # OpenSSL reads a backslash in a .cnf as an escape: Windows paths with forward slashes (1.11.0)
         with open(os.path.join(d, "serial"), "w") as f:
             f.write("01\n")
         j = lambda n: os.path.join(d, n)  # noqa: E731

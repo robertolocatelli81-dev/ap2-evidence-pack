@@ -230,7 +230,7 @@ class _Tsa:
         self.d = d = tempfile.mkdtemp(prefix="tsa_")
         j = lambda n: os.path.join(d, n)  # noqa: E731
         with open(j("tsa.cnf"), "w") as f:
-            f.write(self.CNF.format(d=d))
+            f.write(self.CNF.format(d=d.replace("\\", "/")))  # OpenSSL reads a backslash in a .cnf as an escape: Windows paths with forward slashes (1.11.0)
         with open(j("serial"), "w") as f:
             f.write("01\n")
         ssl = lambda *a: subprocess.run([_OPENSSL] + list(a), check=True, capture_output=True)  # noqa: E731

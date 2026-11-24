@@ -2652,16 +2652,10 @@ def add_anchor(path: str, tsa_url: str) -> Dict:
     nothing). The digest and the producer signatures do not change: `anchors` lies outside them. Written atomically."""
     import tempfile
     path = os.path.realpath(path)   # a symlink is followed: the pack it names is stamped, the link stays a link
+    # the read-modify-write under an exclusive lock on the directory: measured on b3edfc8, six concurrent stamps of one
+    # pack all reported success and the file kept ONE anchor (the others lost), two raised FileNotFoundError
+    unlock = _lock_directory(os.path.dirname(path) or ".")
     try:
-        dfd = os.open(os.path.dirname(path) or ".", os.O_RDONLY)
-    except OSError as e:
-        raise Ap2EvidenceError(f"cannot open the pack's directory: {type(e).__name__}") from e
-    try:
-        try:   # the read-modify-write under an exclusive lock on the directory: measured on b3edfc8, six concurrent stamps of one
-            import fcntl   # pack all reported success and the file kept ONE anchor (the others lost), two raised FileNotFoundError
-            fcntl.flock(dfd, fcntl.LOCK_EX)
-        except ImportError:   # no fcntl (Windows): no lock — concurrent stamps of one pack are not supported there (declared)
-            pass
         ev = read_evidence_file(path)
         if ev.get("evidence_format") != EVIDENCE_FORMAT:
             raise Ap2EvidenceError(f"evidence_format must be {EVIDENCE_FORMAT!r}")
@@ -2697,7 +2691,49 @@ def add_anchor(path: str, tsa_url: str) -> Dict:
                     pass
         return {"out": path, "evidence_digest_sha256": digest, "anchors": len(ev["anchors"])}
     finally:
+        unlock()
+
+
+def _lock_directory(d: str):
+    """An exclusive lock held by this process on directory `d` until the returned function is called. POSIX: flock on the
+    directory's descriptor. Windows (1.11.0), which opens no directory with os.open (PermissionError: up to 1.10.0 every
+    `stamp` there was "cannot open the pack's directory", CI run of 2026-11-24): a named mutex of the session whose name
+    is the SHA-256 of the directory's normalised real path, so two stamps of packs in one directory wait for each other
+    there as under flock. A directory that cannot be opened (POSIX) or does not exist is an Ap2EvidenceError."""
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+        if not os.path.isdir(d):
+            raise Ap2EvidenceError("cannot open the pack's directory: FileNotFoundError")
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateMutexW.restype = wintypes.HANDLE
+        k32.CreateMutexW.argtypes = (ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR)
+        k32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+        k32.WaitForSingleObject.restype = wintypes.DWORD
+        k32.ReleaseMutex.argtypes = k32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        name = "Local\\ap2-evidence-pack-" + hashlib.sha256(os.path.normcase(os.path.realpath(d)).encode("utf-8")).hexdigest()
+        h = k32.CreateMutexW(None, False, name)
+        if not h:
+            raise Ap2EvidenceError(f"cannot lock the pack's directory: WinError {ctypes.get_last_error()}")
+        if k32.WaitForSingleObject(h, 0xFFFFFFFF) not in (0, 0x80):   # WAIT_OBJECT_0, or WAIT_ABANDONED (a holder died: ours now)
+            k32.CloseHandle(h)
+            raise Ap2EvidenceError(f"cannot lock the pack's directory: WinError {ctypes.get_last_error()}")
+
+        def unlock():
+            k32.ReleaseMutex(h)
+            k32.CloseHandle(h)
+        return unlock
+    import fcntl
+    try:
+        dfd = os.open(d, os.O_RDONLY)
+    except OSError as e:
+        raise Ap2EvidenceError(f"cannot open the pack's directory: {type(e).__name__}") from e
+    try:
+        fcntl.flock(dfd, fcntl.LOCK_EX)
+    except OSError:
         os.close(dfd)
+        raise
+    return lambda: os.close(dfd)
 
 
 def sign_evidence(path, identity=None, classical_alg="ed25519"):
@@ -4211,9 +4247,11 @@ def _text_layer_bytes(stream, buf, text: str) -> bytes:
     handler, and a byte order mark only where that layer puts one: utf-16 / utf-32 only on a stream seekable at offset 0
     (a file), utf-8-sig on a pipe too, none on a seekable stream past offset 0 (measured on Python 3.9, 3.11 and 3.13,
     13/10/2026). 1.11.0: "\\n" stays "\\n" on every system, as the JS verifier writes it and as the pack file is written;
-    up to 1.10.0 it became os.linesep, so a receipt or a message had "\\r\\n" on Windows."""
+    up to 1.10.0 it became os.linesep, so a receipt or a message had "\\r\\n" on Windows. The encoding is UTF-8 unless
+    PYTHONIOENCODING names another (the bytes the JS verifier writes): Windows gives a pipe the ANSI code page, so up to
+    1.10.0 a message with "§" was written as cp1252 there (CI run of 2026-11-24, test_ap2_anchors)."""
     import codecs
-    encoding = stream.encoding or "utf-8"
+    encoding = (stream.encoding or "utf-8") if os.environ.get("PYTHONIOENCODING") else "utf-8"
     enc = codecs.getincrementalencoder(encoding)(stream.errors or "strict")
     try:
         seekable = buf.seekable()
