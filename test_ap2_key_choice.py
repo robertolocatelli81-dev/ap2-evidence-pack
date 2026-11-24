@@ -235,7 +235,7 @@ class KeyChoiceLibrary(unittest.TestCase):
             self.fetched.clear()
             try:
                 r = ap2.build_evidence([{"name": "m", "sd_jwt": tok}], out, **kw)
-                with open(out) as fh:
+                with open(out, encoding="utf-8") as fh:
                     key = json.load(fh)["artifacts"][0]["key"]
                 got = (key["provenance_class"], r.get("key_material_not_used", {}).get("m", []))
             except ap2.Ap2EvidenceError as e:
@@ -264,9 +264,9 @@ class KeyChoiceLibrary(unittest.TestCase):
             self.assertEqual(v["artifacts"][0]["ignored"].get("key_material", []), names, out)
         if _NODE:
             man = os.path.join(self.d, "manifest.json")
-            with open(man, "w") as fh:
+            with open(man, "w", encoding="utf-8") as fh:
                 json.dump([{"name": o, "path": o, "flags": []} for o, _ in built], fh)
-            p = subprocess.run([_NODE, _MANY, _JS, man], capture_output=True, text=True, timeout=600)
+            p = subprocess.run([_NODE, _MANY, _JS, man], capture_output=True, text=True, timeout=600, encoding="utf-8")
             self.assertEqual(p.returncode, 0, p.stderr[-500:])
             got = json.loads(p.stdout)
             for out, (cls, names) in built:
@@ -324,11 +324,11 @@ class KeyChoiceLibrary(unittest.TestCase):
                 ap2.build_evidence([{"name": "m", "sd_jwt": t}], os.path.join(self.d, "s.json"), keys={"m": JWK_S})
             self.assertIn("(SPEC §2 (d)", str(cm.exception), name)
             p_ = os.path.join(self.d, "s.json")
-            with open(p_, "w") as fh:
+            with open(p_, "w", encoding="utf-8") as fh:
                 json.dump(_pack_of({"alg": "ES256", "jwk": hj}, JWK_S, "supplied"), fh)
             self.assertIn("(SPEC §2 (d)", ap2.verify_evidence(p_)["artifacts"][0].get("error", ""), name)
             if _NODE:
-                js = json.loads(subprocess.run([_NODE, _JS, p_], capture_output=True, text=True, timeout=120).stdout)
+                js = json.loads(subprocess.run([_NODE, _JS, p_], capture_output=True, text=True, timeout=120, encoding="utf-8").stdout)
                 self.assertIn("(SPEC §2 (d)", js["artifacts"][0].get("error", ""), name)
 
     def test_kid_not_a_string_is_a_refusal_before_the_fetch(self):
@@ -344,7 +344,7 @@ class KeyChoiceLibrary(unittest.TestCase):
         out = os.path.join(self.d, "n.json")
         r = ap2.build_evidence([{"name": "m", "sd_jwt": tok}], out, jwks_urls={"m": self._url("RSA/k1,S/k1")})
         self.assertEqual(r["key_material_not_used"], {"m": ["jku", "jwk"]})
-        with open(out) as fh:
+        with open(out, encoding="utf-8") as fh:
             note = json.load(fh)["artifacts"][0]["key"]["note"]
         self.assertIn("not used for the key: jku, jwk", note); self.assertIn("1 JWK(s) of the set not usable", note)
 
@@ -397,7 +397,7 @@ class KeyChoiceVerify(unittest.TestCase):
                 h[u] = JKU if u == "jku" else X5U
             n += 1
             path = os.path.join(self.d, f"v{n}.json")
-            with open(path, "w") as fh:
+            with open(path, "w", encoding="utf-8") as fh:
                 json.dump(_pack_of(h, JWK_S, pc), fh)
             cases.append((path, (pc, x5c, jwk, urls), _expect_verify(pc, x5c, jwk, urls)))
         self.assertEqual(n, 4 * 8 * 7 * 4)
@@ -412,9 +412,9 @@ class KeyChoiceVerify(unittest.TestCase):
         if not _NODE:
             self.skipTest("node absent: the JS verifier is not measured")
         man = os.path.join(self.d, "m.json")
-        with open(man, "w") as fh:
+        with open(man, "w", encoding="utf-8") as fh:
             json.dump([{"name": p, "path": p, "flags": []} for p, _, _ in cases], fh)
-        p = subprocess.run([_NODE, _MANY, _JS, man], capture_output=True, text=True, timeout=600)
+        p = subprocess.run([_NODE, _MANY, _JS, man], capture_output=True, text=True, timeout=600, encoding="utf-8")
         self.assertEqual(p.returncode, 0, p.stderr[-500:])
         got_js = json.loads(p.stdout); wrong = []
         for path, combo, want in cases:
@@ -463,10 +463,10 @@ class KeyChoiceCli(unittest.TestCase):
         self.addCleanup(self.srv.server_close); self.addCleanup(self.srv.shutdown)
         self.url = f"https://127.0.0.1:{self.srv.server_address[1]}/jwks.json"
         self.tok = os.path.join(self.d, "m.sdjwt")
-        with open(self.tok, "w") as fh:
+        with open(self.tok, "w", encoding="utf-8") as fh:
             fh.write(T._sign_jwt(SK_S, {"alg": "ES256", "kid": "k1", "jwk": JWK_S}, {"iss": "u"}) + "~")
         self.k = os.path.join(self.d, "k.json")
-        with open(self.k, "w") as fh:
+        with open(self.k, "w", encoding="utf-8") as fh:
             json.dump(JWK_S, fh)
         self.out = os.path.join(self.d, "out.json")
 
@@ -474,14 +474,14 @@ class KeyChoiceCli(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if k.lower() not in ("https_proxy", "http_proxy", "all_proxy", "pythonpath")}
         env["SSL_CERT_FILE"] = self.ca; env["NO_PROXY"] = "127.0.0.1"
         p = subprocess.run([sys.executable, "-B", os.path.join(_HERE, "ap2_evidence.py"), "build", self.out, "m=" + self.tok, *extra],
-                           capture_output=True, text=True, timeout=120, env=env)
+                           capture_output=True, text=True, timeout=120, env=env, encoding="utf-8")
         return p.returncode, p.stdout, p.stderr
 
     def test_jwks_url_is_fetched_and_wins_over_the_header_jwk(self):
         rc, out, err = self._cli("--jwks-url", "m=" + self.url)
         self.assertEqual(rc, 0, err)
         self.assertEqual(_JwksHandler.hits, ["/jwks.json"])   # 1.7.2: no request at all
-        with open(self.out) as fh:
+        with open(self.out, encoding="utf-8") as fh:
             key = json.load(fh)["artifacts"][0]["key"]
         self.assertEqual((key["provenance_class"], key["jwks_url"], key["jwk"]["kid"]), ("jwks_fetched", self.url, "k1"))
         self.assertEqual(json.loads(out)["key_material_not_used"], {"m": ["jwk"]})
@@ -489,11 +489,11 @@ class KeyChoiceCli(unittest.TestCase):
     def test_a_jwk_off_the_curve_is_a_refusal_not_a_traceback(self):
         # measured on 1.7.2: a ValueError traceback (exit 1, no reason) for a --key file, a header jwk or a cnf.jwk whose
         # (x, y) is not a point of P-256
-        with open(self.k, "w") as fh:
+        with open(self.k, "w", encoding="utf-8") as fh:
             json.dump(JWK_MIX, fh)
         rc, _, err = self._cli("--key", "m=" + self.k)
         self.assertEqual(rc, 1, err); self.assertNotIn("Traceback", err); self.assertIn("not a point of P-256", json.loads(err)["error"])
-        with open(self.tok, "w") as fh:
+        with open(self.tok, "w", encoding="utf-8") as fh:
             fh.write(T._sign_jwt(SK_S, {"alg": "ES256", "jwk": JWK_MIX}, {"iss": "u"}) + "~")
         rc, _, err = self._cli()
         self.assertEqual(rc, 1, err); self.assertNotIn("Traceback", err); self.assertIn("not a point of P-256", json.loads(err)["error"])
@@ -562,7 +562,7 @@ class CoordinateBelowP(unittest.TestCase):
         js = ('import { createPublicKey } from "node:crypto"; for (const j of JSON.parse(process.argv[1])) { let ok = true; '
               'try { createPublicKey({ key: j, format: "jwk" }); } catch { ok = false; } console.log(ok); }')
         jwks = [self._jwk(x, y) for x, y in self.GOOD + self.BAD]
-        p = subprocess.run([_NODE, "--input-type=module", "-e", js, json.dumps(jwks)], capture_output=True, text=True, timeout=120)
+        p = subprocess.run([_NODE, "--input-type=module", "-e", js, json.dumps(jwks)], capture_output=True, text=True, timeout=120, encoding="utf-8")
         self.assertEqual(p.stdout.split(), ["true"] * 4 + ["false"] * 3, p.stderr)
 
 

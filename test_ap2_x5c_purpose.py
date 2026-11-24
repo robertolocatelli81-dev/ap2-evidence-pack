@@ -242,10 +242,9 @@ process.stdout.write(JSON.stringify(out));
 
 
 def js_purposes(ders):
-    from urllib.parse import quote
-    url = json.dumps("file://" + quote(JS))
+    url = json.dumps(__import__("pathlib").Path(JS).as_uri())
     p = subprocess.run([NODE, "--input-type=module", "-e", _JS_PURPOSE % url], input=json.dumps([d.hex() for d in ders]),
-                       capture_output=True, text=True, timeout=600)
+                       capture_output=True, text=True, timeout=600, encoding="utf-8")
     if p.returncode != 0:
         raise AssertionError(p.stderr[-2000:])
     return json.loads(p.stdout)
@@ -381,7 +380,7 @@ class LeafIsDer(unittest.TestCase):
             with open(pack, encoding="utf-8") as f:
                 self.assertEqual(json.load(f)["artifacts"][0]["key"]["provenance_class"], "jwk_header" if beside_jwk else "x5c_header")
             py = A.verify_evidence(pack)
-            p = subprocess.run([NODE, JS, pack], capture_output=True, text=True, timeout=120)
+            p = subprocess.run([NODE, JS, pack], capture_output=True, text=True, timeout=120, encoding="utf-8")
             js = json.loads(p.stdout)
             self.assertEqual(p.returncode, 0 if js["valid"] else 1)
             return [(r["valid"], r["states"]["sealed_content"]["state"], r["artifacts"][0].get("error") is not None) for r in (py, js)]
@@ -480,7 +479,7 @@ class WholePath(unittest.TestCase):
         env.pop("PYTHONPATH", None)
         for name in self.CASES:
             with self.subTest(name):
-                p = subprocess.run([NODE, JS, self.packs[name]], capture_output=True, text=True, env=env, timeout=120)
+                p = subprocess.run([NODE, JS, self.packs[name]], capture_output=True, text=True, env=env, timeout=120, encoding="utf-8")
                 js = json.loads(p.stdout)
                 py = A.verify_evidence(self.packs[name])
                 self.assertEqual(js["artifacts"][0]["x5c_leaf"]["key_purpose"], py["artifacts"][0]["x5c_leaf"]["key_purpose"])

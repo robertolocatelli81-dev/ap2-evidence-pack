@@ -52,7 +52,7 @@ class PinImpliesProducer(unittest.TestCase):
 
     def _js(self, path, pins, req):
         cmd = [NODE, JS, path] + [a for alg, ks in (pins or {}).items() for k in ks for a in ("--trusted-producer-key", f"{alg}={k}")]
-        p = subprocess.run(cmd + (["--require-producer"] if req else []), capture_output=True, text=True, timeout=120)
+        p = subprocess.run(cmd + (["--require-producer"] if req else []), capture_output=True, text=True, timeout=120, encoding="utf-8")
         r = json.loads(p.stdout)
         self.assertEqual(p.returncode, 0 if r["valid"] else 1)
         return r["valid"], r["policy_ok"], r["policy"]["unmet"]

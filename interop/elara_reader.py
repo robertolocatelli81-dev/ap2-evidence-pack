@@ -226,7 +226,7 @@ def run_vector(v: dict) -> tuple:
 
 
 def main() -> int:
-    with open(VEC) as fh:
+    with open(VEC, encoding="utf-8") as fh:
         d = json.load(fh)
     counts = {}
     rows = []

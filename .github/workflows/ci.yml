@@ -26,6 +26,7 @@ jobs:
           - {os: ubuntu-24.04, python: "3.14", tools: without-tools}
           - {os: macos-latest, python: "3.13", tools: with-tools}
           - {os: windows-latest, python: "3.13", tools: with-tools}
+          - {os: windows-latest, python: "3.9", tools: with-tools}   # the declared floor, where os.fchmod does not exist
     steps:
       # the bytes as committed: Git for Windows turns LF into CRLF by default (core.autocrlf=true); the vectors and the
       # files a test compares byte for byte are read as they are in the repository
@@ -46,6 +47,33 @@ jobs:
         run: |
           brew list openssl@3 >/dev/null 2>&1 || brew install openssl@3
           echo "$(brew --prefix openssl@3)/bin" >> "$GITHUB_PATH"
+      - name: "macOS: a full volume, the equivalent of Linux's /dev/full (writes there fail with ENOSPC)"
+        if: runner.os == 'macOS'
+        run: |
+          hdiutil create -size 4m -fs HFS+ -volname ap2full "$RUNNER_TEMP/full.dmg"
+          hdiutil attach "$RUNNER_TEMP/full.dmg"
+          : > /Volumes/ap2full/sink
+          dd if=/dev/zero of=/Volumes/ap2full/fill bs=4096 || true
+          dd if=/dev/zero of=/Volumes/ap2full/fill2 bs=1 || true   # to the last byte
+          if printf x > /Volumes/ap2full/probe; then echo "the volume is not full"; exit 1; fi
+          echo "AP2_FULL_DIR=/Volumes/ap2full" >> "$GITHUB_ENV"
+      - name: "Windows: a full volume, the equivalent of Linux's /dev/full (writes there fail with ENOSPC)"
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $v = Join-Path $env:RUNNER_TEMP "full.vhdx"
+          $s = Join-Path $env:RUNNER_TEMP "full.txt"
+          Set-Content $s "create vdisk file=`"$v`" maximum=16 type=fixed`r`nselect vdisk file=`"$v`"`r`nattach vdisk`r`ncreate partition primary`r`nformat fs=fat quick label=AP2FULL`r`nassign letter=Q"
+          diskpart /s $s
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path Q:\)) { throw "the full volume was not made (diskpart exit $LASTEXITCODE)" }
+          New-Item -ItemType File Q:\sink | Out-Null
+          $f = [IO.File]::OpenWrite("Q:\fill")
+          foreach ($n in 65536, 4096, 512, 1) { $b = New-Object byte[] $n; try { while ($true) { $f.Write($b, 0, $n); $f.Flush() } } catch { } }
+          try { $f.Dispose() } catch { }
+          $full = $false
+          try { [IO.File]::WriteAllBytes("Q:\probe", [byte[]](1)) } catch [IO.IOException] { $full = $true }
+          if (-not $full) { throw "the volume is not full: a 1-byte file was written" }
+          "AP2_FULL_DIR=Q:\" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
       - name: "without-tools: node and openssl removed from the runner (not hidden from one step: from every step after this)"
         if: matrix.tools == 'without-tools'
         run: |
@@ -74,8 +102,9 @@ jobs:
           set -e
           for t in test_*.py pqcrypto/test_*.py; do
             m=$(basename "$t" .py); d=$(dirname "$t")
-            direct=$(cd "$d" && python "$(basename "$t")" 2>&1 | sed -n 's/^Ran \([0-9]*\) test.*/\1/p' | tail -1)
-            full=$(cd "$d" && python -m unittest "$m" 2>&1 | sed -n 's/^Ran \([0-9]*\) test.*/\1/p' | tail -1)
+            # a failing file still prints its count: under pipefail its exit must not end this step (the step above judges it)
+            direct=$(cd "$d" && { python "$(basename "$t")" 2>&1 || true; } | sed -n 's/^Ran \([0-9]*\) test.*/\1/p' | tail -1)
+            full=$(cd "$d" && { python -m unittest "$m" 2>&1 || true; } | sed -n 's/^Ran \([0-9]*\) test.*/\1/p' | tail -1)
             echo "$t: as a script $direct, as a module $full"
             if [ "$direct" != "$full" ]; then echo "::error::$t runs $direct tests as a script but $full as a module"; exit 1; fi
           done

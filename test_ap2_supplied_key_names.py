@@ -26,24 +26,24 @@ class SuppliedKeyNames(unittest.TestCase):
         self.d = tempfile.mkdtemp(prefix="ap2keys-"); self.addCleanup(shutil.rmtree, self.d, ignore_errors=True)
         self.sk, self.jwk = T._make_signer(); self.sk2, self.jwk2 = T._make_signer()
         self.tok = os.path.join(self.d, "a.sdjwt"); self.tok_b = os.path.join(self.d, "b.sdjwt")
-        with open(self.tok, "w") as fh:
+        with open(self.tok, "w", encoding="utf-8") as fh:
             fh.write(T._make_sd_jwt(self.sk, {"iss": "u"}, {"x": "1"}, header_extra={"jwk": self.jwk}))
-        with open(self.tok_b, "w") as fh:
+        with open(self.tok_b, "w", encoding="utf-8") as fh:
             fh.write(T._make_sd_jwt(self.sk2, {"iss": "v"}, {"y": "2"}, header_extra={"jwk": self.jwk2}))
         self.k, self.k2 = os.path.join(self.d, "k.json"), os.path.join(self.d, "k2.json")
         for path, jwk in ((self.k, self.jwk), (self.k2, self.jwk2)):
-            with open(path, "w") as fh:
+            with open(path, "w", encoding="utf-8") as fh:
                 json.dump(jwk, fh)
         self.out = os.path.join(self.d, "out.json")
 
     def _cli(self, *extra):
         p = subprocess.run([sys.executable, os.path.join(_HERE, "ap2_evidence.py"), "build", self.out, "a=" + self.tok, "b=" + self.tok_b, *extra],
-                           capture_output=True, text=True, timeout=120)
+                           capture_output=True, text=True, timeout=120, encoding="utf-8")
         return p.returncode, p.stderr
 
     def test_control_a_named_key_is_used_and_recorded_as_supplied(self):
         rc, err = self._cli("--key", "a=" + self.k); self.assertEqual(rc, 0, err)
-        with open(self.out) as fh:
+        with open(self.out, encoding="utf-8") as fh:
             arts = {a["name"]: a["key"]["provenance_class"] for a in json.load(fh)["artifacts"]}
         self.assertEqual(arts, {"a": "supplied", "b": "jwk_header"})
 
@@ -73,11 +73,11 @@ class SuppliedKeyNames(unittest.TestCase):
 
     def test_two_different_artifacts_may_each_have_a_key(self):
         rc, err = self._cli("--key", "a=" + self.k, "--key", "b=" + self.k2); self.assertEqual(rc, 0, err)
-        with open(self.out) as fh:
+        with open(self.out, encoding="utf-8") as fh:
             self.assertEqual({a["key"]["provenance_class"] for a in json.load(fh)["artifacts"]}, {"supplied"})
 
     def test_library_refuses_a_stray_name(self):
-        with open(self.tok) as fh:
+        with open(self.tok, encoding="utf-8") as fh:
             arts = [{"name": "a", "sd_jwt": fh.read()}]
         for kw in ({"keys": {"nope": self.jwk}}, {"jwks_urls": {"nope": "https://127.0.0.1:9/jwks"}},
                    {"keys": {"a": self.jwk, "zz": self.jwk}}):

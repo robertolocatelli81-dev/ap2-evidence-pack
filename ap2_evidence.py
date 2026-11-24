@@ -1362,11 +1362,23 @@ def _run_openssl(cmd: List[str], timeout: int, **kw):
     except OSError as e:
         why = os.strerror(e.errno) if isinstance(e.errno, int) else str(e)
         raise Ap2WriteError(f"cannot run openssl here: {type(e).__name__}: {why}") from e
-    if r.returncode < 0:   # 1.6.0 (SPEC §6.10, krausz §3.1 "a crashed dependency"): openssl killed by a signal gave no
+    if _crashed(r.returncode):   # 1.6.0 (SPEC §6.10, krausz §3.1 "a crashed dependency"): openssl killed by a signal gave no
         # answer — measured 18/10/2026 with an openssl killed by SIGSEGV: `tsa_invalid` / `chain_unresolved`, a finding about
         # the input, and exit 1 on a valid pack under --require-anchor
-        raise Ap2WriteError(f"cannot run openssl here: terminated by signal {-r.returncode}")
+        raise Ap2WriteError(f"cannot run openssl here: {_crash_text(r.returncode)}")
     return r
+
+
+def _crashed(rc: int) -> bool:
+    """openssl ended by a crash, not by an answer: a signal on POSIX (a negative exit); on Windows, which has no signals,
+    an NTSTATUS error as the exit code (0xC0000005 an access violation, 0xC0000409 a stack buffer overrun), which Python
+    returns as a large positive number (1.11.0, as cryptovalid-opencore 24c1d8d: up to 1.10.0 a crash there was read as
+    openssl's answer)."""
+    return rc < 0 or (os.name == "nt" and rc >= 0xC0000000)
+
+
+def _crash_text(rc: int) -> str:
+    return f"terminated by signal {-rc}" if rc < 0 else f"ended by exception 0x{rc:08X}"
 
 
 def _tmp_write(path: str, data: bytes) -> None:
@@ -2389,6 +2401,15 @@ def _verify_one(parsed: Dict, key: Dict) -> Dict:
             "disclosures_ok": True}     # resolve_disclosures raised otherwise
 
 
+def _fchmod(fd: int, path: str, mode: int) -> None:
+    """os.fchmod where it exists; on Windows Python has it only from 3.13 (its documentation), and os.chmod of the same
+    new file is the equivalent (1.11.0; the CI runs Windows on 3.9 and 3.13)."""
+    if hasattr(os, "fchmod"):
+        os.fchmod(fd, mode)
+    else:
+        os.chmod(path, mode)
+
+
 def _write_pack_file(path: str, obj) -> None:
     """Write a pack to `path` whole or not at all (1.5.2). The JSON goes to a new file with an unpredictable name, created
     O_EXCL in the same directory with the mode a plain open() would give it (or the mode of the pack it replaces), is
@@ -2424,7 +2445,9 @@ def _write_pack_file(path: str, obj) -> None:
             continue
     try:
         if st is not None:
-            os.fchmod(fd, stat.S_IMODE(st.st_mode))   # the pack keeps its permissions
+            _fchmod(fd, tmp, stat.S_IMODE(st.st_mode))   # the pack keeps its permissions
+            if os.name == "nt":   # 1.11.0: and, on Windows, its access list (a mode sets only the read-only attribute there)
+                _sigsuite.win_copy_dacl(real, tmp)
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
             fd = None
             json.dump(obj, f, ensure_ascii=False, indent=1, sort_keys=True)
@@ -2676,7 +2699,9 @@ def add_anchor(path: str, tsa_url: str) -> Dict:
         tmp = None
         try:   # a fresh, unpredictable name created O_EXCL (a fixed name could be a planted symlink: measured, it overwrote its target)
             fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".ap2-stamp-", suffix=".tmp")
-            os.fchmod(fd, mode)   # the pack keeps its permissions (0600 became 0644)
+            _fchmod(fd, tmp, mode)   # the pack keeps its permissions (0600 became 0644)
+            if os.name == "nt":   # 1.11.0: and, on Windows, its access list (a mode sets only the read-only attribute there)
+                _sigsuite.win_copy_dacl(path, tmp)
             with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
                 json.dump(ev, f, ensure_ascii=False, indent=1, sort_keys=True)
                 f.flush(); os.fsync(f.fileno())

@@ -52,7 +52,7 @@ class TestClosedSchemaGaps(unittest.TestCase):
         py = ap2.verify_evidence(p)
         js = None
         if HAVE_NODE:
-            out = subprocess.run(["node", JS, p], capture_output=True, text=True, timeout=120)
+            out = subprocess.run(["node", JS, p], capture_output=True, text=True, timeout=120, encoding="utf-8")
             js = json.loads(out.stdout)
             self.assertEqual(M.norm(py), M.norm(js), "the two verifiers disagree")
         return py, js

@@ -494,7 +494,7 @@ def run_js(js_path, recs, d):
     manifest = os.path.join(d, "manifest.json")
     with open(manifest, "w", encoding="utf-8") as f:
         json.dump([{"name": r["name"], "path": r["path"], "flags": r["flags"]} for r in recs], f)
-    p = subprocess.run(["node", VERIFY_MANY, js_path, manifest], capture_output=True, text=True, timeout=1800)
+    p = subprocess.run(["node", VERIFY_MANY, js_path, manifest], capture_output=True, text=True, timeout=1800, encoding="utf-8")
     if p.returncode != 0:
         raise RuntimeError("verify_many failed: " + p.stderr[-800:])
     return json.loads(p.stdout)

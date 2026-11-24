@@ -71,7 +71,7 @@ class IssuerAlg(unittest.TestCase):
         cls.base = os.path.join(cls.d, "base.json")
         A.build_evidence([{"name": "m", "sd_jwt": _token(cls.sk, {"alg": "ES256", "typ": "ap2-mandate+sd-jwt"})}],
                          cls.base, keys={"m": _jwk(cls.sk)})
-        with open(cls.base) as f:
+        with open(cls.base, encoding="utf-8") as f:
             cls.ev = json.load(f)
 
     @classmethod
@@ -85,7 +85,7 @@ class IssuerAlg(unittest.TestCase):
         ev["evidence_digest_sha256"] = hashlib.sha256(A._canon({k: v for k, v in ev.items()
                                                                 if k not in A._DIGEST_EXCLUDED})).hexdigest()
         p = os.path.join(self.d, name)
-        with open(p, "w") as f:
+        with open(p, "w", encoding="utf-8") as f:
             json.dump(ev, f)
         return p
 
@@ -115,7 +115,7 @@ class IssuerAlg(unittest.TestCase):
                                  os.path.join(self.d, "b.json"), keys={"m": _jwk(self.sk)})
 
     def _js(self, p):
-        q = subprocess.run(["node", JS, p], capture_output=True, text=True)
+        q = subprocess.run(["node", JS, p], capture_output=True, text=True, encoding="utf-8")
         return q.returncode, json.loads(q.stdout)
 
     def test_every_key_source_and_the_check_before_the_signature(self):
@@ -125,7 +125,7 @@ class IssuerAlg(unittest.TestCase):
         jwk = _jwk(self.sk)
         base = os.path.join(self.d, "hj.json")
         A.build_evidence([{"name": "m", "sd_jwt": _token(self.sk, {"alg": "ES256", "typ": "ap2-mandate+sd-jwt", "jwk": jwk})}], base)
-        with open(base) as f:
+        with open(base, encoding="utf-8") as f:
             ev = json.load(f)
         self.assertEqual(ev["artifacts"][0]["key"]["provenance_class"], "jwk_header")
         node = shutil.which("node")
@@ -146,13 +146,13 @@ class IssuerAlg(unittest.TestCase):
         finally:
             self.ev = saved
         p = self._pack({"alg": "ES384", "typ": "ap2-mandate+sd-jwt"}, "es384.json")
-        with open(p) as f:
+        with open(p, encoding="utf-8") as f:
             ev = json.load(f)
         head = ev["artifacts"][0]["sd_jwt_compact"].rsplit(".", 1)[0]
         ev["artifacts"][0]["sd_jwt_compact"] = head + "." + _b64u(bytes(range(96))) + "~"
         ev["evidence_digest_sha256"] = hashlib.sha256(A._canon({k: v for k, v in ev.items()
                                                                 if k not in A._DIGEST_EXCLUDED})).hexdigest()
-        with open(p, "w") as f:
+        with open(p, "w", encoding="utf-8") as f:
             json.dump(ev, f)
         with self.subTest(case="96 octets under ES384"):
             self.assertIn("issuer_alg_not_es256", A.verify_evidence(p)["artifacts"][0].get("error", ""))
@@ -167,7 +167,7 @@ class IssuerAlg(unittest.TestCase):
         ctl = self._pack({"alg": "ES256", "typ": "ap2-mandate+sd-jwt"}, "jsctl.json")
         for a, p in [("ES256", ctl)] + list(zip(algs, paths)):
             with self.subTest(alg=a):
-                q = subprocess.run(["node", JS, p], capture_output=True, text=True)
+                q = subprocess.run(["node", JS, p], capture_output=True, text=True, encoding="utf-8")
                 r = json.loads(q.stdout)
                 if a == "ES256":
                     self.assertEqual((q.returncode, r["valid"]), (0, True), q.stderr[-400:])

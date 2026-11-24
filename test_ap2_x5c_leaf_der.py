@@ -347,9 +347,8 @@ process.stdout.write(JSON.stringify(JSON.parse(readFileSync(0, "utf8")).map((h) 
 
 
 def js_problems(ders):
-    from urllib.parse import quote
-    p = subprocess.run([NODE, "--input-type=module", "-e", _JS % json.dumps("file://" + quote(JS))],
-                       input=json.dumps([d.hex() for d in ders]), capture_output=True, text=True, timeout=600)
+    p = subprocess.run([NODE, "--input-type=module", "-e", _JS % json.dumps(__import__("pathlib").Path(JS).as_uri())],
+                       input=json.dumps([d.hex() for d in ders]), capture_output=True, text=True, timeout=600, encoding="utf-8")
     if p.returncode:
         raise AssertionError(p.stderr[-2000:])
     return json.loads(p.stdout)
@@ -411,9 +410,8 @@ class Generated(unittest.TestCase):
                 name, bi, fn, _ = rnd.choice(CASES); b = bytearray(fn(bases[bi]))
             ders.append(bytes(b))
         self.assertEqual(js_problems(ders), [A.x5c_leaf_der_problem(d) for d in ders])
-        from urllib.parse import quote
-        p = subprocess.run([NODE, "--input-type=module", "-e", _JS_CERT % json.dumps("file://" + quote(JS))],
-                           input=json.dumps([d.hex() for d in ders]), capture_output=True, text=True, timeout=600)
+        p = subprocess.run([NODE, "--input-type=module", "-e", _JS_CERT % json.dumps(__import__("pathlib").Path(JS).as_uri())],
+                           input=json.dumps([d.hex() for d in ders]), capture_output=True, text=True, timeout=600, encoding="utf-8")
         js = json.loads(p.stdout); py = [_py_cert(d) for d in ders]
         self.assertEqual([i for i in range(len(ders)) if py[i] != js[i]], [])   # 1.10.0: the same leaf, or the same error
         ok = sum(isinstance(x, dict) for x in py)
@@ -492,7 +490,6 @@ class Identity(unittest.TestCase):
 
     @unittest.skipUnless(NODE, "node absent: the JS verifier cannot be measured")
     def test_same_in_js(self):
-        from urllib.parse import quote
         multi = x509.Name([x509.RelativeDistinguishedName([x509.NameAttribute(NameOID.COMMON_NAME, "a"),
                                                            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "b")])])
         ders = [leaf(multi), mutate(leaf(), _name_value(0x0C, ' #a,b+c"d\\e<f>g;h\n\x7f '.encode())),
@@ -507,8 +504,8 @@ class Identity(unittest.TestCase):
                 mutate(leaf(), _spki_point(_xy(_X1, _P - 1))),
                 mutate(leaf(), _name_value(0x0C, "caf\u00e9\x1f".encode()))] + [
                 mutate(leaf(), _rdn((bytes.fromhex(o), [0x0C, b"x"]))) for o in ("2705", "2805", "4f05", "5005")]
-        p = subprocess.run([NODE, "--input-type=module", "-e", _JS_CERT % json.dumps("file://" + quote(JS))],
-                           input=json.dumps([d.hex() for d in ders]), capture_output=True, text=True, timeout=600)
+        p = subprocess.run([NODE, "--input-type=module", "-e", _JS_CERT % json.dumps(__import__("pathlib").Path(JS).as_uri())],
+                           input=json.dumps([d.hex() for d in ders]), capture_output=True, text=True, timeout=600, encoding="utf-8")
         self.assertEqual(json.loads(p.stdout), [_py_cert(d) for d in ders])
 
 
@@ -545,7 +542,7 @@ class WholePack(unittest.TestCase):
         r = A.verify_evidence(path)
         out = [(r["valid"], json.dumps(r["artifacts"]))]
         if NODE:
-            p = subprocess.run([NODE, JS, path], capture_output=True, text=True, timeout=120)
+            p = subprocess.run([NODE, JS, path], capture_output=True, text=True, timeout=120, encoding="utf-8")
             js = json.loads(p.stdout); out.append((js["valid"], json.dumps(js["artifacts"])))
         return out
 
@@ -564,10 +561,10 @@ class WholePack(unittest.TestCase):
         process when asked for its JWK (measured 2026-11-21 on 1.9.0 and on d44ca04: no receipt, SIGABRT). The JS
         verifier refuses a public key of less than two octets before asking: exit 1, a receipt, that artifact's
         error, as the reference. Control: the well-formed leaf through the same assembly is exit 0."""
-        ok = subprocess.run([NODE, JS, self._pack(leaf(), "inf_control")], capture_output=True, text=True, timeout=120)
+        ok = subprocess.run([NODE, JS, self._pack(leaf(), "inf_control")], capture_output=True, text=True, timeout=120, encoding="utf-8")
         self.assertEqual(ok.returncode, 0, ok.stderr[-500:])
         path = self._pack(mutate(leaf(), _set(TBS + (6, 1), value=b"\x00\x00")), "inf")
-        p = subprocess.run([NODE, JS, path], capture_output=True, text=True, timeout=120)
+        p = subprocess.run([NODE, JS, path], capture_output=True, text=True, timeout=120, encoding="utf-8")
         self.assertEqual(p.returncode, 1, p.stderr[-500:])
         r = json.loads(p.stdout)
         self.assertIs(r["valid"], False)

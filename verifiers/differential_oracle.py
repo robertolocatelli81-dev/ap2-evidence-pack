@@ -227,7 +227,7 @@ def _chain_error(text):
 def run(cmd, path, flags):
     out = None
     try:
-        out = subprocess.run(list(cmd) + [path] + flags, capture_output=True, text=True, timeout=120)
+        out = subprocess.run(list(cmd) + [path] + flags, capture_output=True, text=True, timeout=120, encoding="utf-8")
         r = json.loads(out.stdout); prod = r.get("producer_signatures") or {}; ts = r.get("rfc3161") or {}
         leaves = tuple(tuple((a.get("x5c_leaf") or {}).get(f) for f in ("subject", "issuer", "serial", "not_valid_before", "not_valid_after", "sha256"))
                        + (json.dumps((a.get("x5c_leaf") or {}).get("key_purpose"), sort_keys=True),)   # 1.10.0 — SPEC §6 step 7
@@ -275,7 +275,7 @@ def refusal_of(cmd, path):
         # checked after the run instead; Windows has no resource module
         linux = resource is not None and sys.platform.startswith("linux")
         out = subprocess.run(list(cmd) + [path], capture_output=True, text=True, timeout=HAZARD_TIMEOUT,
-                             preexec_fn=_limit_memory if linux else None)
+                             preexec_fn=_limit_memory if linux else None, encoding="utf-8")
     except subprocess.TimeoutExpired:
         return "BLOCKED"
     if resource is not None and sys.platform == "darwin" and resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss >= HAZARD_MEM:
@@ -289,6 +289,15 @@ def refusal_of(cmd, path):
 
 OPENSSL_VECTORS = {}   # 1.6.0: vector cases whose policy needs openssl, filled by build_cases
 
+
+
+class _Keep:
+    """Holds what _ap2_platform.fifo asks to clean up (the named pipe's listening handles on Windows) until this process
+    ends, which closes them: the pipe must stay listening for both verifiers."""
+    held = []
+
+    def addCleanup(self, fn, *args):
+        _Keep.held.append((fn, args))
 
 def build_cases(d):
     cases = {}
@@ -536,8 +545,12 @@ def build_cases(d):
         e = copy.deepcopy(base); mut(e); cases["must-" + nm] = (w("must" + nm, json.dumps(rehash(e))), [])
     cases["jwk-x-33-bytes-rehashed"] = (w("jwk33", json.dumps(_fresh_pack(base, sk, n, H, '{"iss":"x"}', {"iss": "x"}, jwk_x_bytes=n.x.to_bytes(33, "big")))), [])
     # ── 25/09/2026: file objects a verifier must not read (REFUSALS) and the bound itself — trailing spaces change no digest
-    fifo = os.path.join(d, "fifo.json"); os.mkfifo(fifo); cases["file-fifo"] = (fifo, [])
-    z = os.path.join(d, "zero.json"); os.symlink("/dev/zero", z); cases["file-devzero-symlink"] = (z, [])
+    # 1.11.0: Windows has no FIFO in a directory and no link to a device: a named pipe and NUL, its equivalents
+    if ROOT not in sys.path:
+        sys.path.insert(0, ROOT)
+    from _ap2_platform import device_link, fifo as _fifo
+    fifo = _fifo(_Keep(), os.path.join(d, "fifo.json")); cases["file-fifo"] = (fifo, [])
+    z = device_link(os.path.join(d, "zero.json")); cases["file-devzero-symlink"] = (z, [])
     dd = os.path.join(d, "dir.json"); os.makedirs(dd); cases["file-directory"] = (dd, [])
     for nm, size in (("file-one-byte-over-the-bound", MAX_EVIDENCE_BYTES + 1), ("file-exactly-at-the-bound", MAX_EVIDENCE_BYTES)):
         raw = base_text.encode("utf-8"); cases[nm] = (w(nm, raw + b" " * (size - len(raw))), [])
@@ -928,7 +941,7 @@ def nb_function_parity(d):
         job = os.path.join(d, "nb_job.json")
         with open(job, "w", encoding="utf-8") as fh:
             json.dump({"pack": pth, "window": win, "disclosures": dl}, fh)
-        out = subprocess.run(["node", os.path.join(os.path.dirname(JS[1]), "nb_parity.mjs"), job], capture_output=True, text=True, timeout=120)
+        out = subprocess.run(["node", os.path.join(os.path.dirname(JS[1]), "nb_parity.mjs"), job], capture_output=True, text=True, timeout=120, encoding="utf-8")
         try:
             js = json.loads(out.stdout)
         except ValueError:
@@ -989,7 +1002,7 @@ def main():
             for k, cmd in (("py", PY[:-1]), ("js", JS)):
                 full = list(cmd) + (["verify"] if k == "py" and not bare else []) + args
                 try:
-                    out = subprocess.run(full, capture_output=True, text=True, timeout=60)
+                    out = subprocess.run(full, capture_output=True, text=True, timeout=60, encoding="utf-8")
                     try: row[k] = "verdict:" + str(json.loads(out.stdout).get("valid"))
                     except Exception: row[k] = "usage" if out.returncode == 2 and out.stdout == "" else f"exit{out.returncode}{'+stdout' if out.stdout else ''}"   # r3: usage = exit 2 AND nothing on stdout
                 except Exception: row[k] = "CRASH"

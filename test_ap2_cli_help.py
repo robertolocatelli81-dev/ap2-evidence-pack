@@ -6,6 +6,7 @@ is a usage error naming the commands, exit 2; after a command -h/--help stays a 
 shared with the JavaScript verifier). Measured on the PyPI wheel 1.8.0 (2026-11-18): `ap2-evidence --help` answered
 "error: unexpected argument", exit 2, and no help existed anywhere. On the previous commit test_help_alone fails."""
 import os
+import shutil
 import subprocess
 import sys
 import unittest
@@ -17,8 +18,19 @@ def cli(*args):
     env = dict(os.environ)
     env.pop("PYTHONPATH", None)
     return subprocess.run([sys.executable, "-B", os.path.join(ROOT, "ap2_evidence.py"), *args], capture_output=True,
-                          text=True, env=env)
+                          text=True, env=env, encoding="utf-8")
 
+
+
+def _closed(cmd, fd, env):
+    """Run cmd with descriptor `fd` (1 or 2) closed at its start. POSIX: os.close in the child before exec. Windows has no
+    preexec_fn (1.11.0); the equivalent is Git's bash closing it before it starts the program (`exec "$@" >&-`), which then
+    starts with no handle there (sys.stdout or sys.stderr None)."""
+    if os.name != "nt":
+        return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, preexec_fn=lambda: os.close(fd))
+    bash = shutil.which("bash")   # PATH's bash (Git's): System32's bash.exe is the WSL launcher
+    return subprocess.run([bash, "-c", 'exec "$@" %d>&-' % fd, "_"] + [c.replace("\\", "/") for c in cmd],
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
 
 class Help(unittest.TestCase):
     def test_help_alone(self):
@@ -39,18 +51,20 @@ class Help(unittest.TestCase):
         not matter to the help: exit 0, the text on stdout."""
         env = dict(os.environ); env.pop("PYTHONPATH", None)
         cmd = [sys.executable, "-B", os.path.join(ROOT, "ap2_evidence.py"), "--help"]
-        if os.path.exists("/dev/full"):
-            with open("/dev/full", "wb") as full:
+        from _ap2_platform import full_sink   # 1.11.0: /dev/full, or a file on a full volume (macOS, Windows)
+        sink = full_sink()
+        if sink is not None:
+            with open(sink, "wb") as full:
                 p = subprocess.run(cmd, stdout=full, stderr=subprocess.PIPE, env=env)
             self.assertEqual(p.returncode, 74, p.stderr)
             self.assertIn(b"help not written", p.stderr)
-            with open("/dev/full", "wb") as full:
+            with open(sink, "wb") as full:
                 p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=full, env=env)
             self.assertEqual(p.returncode, 0)
             self.assertIn(b"usage: ap2-evidence", p.stdout)
-        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, preexec_fn=lambda: os.close(1))
+        p = _closed(cmd, 1, env)
         self.assertEqual(p.returncode, 74, p.stderr)
-        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, preexec_fn=lambda: os.close(2))
+        p = _closed(cmd, 2, env)
         self.assertEqual(p.returncode, 0)
         self.assertIn(b"usage: ap2-evidence", p.stdout)
 

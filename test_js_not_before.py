@@ -19,7 +19,7 @@ class TestJsNotBefore(unittest.TestCase):
     def test_zero_disagreements_on_the_not_before_cases(self):
         env = dict(os.environ, AP2_ORACLE_ONLY_NB="1")
         out = subprocess.run([sys.executable, "-B", os.path.join(HERE, "verifiers", "differential_oracle.py")], capture_output=True,
-                             text=True, env=env, timeout=1800)
+                             text=True, env=env, timeout=1800, encoding="utf-8")
         last = [ln for ln in out.stdout.splitlines() if ln.startswith("disagreements:")]
         self.assertEqual(out.returncode, 0, out.stdout[-3000:] + out.stderr[-2000:])
         self.assertTrue(last and last[0].startswith("disagreements: 0/"), last)

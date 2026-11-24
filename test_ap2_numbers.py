@@ -69,13 +69,20 @@ def _js_literal(texts):
     code = ("const SAFE = 2 ** 53 - 1;\n" + src[start:end] + "\nconst T = JSON.parse(process.argv[1]); const out = {};\n"
             "for (const t of T) { const m = /^-?(0|[1-9]\\d*)(\\.\\d+)?([eE][+-]?\\d+)?/.exec(t); out[t] = integralLiteral(m); }\n"
             "process.stdout.write(JSON.stringify(out));")
-    p = subprocess.run(["node", "-e", code, json.dumps(texts)], capture_output=True, text=True, timeout=120)
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:   # 1.11.0: the program and the literals in files, not on the command line
+        prog, data = os.path.join(d, "lit.cjs"), os.path.join(d, "lit.json")   # (Windows: 32767 characters, WinError 206)
+        with open(prog, "w", encoding="utf-8") as fh:
+            fh.write(code.replace("JSON.parse(process.argv[1])", "JSON.parse(require('fs').readFileSync(process.argv[2], 'utf8'))"))
+        with open(data, "w", encoding="utf-8") as fh:
+            json.dump(texts, fh)
+        p = subprocess.run(["node", prog, data], capture_output=True, text=True, timeout=120, encoding="utf-8")
     assert p.returncode == 0, p.stderr
     return json.loads(p.stdout)
 
 
 def _js_verify(path, accept=False):
-    p = subprocess.run(["node", _JS, path] + (["--accept-integral-floats"] if accept else []), capture_output=True, text=True, timeout=120)
+    p = subprocess.run(["node", _JS, path] + (["--accept-integral-floats"] if accept else []), capture_output=True, text=True, timeout=120, encoding="utf-8")
     return json.loads(p.stdout)
 
 
@@ -262,7 +269,7 @@ class SdkBudgetMandates(unittest.TestCase):
         return [c for c in claims["delegate_payload"][0]["constraints"] if c["type"] == "payment.budget"][0]["max"]
 
     def _cli(self, *args):
-        return subprocess.run([sys.executable, os.path.join(_HERE, "ap2_evidence.py")] + list(args), capture_output=True, text=True)
+        return subprocess.run([sys.executable, os.path.join(_HERE, "ap2_evidence.py")] + list(args), capture_output=True, text=True, encoding="utf-8")
 
     def test_sdk_budget_10_is_refused_by_default(self):
         out = os.path.join(self.d, "b10.json")
@@ -291,9 +298,9 @@ class SdkBudgetMandates(unittest.TestCase):
         self.assertIs(json.loads(p.stdout)["accept_integral_floats"], True)
         self.assertEqual(self._cli("verify", out, "--accept-integral-floats=1").returncode, 2)   # a value on a boolean flag: usage
         out2 = os.path.join(self.d, "cli.json"); tok = os.path.join(self.d, "t.sdjwt"); key = os.path.join(self.d, "k.json")
-        with open(tok, "w") as fh:
+        with open(tok, "w", encoding="utf-8") as fh:
             fh.write(SDK_BUDGET_10)
-        with open(key, "w") as fh:
+        with open(key, "w", encoding="utf-8") as fh:
             json.dump(SDK_ISSUER_JWK, fh)
         self.assertNotEqual(self._cli("build", out2, "open_payment=" + tok, "--key", "open_payment=" + key).returncode, 0)
         self.assertFalse(os.path.exists(out2))
@@ -389,10 +396,10 @@ class ReviewGaps172(unittest.TestCase):
             r1 = ap2.verify_restrictions(out, accept_integral_floats=True)
             self.assertIs(r1["valid"], True, r1); self.assertEqual(r1["restrictions"][0]["state"], state, r1); self.assertIs(r1["met"], met)
             p = subprocess.run([sys.executable, os.path.join(_HERE, "ap2_evidence.py"), "restriction", out, "--accept-integral-floats"],
-                               capture_output=True, text=True)
+                               capture_output=True, text=True, encoding="utf-8")
             self.assertEqual(p.returncode, 0 if met else 1, p.stderr); self.assertIs(json.loads(p.stdout)["met"], met)
             self.assertEqual(subprocess.run([sys.executable, os.path.join(_HERE, "ap2_evidence.py"), "restriction", out],
-                                            capture_output=True, text=True).returncode, 1)
+                                            capture_output=True, text=True, encoding="utf-8").returncode, 1)
         self.assertIsNone(ap2._INTEGRAL_READ.get())
 
     def test_the_receipt_inside_ap2writeerror_carries_the_option(self):
@@ -416,13 +423,13 @@ class ReviewGaps172(unittest.TestCase):
         if not shutil.which("node"):
             self.skipTest("node absent: the JS verifier is not measured")
         v = os.path.join(_HERE, "spec", "vectors", "ap2", "valid_signed.json")
-        p = subprocess.run(["node", _JS, v, "--accept-integral-floats=1"], capture_output=True, text=True, timeout=120)
+        p = subprocess.run(["node", _JS, v, "--accept-integral-floats=1"], capture_output=True, text=True, timeout=120, encoding="utf-8")
         self.assertEqual((p.returncode, p.stdout), (2, ""))   # a value on a boolean flag: usage, as in the reference
         code = ("import { pathToFileURL } from 'node:url'; const { verifyEvidence } = await import(pathToFileURL(process.env.AP2_JS).href);"
                 "const out = []; for (const bad of ['true', 1, null]) { try { verifyEvidence(process.env.AP2_V, { acceptIntegralFloats: bad }); out.push('accepted'); }"
                 " catch (e) { out.push(e instanceof TypeError ? 'TypeError' : 'other'); } } process.stdout.write(JSON.stringify(out));")
         p = subprocess.run(["node", "--input-type=module", "-e", code], capture_output=True, text=True, timeout=120,
-                           env=dict(os.environ, AP2_JS=_JS, AP2_V=v))   # not argv: the module runs its CLI when argv[1] is itself
+                           env=dict(os.environ, AP2_JS=_JS, AP2_V=v), encoding="utf-8")   # not argv: the module runs its CLI when argv[1] is itself
         self.assertEqual(json.loads(p.stdout), ["TypeError"] * 3, p.stderr)
 
     def test_two_threads_one_value_each(self):

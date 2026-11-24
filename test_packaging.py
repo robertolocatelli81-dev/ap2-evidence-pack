@@ -45,7 +45,7 @@ class TestPyproject(unittest.TestCase):
 
     def test_positive_control_the_1_2_2_layout_fails(self):
         d = tempfile.mkdtemp()
-        with open(os.path.join(d, "pyproject.toml"), "w") as f:
+        with open(os.path.join(d, "pyproject.toml"), "w", encoding="utf-8") as f:
             f.write('[tool.setuptools]\npy-modules = ["ap2_evidence"]\npackages = ["pqcrypto"]\n')
         st = _load_pyproject(os.path.join(d, "pyproject.toml"))["tool"]["setuptools"]
         self.assertIn("pqcrypto", st["packages"])
@@ -65,7 +65,7 @@ class TestImportHookFindsTheFileNotTheDirectory(unittest.TestCase):
         d = tempfile.mkdtemp()
         shutil.copy(os.path.join(HERE, "ap2_evidence.py"), d)
         os.makedirs(os.path.join(d, "pqcrypto"))
-        with open(os.path.join(d, "pqcrypto", "__init__.py"), "w") as f:
+        with open(os.path.join(d, "pqcrypto", "__init__.py"), "w", encoding="utf-8") as f:
             f.write("__version__ = '1.0.0'  # a foreign pqcrypto package, no sigsuite here\n")
         if with_ap2_pqcrypto:
             shutil.copytree(os.path.join(HERE, "pqcrypto"), os.path.join(d, "ap2_pqcrypto"))
@@ -73,7 +73,7 @@ class TestImportHookFindsTheFileNotTheDirectory(unittest.TestCase):
 
     def _run(self, d):
         code = "import os, sys, ap2_evidence; print(os.path.basename(os.path.dirname(sys.modules['sigsuite'].__file__)))"
-        return subprocess.run([sys.executable, "-c", code], cwd=d, capture_output=True, text=True, timeout=60)
+        return subprocess.run([sys.executable, "-c", code], cwd=d, capture_output=True, text=True, timeout=60, encoding="utf-8")
 
     def test_sigsuite_resolved_from_ap2_pqcrypto_beside_a_foreign_pqcrypto(self):
         d = self._layout(True)
@@ -103,7 +103,7 @@ class TestWheelContents(unittest.TestCase):
         src = tempfile.mkdtemp(); out = tempfile.mkdtemp()
         shutil.copytree(HERE, os.path.join(src, "t"), ignore=shutil.ignore_patterns("build", "*.egg-info", ".git", "__pycache__", "dist"))
         r = subprocess.run([sys.executable, "-m", "build", "-q", "-w", "-o", out, os.path.join(src, "t")],
-                           capture_output=True, text=True, timeout=600)
+                           capture_output=True, text=True, timeout=600, encoding="utf-8")
         self.assertEqual(r.returncode, 0, r.stderr[-800:])
         whl = [n for n in os.listdir(out) if n.endswith(".whl")]
         self.assertEqual(len(whl), 1, whl)

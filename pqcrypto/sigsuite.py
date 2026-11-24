@@ -185,6 +185,63 @@ def _der_b64_to_priv(b64: str):
     return serialization.load_der_private_key(_unb64(b64), password=None)
 
 
+
+def win_owner_only(path: str) -> None:
+    """Windows' equivalent of mode 0600 (ap2-evidence-pack 1.11.0; a mode there sets only the read-only attribute): the
+    file's access list becomes one entry, the user running this process, full control, protected from inheritance
+    (SDDL "D:P(A;;FA;;;<SID>)", SetFileSecurityW; the SID from whoami, as cryptovalid-opencore's verifier.owner_only).
+    OSError when it cannot be set: the private file is then not written."""
+    import ctypes
+    import subprocess
+    from ctypes import wintypes
+    sysdir = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32")
+    who = subprocess.run([os.path.join(sysdir, "whoami.exe"), "/user", "/fo", "csv", "/nh"], capture_output=True, timeout=60)
+    sid = re.findall(rb'"(S-1-[0-9-]+)"', who.stdout)
+    if who.returncode != 0 or len(sid) != 1:
+        raise OSError(f"cannot read the SID of this user (whoami exit {who.returncode})")
+    adv = ctypes.WinDLL("advapi32", use_last_error=True)
+    conv = adv.ConvertStringSecurityDescriptorToSecurityDescriptorW
+    conv.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p)
+    conv.restype = wintypes.BOOL
+    setsec = adv.SetFileSecurityW
+    setsec.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, ctypes.c_void_p)
+    setsec.restype = wintypes.BOOL
+    sd = ctypes.c_void_p()
+    if not conv("D:P(A;;FA;;;%s)" % sid[0].decode("ascii"), 1, ctypes.byref(sd), None):
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        if not setsec(os.fspath(path), 0x4 | 0x80000000, sd):   # DACL | PROTECTED_DACL_SECURITY_INFORMATION
+            raise ctypes.WinError(ctypes.get_last_error())
+    finally:
+        ctypes.WinDLL("kernel32").LocalFree(sd)
+
+
+def win_copy_dacl(src: str, dst: str) -> None:
+    """Windows' equivalent of giving a replacement file the mode of the file it replaces (ap2-evidence-pack 1.11.0): `dst`
+    gets the access list of `src` and its protection (GetFileSecurityW / SetFileSecurityW). Up to 1.10.0 a pack replaced
+    by `stamp` or `sign` there got the folder's inherited list."""
+    import ctypes
+    from ctypes import wintypes
+    adv = ctypes.WinDLL("advapi32", use_last_error=True)
+    get = adv.GetFileSecurityW
+    get.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD))
+    get.restype = wintypes.BOOL
+    ctl = adv.GetSecurityDescriptorControl
+    ctl.argtypes = (ctypes.c_void_p, ctypes.POINTER(wintypes.WORD), ctypes.POINTER(wintypes.DWORD))
+    setsec = adv.SetFileSecurityW
+    setsec.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, ctypes.c_void_p)
+    setsec.restype = wintypes.BOOL
+    need = wintypes.DWORD(0)
+    get(os.fspath(src), 0x4, None, 0, ctypes.byref(need))   # DACL_SECURITY_INFORMATION: the size first
+    buf = ctypes.create_string_buffer(need.value or 1)
+    if not get(os.fspath(src), 0x4, buf, need, ctypes.byref(need)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    c, rev = wintypes.WORD(0), wintypes.DWORD(0)
+    ctl(buf, ctypes.byref(c), ctypes.byref(rev))
+    info = 0x4 | (0x80000000 if c.value & 0x1000 else 0x20000000)   # SE_DACL_PROTECTED: PROTECTED_ / UNPROTECTED_DACL
+    if not setsec(os.fspath(dst), info, buf):
+        raise ctypes.WinError(ctypes.get_last_error())
+
 class ProducerIdentity:
     """Stable classical + ML-DSA-65 signing identity. `public_keys()` is what a
     relying party pins; `sign_block()` produces the hybrid producer-signature block."""
@@ -238,6 +295,8 @@ class ProducerIdentity:
             except FileExistsError:
                 continue
         try:
+            if os.name == "nt":   # 1.11.0: mode 0600 sets only the read-only attribute there; the access list is the equivalent,
+                win_owner_only(tmp)   # set before the key is written (a new file gets the folder's inherited list)
             with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
                 fd = None
                 json.dump(data, f)

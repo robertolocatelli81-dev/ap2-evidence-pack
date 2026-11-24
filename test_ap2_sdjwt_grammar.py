@@ -126,7 +126,7 @@ def js_parse_many(compacts):
                     '  catch (e) { out.push(["refused", e.message.split(":")[0]]); } }\n'
                     'process.stdout.write(JSON.stringify(out));\n')
         p = subprocess.run([NODE, os.path.join(d, "run.mjs"), os.path.join(d, "in.json")], capture_output=True, text=True,
-                           cwd=d)
+                           cwd=d, encoding="utf-8")
         if p.returncode != 0:
             raise AssertionError(p.stderr[-800:])
         return json.loads(p.stdout)

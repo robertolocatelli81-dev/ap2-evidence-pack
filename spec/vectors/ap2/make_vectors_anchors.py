@@ -59,10 +59,10 @@ class ProbeTSA:
                         "-keyout", self.key, "-out", self.crt, "-days", "7300", "-subj", "/CN=probe TSA 2",
                         "-addext", "extendedKeyUsage=critical,timeStamping", "-addext", "basicConstraints=critical,CA:FALSE",
                         "-addext", "keyUsage=critical,digitalSignature"], check=True, capture_output=True)
-        with open(os.path.join(d, "serial"), "w") as f:
+        with open(os.path.join(d, "serial"), "w", encoding="utf-8") as f:
             f.write("01\n")
         self.cnf = os.path.join(d, "tsa.cnf")
-        with open(self.cnf, "w") as f:
+        with open(self.cnf, "w", encoding="utf-8") as f:
             f.write(f"""[ tsa ]
 default_tsa = t
 [ t ]

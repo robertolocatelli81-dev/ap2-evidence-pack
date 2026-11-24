@@ -35,7 +35,7 @@ class Review2(unittest.TestCase):
         with open(job, "w", encoding="utf-8") as fh:
             json.dump({"pack": self.path, "window": window, "disclosures": disclosures}, fh)
         out = subprocess.run(["node", os.path.join(ROOT, "verifiers", "js", "nb_parity.mjs"), job], capture_output=True,
-                             text=True, timeout=120)
+                             text=True, timeout=120, encoding="utf-8")
         return json.loads(out.stdout)
 
     def test_value_outside_unicode_13_refused_in_both(self):

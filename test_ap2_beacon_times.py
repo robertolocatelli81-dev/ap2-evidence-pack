@@ -114,7 +114,7 @@ class Times(unittest.TestCase):
                         '  catch (e) { return e instanceof __PulseError ? "PulseError:" + e.message : "other:" + e; } });\n'
                         'process.stdout.write(JSON.stringify(out));\n')
             p = subprocess.run([NODE, os.path.join(d, "run.mjs"), os.path.join(d, "in.json")], capture_output=True,
-                               text=True, cwd=d)
+                               text=True, cwd=d, encoding="utf-8")
             self.assertEqual(p.returncode, 0, p.stderr[-800:])
             for (raw, tag), got in zip(CASES, json.loads(p.stdout)):
                 want = oracle(raw, tag)
@@ -138,7 +138,7 @@ class Packs(unittest.TestCase):
         cls.d = tempfile.mkdtemp(prefix="ap2nbp_")
         cls.ctl = os.path.join(cls.d, "ctl.json")
         A.build_evidence([{"name": "payment", "sd_jwt": T.mandate()}], cls.ctl, tsa_url=None, not_before=T.block())
-        with open(cls.ctl) as f:
+        with open(cls.ctl, encoding="utf-8") as f:
             ev = json.load(f)
         ev["not_before"]["pulses"]["certificate"] = _month13(ev["not_before"]["pulses"]["certificate"])
         cls.bad = os.path.join(cls.d, "month13.json")
@@ -152,7 +152,7 @@ class Packs(unittest.TestCase):
         env = dict(os.environ)
         env.pop("PYTHONPATH", None)
         return subprocess.run([sys.executable, "-B", os.path.join(ROOT, "ap2_evidence.py"), "verify", path],
-                              capture_output=True, text=True, env=env)
+                              capture_output=True, text=True, env=env, encoding="utf-8")
 
     def test_control_verifies(self):
         p = self._py_cli(self.ctl)
@@ -176,14 +176,14 @@ class Packs(unittest.TestCase):
 
     @unittest.skipUnless(NODE, "needs node")
     def test_month_13_pack_js_cli(self):
-        p = subprocess.run([NODE, JS, self.bad], capture_output=True, text=True)
+        p = subprocess.run([NODE, JS, self.bad], capture_output=True, text=True, encoding="utf-8")
         r = json.loads(p.stdout)
         self.assertEqual(p.returncode, 1, p.stderr[-800:])
         self.assertFalse(r["valid"])
         self.assertIn("certificate_time", json.dumps(r))
 
     def test_leap_second_proven_time(self):
-        with open(self.ctl) as f:
+        with open(self.ctl, encoding="utf-8") as f:
             ev = json.load(f)
         r = A.verify_evidence(self.ctl)
         for proven, want in (("20991231235959Z", "verified"), ("20991231235959.5Z", "verified"),
@@ -208,7 +208,7 @@ class Packs(unittest.TestCase):
                         'const ev = JSON.parse(readFileSync(process.argv[2], "utf8")); const r = __ve(process.argv[2]);\n'
                         'process.stdout.write(JSON.stringify(["20991231235959Z", "20991231235960Z", "20001231235959Z"]'
                         '.map((t) => __cnb(ev.not_before, ev, r.artifacts, t).checks.NB3)));\n')
-            p = subprocess.run([NODE, os.path.join(d, "run.mjs"), self.ctl], capture_output=True, text=True, cwd=d)
+            p = subprocess.run([NODE, os.path.join(d, "run.mjs"), self.ctl], capture_output=True, text=True, cwd=d, encoding="utf-8")
             self.assertEqual(p.returncode, 0, p.stderr[-800:])
             self.assertEqual(json.loads(p.stdout), ["verified", "not_evaluated:verified_time_not_a_time",
                                                     "failed:window_inverted"])

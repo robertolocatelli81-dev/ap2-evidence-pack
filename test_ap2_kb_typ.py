@@ -78,7 +78,7 @@ def js_outcomes(typs):
                     '    out.push(r.present === true && r.verified === null ? "ok" : "other " + JSON.stringify(r)); }\n'
                     '  catch (e) { out.push(e.message); } }\nprocess.stdout.write(JSON.stringify(out));\n')
         p = subprocess.run(["node", os.path.join(d, "run.mjs"), os.path.join(d, "in.json")], capture_output=True,
-                           text=True, cwd=d)
+                           text=True, cwd=d, encoding="utf-8")
         if p.returncode != 0:
             raise AssertionError(p.stderr[-800:])
         return json.loads(p.stdout)
@@ -174,7 +174,7 @@ class KbTyp(unittest.TestCase):
             v = A.verify_evidence(out)
             self.assertEqual((v["valid"], v["artifacts"][0]["kb_jwt"]["verified"]), (True, True), v)
             if HAVE_NODE:
-                p = subprocess.run(["node", JS, out], capture_output=True, text=True)
+                p = subprocess.run(["node", JS, out], capture_output=True, text=True, encoding="utf-8")
                 j = json.loads(p.stdout)
                 self.assertEqual((p.returncode, j["valid"], j["artifacts"][0]["kb_jwt"]["verified"]), (0, True, True), p.stdout[-600:])
         finally:

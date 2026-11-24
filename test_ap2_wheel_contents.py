@@ -60,7 +60,7 @@ def _in_work_tree():
     """git tracks this tree: not an archive, and not an archive unpacked inside another repository's work tree."""
     if not shutil.which("git"):
         return False
-    r = subprocess.run(["git", "-C", ROOT, "ls-files", "--error-unmatch", "pyproject.toml"], capture_output=True, text=True)
+    r = subprocess.run(["git", "-C", ROOT, "ls-files", "--error-unmatch", "pyproject.toml"], capture_output=True, text=True, encoding="utf-8")
     return r.returncode == 0
 
 
@@ -77,7 +77,7 @@ class SkipCondition(unittest.TestCase):
             for f in (os.path.basename(__file__), "pyproject.toml"):
                 shutil.copy2(os.path.join(ROOT, f), os.path.join(sub, f))
             r = subprocess.run([sys.executable, "-B", os.path.basename(__file__), "WheelContents"], cwd=sub,
-                               capture_output=True, text=True)
+                               capture_output=True, text=True, encoding="utf-8")
             self.assertEqual(r.returncode, 0, r.stderr[-600:])
             self.assertIn("OK (skipped=2)", r.stderr)
 
@@ -95,7 +95,7 @@ class WheelContents(unittest.TestCase):
             env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
             env["PYTHONPATH"] = site
             r = subprocess.run([sys.executable, "-m", "unittest", "ap2_pqcrypto.test_acvp_mldsa65"], cwd=td,
-                               capture_output=True, text=True, env=env)
+                               capture_output=True, text=True, env=env, encoding="utf-8")
             self.assertEqual(r.returncode, 0, r.stderr[-600:])
             self.assertNotIn("FileNotFoundError", r.stderr)
             try:

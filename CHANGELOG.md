@@ -61,6 +61,13 @@ the new behaviour fail on v1.10.0 on Python 3.9, 3.13 and 3.14; the other 8 are 
 - `stamp` on Windows: the lock of the read-modify-write is a named mutex of the session, keyed by the directory's real
   path; `os.open` of a directory is PermissionError there, so up to 1.10.0 every `stamp` on Windows was "cannot open the
   pack's directory" (CI run of 2026-11-24). On POSIX the lock is flock on the directory, as before.
+- Windows, the rest of what the package does differently there (none of it measured on Windows before 1.11.0): a pack
+  replaced by `sign`, `build` over an existing file or `stamp` keeps its access list (the equivalent of the mode kept on
+  POSIX; a new file gets the folder's inherited list); the producer identity written by `ProducerIdentity.save` gets an
+  access list of one entry, the user, before the key is written (the equivalent of mode 0600, which sets only the
+  read-only attribute there); `os.fchmod`, which Python has on Windows only from 3.13, is `os.chmod` of the same new file
+  before that; and an openssl that crashed (an NTSTATUS code such as 0xC0000005 as its exit code, Windows having no
+  signals) is a check not run here, as a signal is on POSIX (SPEC §6.10), not openssl's answer.
 - `release.yml` (new): on a tag, the wheel and the sdist built from `git archive` of the tag, their
   SHA256SUMS checked on a line of its own, build provenance attested, a draft release; `pypi.yml` also checks that
   attestation before it uploads. `verifiers/lax_python_ablation.sh` takes the interpreter from `PYTHON` and reads and

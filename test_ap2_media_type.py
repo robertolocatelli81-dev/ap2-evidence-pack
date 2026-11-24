@@ -165,7 +165,7 @@ class MediaType(unittest.TestCase):
                         '  const x = __mt(a), y = __mt(b); return [x !== null && x === y, y === null]; });\n'
                         'process.stdout.write(JSON.stringify(out));\n')
             p = subprocess.run([NODE, os.path.join(d, "run.mjs"), os.path.join(d, "in.json")], capture_output=True,
-                               text=True, cwd=d)
+                               text=True, cwd=d, encoding="utf-8")
             self.assertEqual(p.returncode, 0, p.stderr[-800:])
             for (a, b), (eq, b_none) in zip(PAIRS + [(a, b) for a, b, _ in NAMED], json.loads(p.stdout)):
                 self.assertEqual((eq, b_none), (same(oracle, a, b), oracle(b) is None), (a, b))

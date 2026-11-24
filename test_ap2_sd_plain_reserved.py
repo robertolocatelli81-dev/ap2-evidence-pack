@@ -186,7 +186,7 @@ class PlainReserved(unittest.TestCase):
         mpath = os.path.join(d, "manifest.json")
         with open(mpath, "w", encoding="utf-8") as f:
             json.dump(manifest, f)
-        out = subprocess.run(["node", _MANY, _JS, mpath], capture_output=True, text=True, timeout=600)
+        out = subprocess.run(["node", _MANY, _JS, mpath], capture_output=True, text=True, timeout=600, encoding="utf-8")
         self.assertEqual(out.returncode, 0, out.stderr[-500:])
         receipts = json.loads(out.stdout)
         for c in CASES:

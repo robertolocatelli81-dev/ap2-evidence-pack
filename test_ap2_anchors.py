@@ -45,10 +45,10 @@ class LocalTSA:
                         "-out", self.crt, "-days", "30", "-subj", "/CN=" + cn, "-addext", "extendedKeyUsage=critical,timeStamping",
                         "-addext", "basicConstraints=critical,CA:FALSE", "-addext", "keyUsage=critical,digitalSignature"], check=True, capture_output=True)
         self.serial = os.path.join(d, cn + ".serial")
-        with open(self.serial, "w") as f:
+        with open(self.serial, "w", encoding="utf-8") as f:
             f.write("01\n")
         self.cnf = os.path.join(d, cn + ".cnf")
-        with open(self.cnf, "w") as f:
+        with open(self.cnf, "w", encoding="utf-8") as f:
             f.write(f"[ tsa ]\ndefault_tsa = t\n[ t ]\nserial = {_cnf(self.serial)}\ncrypto_device = builtin\nsigner_cert = {_cnf(self.crt)}\n"
                     f"signer_key = {_cnf(self.key)}\nsigner_digest = sha256\ndefault_policy = 1.2.3.4.1\ndigests = sha256\nordering = no\n"
                     f"tsa_name = no\ness_cert_id_chain = no\ness_cert_id_alg = sha256\n")
@@ -109,7 +109,7 @@ class TestStamp(unittest.TestCase):
 
     def test_stamp_refuses_a_pack_whose_content_does_not_match_its_digest_and_leaves_it_unchanged(self):
         ev = _rjson(self.pack); ev["subject"] = "altered after sealing"
-        with open(self.pack, "w") as f:
+        with open(self.pack, "w", encoding="utf-8") as f:
             json.dump(ev, f)
         raw = _rb(self.pack)
         with self.assertRaises(ap2.Ap2EvidenceError):
@@ -148,10 +148,10 @@ class TestMinAnchorsGrammar(unittest.TestCase):
 
     def _py(self, *args):
         return subprocess.run([sys.executable, "-B", os.path.join(_HERE, "ap2_evidence.py"), "verify", os.path.join(VDIR, "anchor_valid.json"), *args],
-                              capture_output=True, text=True)
+                              capture_output=True, text=True, encoding="utf-8")
 
     def _js(self, *args):
-        return subprocess.run(["node", JS, os.path.join(VDIR, "anchor_valid.json"), *args], capture_output=True, text=True)
+        return subprocess.run(["node", JS, os.path.join(VDIR, "anchor_valid.json"), *args], capture_output=True, text=True, encoding="utf-8")
 
     def test_bad_values_are_usage_errors(self):
         for v in self.BAD:
@@ -215,14 +215,14 @@ class TestAnchorIdentity(unittest.TestCase):
                 self.assertEqual(r["anchors"][0]["tsa_verified"], True, name)   # openssl accepts the wrapper: only the identity rule stops it
                 self.assertEqual((r["anchors_verified"], r["policy_ok"]), (1, False), name)
             if HAVE_NODE:
-                j = json.loads(subprocess.run(["node", JS, p, "--min-anchors", "2"], capture_output=True, text=True).stdout)
+                j = json.loads(subprocess.run(["node", JS, p, "--min-anchors", "2"], capture_output=True, text=True, encoding="utf-8").stdout)
                 self.assertEqual((j["anchors_verified"], j["policy_ok"]), (1, False), ("js", name))
 
     def test_two_different_tsas_still_count_two(self):   # the control: the identity rule does not merge distinct timestamps
         p = os.path.join(VDIR, "anchors_two_valid.json")
         self.assertEqual(ap2.verify_evidence(p, min_anchors=2)["anchors_verified"], 2)
         if HAVE_NODE:
-            j = json.loads(subprocess.run(["node", JS, p, "--min-anchors", "2"], capture_output=True, text=True).stdout)
+            j = json.loads(subprocess.run(["node", JS, p, "--min-anchors", "2"], capture_output=True, text=True, encoding="utf-8").stdout)
             self.assertEqual(j["anchors_verified"], 2)
 
 
@@ -243,7 +243,7 @@ class TestAnchorAggregateAndTexts(unittest.TestCase):
             json.dump(e, f)
         out = [ap2.verify_evidence(p)]
         if HAVE_NODE:
-            out.append(json.loads(subprocess.run(["node", JS, p], capture_output=True, text=True).stdout))
+            out.append(json.loads(subprocess.run(["node", JS, p], capture_output=True, text=True, encoding="utf-8").stdout))
         return out
 
     def test_one_failing_entry_among_good_ones_fails_the_pack(self):
@@ -385,7 +385,7 @@ class TestStampWrite(unittest.TestCase):
     def test_a_pack_of_another_format_is_not_stamped(self):
         ev = _rjson(self.pack); ev["evidence_format"] = "ap2-evidence-pack/9.9"
         ev["evidence_digest_sha256"] = __import__("hashlib").sha256(ap2._canon({k: v for k, v in ev.items() if k not in ap2._DIGEST_EXCLUDED})).hexdigest()
-        with open(self.pack, "w") as f:
+        with open(self.pack, "w", encoding="utf-8") as f:
             json.dump(ev, f)
         raw = _rb(self.pack)
         with self.assertRaises(ap2.Ap2EvidenceError):
@@ -394,7 +394,7 @@ class TestStampWrite(unittest.TestCase):
 
     def test_an_empty_anchors_list_is_not_stamped(self):
         ev = _rjson(self.pack); ev["anchors"] = []
-        with open(self.pack, "w") as f:
+        with open(self.pack, "w", encoding="utf-8") as f:
             json.dump(ev, f)
         raw = _rb(self.pack)
         with self.assertRaises(ap2.Ap2EvidenceError):
@@ -417,6 +417,8 @@ class TestStampWrite(unittest.TestCase):
         self.assertEqual(sorted(x for x in os.listdir(self.d) if not x.startswith("tsa-")), [x for x in before if not x.startswith("tsa-")])
 
     def test_mode_symlink_and_leftovers(self):
+        if os.name == "nt":   # 1.11.0: a mode there is only the read-only attribute; the access list is what is kept
+            return self._windows_access_list_kept()
         os.chmod(self.pack, 0o640)   # neither the umask default (0644) nor mkstemp's (0600): only a copied mode keeps it
         link = os.path.join(self.d, "link.json"); os.symlink(self.pack, link)
         ap2.add_anchor(link, "https://ok1")
@@ -424,6 +426,19 @@ class TestStampWrite(unittest.TestCase):
         self.assertEqual(len(_rjson(self.pack)["anchors"]), 1)
         self.assertEqual(os.stat(self.pack).st_mode & 0o777, 0o640)
         self.assertEqual(sorted(x for x in os.listdir(self.d) if not x.startswith("tsa-")), ["link.json", "p.json"])
+
+    def _windows_access_list_kept(self):
+        def acl(p):
+            return subprocess.run(["icacls", p], capture_output=True, text=True, encoding="utf-8", errors="replace").stdout.replace(p, "<p>")
+        ap2._sigsuite.win_owner_only(self.pack)   # an access list the folder would not give a new file
+        before = acl(self.pack)
+        other = os.path.join(self.d, "new.json"); open(other, "wb").close()
+        self.assertNotEqual(before, acl(other).replace("new.json", "p.json"))   # control: a new file gets another list
+        os.remove(other)
+        ap2.add_anchor(self.pack, "https://ok1")
+        self.assertEqual(len(_rjson(self.pack)["anchors"]), 1)
+        self.assertEqual(acl(self.pack), before)
+        self.assertEqual(sorted(x for x in os.listdir(self.d) if not x.startswith("tsa-")), ["p.json"])
 
     def test_concurrent_stamps_keep_every_anchor(self):
         import threading
@@ -456,7 +471,7 @@ class TestStampWrite(unittest.TestCase):
         args = []
         for a in sk["artifacts"]:
             p = os.path.join(self.d, a["name"] + ".sdjwt")
-            with open(p, "w") as f:
+            with open(p, "w", encoding="utf-8") as f:
                 f.write(a["sd_jwt_compact"])
             args.append(a["name"] + "=" + p)
         out_pack = os.path.join(self.d, "built.json")
@@ -497,8 +512,8 @@ class TestMinAnchorsApi(unittest.TestCase):
         src = ("import { verifyEvidence } from %s; const out = [];"
                "for (const v of [0, -1, NaN, 1.5, '2', true]) { try { verifyEvidence(%s, { minAnchors: v }); out.push('accepted'); } catch (e) { out.push(e.name); } }"
                "out.push(verifyEvidence(%s, { minAnchors: 2 }).policy_ok); console.log(JSON.stringify(out));"
-               % (json.dumps("file://" + JS), json.dumps(os.path.join(VDIR, "anchor_valid.json")), json.dumps(os.path.join(VDIR, "anchor_valid.json"))))
-        r = subprocess.run(["node", "--input-type=module", "-e", src], capture_output=True, text=True)
+               % (json.dumps(__import__("pathlib").Path(JS).as_uri()), json.dumps(os.path.join(VDIR, "anchor_valid.json")), json.dumps(os.path.join(VDIR, "anchor_valid.json"))))
+        r = subprocess.run(["node", "--input-type=module", "-e", src], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(json.loads(r.stdout), ["TypeError"] * 6 + [False], r.stderr)
 
 

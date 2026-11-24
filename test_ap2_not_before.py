@@ -97,10 +97,10 @@ class LocalTSA:
                         "-out", self.crt, "-days", "30", "-subj", "/CN=test-tsa", "-addext", "extendedKeyUsage=critical,timeStamping",
                         "-addext", "basicConstraints=critical,CA:FALSE", "-addext", "keyUsage=critical,digitalSignature"], check=True, capture_output=True)
         self.serial = os.path.join(d, "t.serial")
-        with open(self.serial, "w") as f:
+        with open(self.serial, "w", encoding="utf-8") as f:
             f.write("01\n")
         self.cnf = os.path.join(d, "t.cnf")
-        with open(self.cnf, "w") as f:
+        with open(self.cnf, "w", encoding="utf-8") as f:
             f.write(f"[ tsa ]\ndefault_tsa = t\n[ t ]\nserial = {_cnf(self.serial)}\ncrypto_device = builtin\nsigner_cert = {_cnf(self.crt)}\n"
                     f"signer_key = {_cnf(self.key)}\nsigner_digest = sha256\ndefault_policy = 1.2.3.4.1\ndigests = sha256\nordering = no\n"
                     f"tsa_name = no\ness_cert_id_chain = no\ness_cert_id_alg = sha256\n")
@@ -119,7 +119,7 @@ def reseal(path, ev):
     ev["evidence_digest_sha256"] = hashlib.sha256(ap2._canon(e2)).hexdigest()
     ev["rfc3161_timestamp"] = {"anchored": False, "note": "re-sealed by the test"}
     ev.pop("anchors", None)
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(ev, f)
 
 
@@ -142,12 +142,12 @@ class Base(unittest.TestCase):
         return ap2.verify_evidence(path, tsa_cert=self.tsa.crt, **kw)
 
     def load(self, path):
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return json.load(f)
 
     def write(self, ev, name="m.json"):
         p = os.path.join(self.d, name)
-        with open(p, "w") as f:
+        with open(p, "w", encoding="utf-8") as f:
             json.dump(ev, f)
         return p
 
@@ -496,10 +496,10 @@ class TestClosed(Base):
 
     def test_duplicate_key_in_the_file(self):
         p = self.build()
-        text = open(p).read().replace('"payment_id": ', '"payment_id": "DUP", "payment_id": ', 1)
+        text = open(p, encoding="utf-8").read().replace('"payment_id": ', '"payment_id": "DUP", "payment_id": ', 1)
         self.assertIn('"DUP"', text)
         q = os.path.join(self.d, "dup.json")
-        with open(q, "w") as f:
+        with open(q, "w", encoding="utf-8") as f:
             f.write(text)
         self.assertEqual(ap2.verify_evidence(q)["admission"], "refused")
 

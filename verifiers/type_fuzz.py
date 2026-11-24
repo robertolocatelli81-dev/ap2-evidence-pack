@@ -76,7 +76,7 @@ def set_path(obj, path, value):
 def answered(cmd, path):
     """True when the command produced a verdict or a bare usage; False when it crashed or said nothing."""
     try:
-        r = subprocess.run(list(cmd) + [path], capture_output=True, text=True, timeout=120)
+        r = subprocess.run(list(cmd) + [path], capture_output=True, text=True, timeout=120, encoding="utf-8")
     except Exception:   # noqa: BLE001
         return False, "the process did not finish"
     try:

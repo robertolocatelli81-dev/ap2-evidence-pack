@@ -63,9 +63,9 @@ class TestAp2ConformanceVectors(unittest.TestCase):
         # `evidence_format` and the §1 MUSTs were never read, so a "…/2.0" pack verified under the 1.0 rules.
         import tempfile, copy
         sys.path.insert(0, os.path.join(_HERE, "verifiers")); import differential_oracle as O
-        base = json.load(open(os.path.join(_HERE, "spec", "vectors", "ap2", "valid_signed.json"))); d = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, d, ignore_errors=True)   # 1.7.2: no directory left behind
+        base = json.load(open(os.path.join(_HERE, "spec", "vectors", "ap2", "valid_signed.json"), encoding="utf-8")); d = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, d, ignore_errors=True)   # 1.7.2: no directory left behind
         def write(name, ev):
-            p = os.path.join(d, name + ".json"); json.dump(ev, open(p, "w")); return p
+            p = os.path.join(d, name + ".json"); json.dump(ev, open(p, "w", encoding="utf-8")); return p
         for name, v in (("x5c-without-x5c", "x5c_header"), ("out-of-enum", "qualified_eidas_certificate"), ("list", ["jwk_header"])):
             e = copy.deepcopy(base)
             for a in e["artifacts"]: a["key"]["provenance_class"] = v
@@ -123,13 +123,13 @@ class TestAp2ConformanceVectors(unittest.TestCase):
         # "no self-asserted key here" — and the sealed scope must be the format's, not the pack's (SPEC §1/§8).
         import tempfile, copy
         sys.path.insert(0, os.path.join(_HERE, "verifiers")); import differential_oracle as O
-        base = json.load(open(os.path.join(_HERE, "spec", "vectors", "ap2", "valid_signed.json"))); d = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, d, ignore_errors=True)   # 1.7.2: no directory left behind
+        base = json.load(open(os.path.join(_HERE, "spec", "vectors", "ap2", "valid_signed.json"), encoding="utf-8")); d = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, d, ignore_errors=True)   # 1.7.2: no directory left behind
         e = copy.deepcopy(base); e["artifacts"] = []; e["bindings"] = []
-        p = os.path.join(d, "empty.json"); json.dump(O.rehash(e), open(p, "w"))
+        p = os.path.join(d, "empty.json"); json.dump(O.rehash(e), open(p, "w", encoding="utf-8"))
         r = ap2.verify_evidence(p)
         self.assertFalse(r["valid"]); self.assertTrue(r["self_asserted_only"], "an empty pack is not 'no self-asserted key'")
         e = copy.deepcopy(base); e["honest_scope"] = base["honest_scope"].replace("Proves:", "Proves everything:")
-        p = os.path.join(d, "scope.json"); json.dump(O.rehash(e), open(p, "w"))
+        p = os.path.join(d, "scope.json"); json.dump(O.rehash(e), open(p, "w", encoding="utf-8"))
         r = ap2.verify_evidence(p)
         self.assertFalse(r["valid"]); self.assertIn("honest_scope", r["refused"])
         self.assertTrue(r["self_asserted_only"])   # a refusal receipt never prints the green value either
@@ -143,7 +143,7 @@ class TestAp2ConformanceVectors(unittest.TestCase):
         V = os.path.join(_HERE, "spec", "vectors", "ap2", "valid_signed.json")
         def receipts(path, flags=()):
             py = ap2.verify_evidence(path)
-            out = subprocess.run(["node", os.path.join(_HERE, "verifiers", "js", "ap2-verify.mjs"), path, *flags], capture_output=True, text=True)
+            out = subprocess.run(["node", os.path.join(_HERE, "verifiers", "js", "ap2-verify.mjs"), path, *flags], capture_output=True, text=True, encoding="utf-8")
             return py, json.loads(out.stdout)
         py, js = receipts(V)
         self.assertEqual(sorted(py), sorted(js), "top-level receipt fields differ between the verifiers")
@@ -156,7 +156,7 @@ class TestAp2ConformanceVectors(unittest.TestCase):
         import hashlib
         sys.path.insert(0, os.path.join(_HERE, "verifiers")); import differential_oracle as O
         b64u = lambda b: base64.urlsafe_b64encode(b).decode().rstrip("=")   # noqa: E731
-        base = json.load(open(V)); sk, n = O._fresh_key()
+        base = json.load(open(V, encoding="utf-8")); sk, n = O._fresh_key()
         kb = ".".join([b64u(b'{"alg":"ES256","typ":"kb+jwt"}'), b64u(b'{"aud":"m","nonce":"n1","iat":1,"sd_hash":"x"}'), b64u(b"\x00" * 64)])
         ev = O._fresh_pack(base, sk, n, '{"alg":"ES256","typ":"ap2-mandate+sd-jwt"}', '{"iss":"x"}', {"iss": "x"}, kb=kb)
         # 1.8.1 (SPEC §9.2): sd_hash is checked without cnf.jwk too, so the KB-JWT commits to this presentation (its
@@ -164,7 +164,7 @@ class TestAp2ConformanceVectors(unittest.TestCase):
         pres = ev["artifacts"][0]["sd_jwt_compact"].rsplit("~", 1)[0] + "~"
         sh = b64u(hashlib.sha256(pres.encode("ascii")).digest())
         ev["artifacts"][0]["sd_jwt_compact"] = pres + ".".join([kb.split(".")[0], b64u(('{"aud":"m","nonce":"n1","iat":1,"sd_hash":"%s"}' % sh).encode()), kb.split(".")[2]])
-        kbd = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, kbd, ignore_errors=True); kbp = os.path.join(kbd, "kb.json"); json.dump(O.rehash(ev), open(kbp, "w"))
+        kbd = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, kbd, ignore_errors=True); kbp = os.path.join(kbd, "kb.json"); json.dump(O.rehash(ev), open(kbp, "w", encoding="utf-8"))
         py, js = receipts(kbp)
         self.assertEqual(sorted(py["artifacts"][0]["kb_jwt"]), sorted(js["artifacts"][0]["kb_jwt"]), "KB-JWT receipt fields differ")
         self.assertEqual(py["artifacts"][0]["kb_jwt"]["claims_recorded_not_validated"],
@@ -172,7 +172,7 @@ class TestAp2ConformanceVectors(unittest.TestCase):
         self.assertIn("aud", py["artifacts"][0]["kb_jwt"]["claims_recorded_not_validated"])
 
         d = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, d, ignore_errors=True); bad = os.path.join(d, "bad.json")   # and on a refusal, where the shapes had also drifted
-        open(bad, "w").write('{"evidence_format":"nope"}')
+        open(bad, "w", encoding="utf-8").write('{"evidence_format":"nope"}')
         py, js = receipts(bad)
         self.assertEqual(sorted(py), sorted(js), "refusal receipt fields differ between the verifiers")
 
@@ -189,7 +189,7 @@ class TestAp2ConformanceVectors(unittest.TestCase):
         from cryptography.hazmat.primitives.asymmetric import ec
         from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
         b64u = lambda b: base64.urlsafe_b64encode(b).decode().rstrip("=")   # noqa: E731
-        base = json.load(open(os.path.join(_HERE, "spec", "vectors", "ap2", "valid_signed.json"))); d = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, d, ignore_errors=True)   # 1.7.2: no directory left behind
+        base = json.load(open(os.path.join(_HERE, "spec", "vectors", "ap2", "valid_signed.json"), encoding="utf-8")); d = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, d, ignore_errors=True)   # 1.7.2: no directory left behind
         ca = ec.generate_private_key(ec.SECP256R1()); sk = ec.generate_private_key(ec.SECP256R1()); n = sk.public_key().public_numbers()
         caname = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "probe CA")])
         cacert = (x509.CertificateBuilder().subject_name(caname).issuer_name(caname).public_key(ca.public_key()).serial_number(1)
@@ -210,7 +210,7 @@ class TestAp2ConformanceVectors(unittest.TestCase):
                              "resolved_claims": {"iss": "wallet"}, "kb_jwt": {"present": False},
                              "verified_at_build": {"signature_ok": True, "disclosures_ok": True}}],
               "bindings": [], "honest_scope": base["honest_scope"]}
-        ev = O.rehash(ev); p = os.path.join(d, "expired.json"); _json.dump(ev, open(p, "w"))
+        ev = O.rehash(ev); p = os.path.join(d, "expired.json"); _json.dump(ev, open(p, "w", encoding="utf-8"))
         anchor = os.path.join(d, "ca.pem"); open(anchor, "wb").write(cacert.public_bytes(serialization.Encoding.PEM))
         r1 = ap2.verify_evidence(p, trust_anchor=anchor)   # today's clock: the leaf is long expired
         self.assertTrue(r1["self_asserted_only"]); self.assertFalse(r1["chain_verified"])
@@ -219,7 +219,7 @@ class TestAp2ConformanceVectors(unittest.TestCase):
         ap2._verify_rfc3161 = lambda *a, **k: {"verified": True, "granted": True, "imprint_ok": True,
                                                "gen_time": "20200601000000Z", "tsa_verified": True}
         try:
-            ev["rfc3161_timestamp"] = {"anchored": True, "tsr_b64": "AA=="}; _json.dump(ev, open(p, "w"))
+            ev["rfc3161_timestamp"] = {"anchored": True, "tsr_b64": "AA=="}; _json.dump(ev, open(p, "w", encoding="utf-8"))
             r2 = ap2.verify_evidence(p, trust_anchor=anchor, tsa_cert=anchor)   # 1.10.0: a file holding a certificate (SPEC §6.10)
         finally:
             ap2._verify_rfc3161 = orig
@@ -245,11 +245,11 @@ class TestAp2ConformanceVectors(unittest.TestCase):
             hdr = json.dumps({"alg": "ES256", "typ": "ap2-mandate+sd-jwt", "x5c": [x5c_entry]}, separators=(",", ":"))
             si = b64u(hdr.encode()) + "." + b64u(b'{"iss":"x"}')
             r, s_ = decode_dss_signature(sk.sign(si.encode("ascii"), ec.ECDSA(hashes.SHA256())))
-            p = os.path.join(d, "m.sdjwt"); open(p, "w").write(si + "." + b64u(r.to_bytes(32, "big") + s_.to_bytes(32, "big")) + "~"); return p
+            p = os.path.join(d, "m.sdjwt"); open(p, "w", encoding="utf-8").write(si + "." + b64u(r.to_bytes(32, "big") + s_.to_bytes(32, "big")) + "~"); return p
         for name, entry in (("wrapped", "\n".join(textwrap.wrap(leaf, 76))), ("not-a-cert", "AAAA"), ("non-string", 1)):
-            out = subprocess.run([sys.executable, "-B", os.path.join(_HERE, "ap2_evidence.py"), "build", os.path.join(d, "o.json"), "intent=" + mandate(entry)], capture_output=True, text=True)
+            out = subprocess.run([sys.executable, "-B", os.path.join(_HERE, "ap2_evidence.py"), "build", os.path.join(d, "o.json"), "intent=" + mandate(entry)], capture_output=True, text=True, encoding="utf-8")
             self.assertEqual(out.returncode, 1, (name, out.stderr[-200:])); self.assertIn("error", json.loads(out.stderr)); self.assertNotIn("Traceback", out.stderr)
-        out = subprocess.run([sys.executable, "-B", os.path.join(_HERE, "ap2_evidence.py"), "build", os.path.join(d, "ok.json"), "intent=" + mandate(leaf)], capture_output=True, text=True)
+        out = subprocess.run([sys.executable, "-B", os.path.join(_HERE, "ap2_evidence.py"), "build", os.path.join(d, "ok.json"), "intent=" + mandate(leaf)], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(out.returncode, 0, out.stderr[-200:])   # positive control: the canonical leaf builds
 
     @unittest.skipUnless(shutil.which("node"), "node absent: the JS verifier is not measured, so 'one grammar' is not measurable")
@@ -273,21 +273,21 @@ class TestAp2ConformanceVectors(unittest.TestCase):
                       [V, "--tsa-cert", os.path.join(_HERE, "no-such.pem")], [V, "--tsa-cert", os.devnull], [V, "--tsa-cert", _HERE], [V, "--tsa-cert", _EMPTY], [V, "--tsa-cert", _NOT_PEM], [V, "--tsa-cert", _PEM_NOT_SEQ],
                       [V, "--tsa-cert", _PEM_BAD_LEN], [V, "--tsa-cert", _PEM_ONE_BYTE], [V, "--tsa-cert", _PEM_PAD_MID], [V, "--tsa-cert", _PEM_LABELS]):   # 1.6.0 review: a certificate that cannot be read
             for cli in clis:
-                out = subprocess.run(cli + extra, capture_output=True, text=True)
+                out = subprocess.run(cli + extra, capture_output=True, text=True, encoding="utf-8")
                 self.assertEqual(out.returncode, 2, (cli[0], extra, out.stdout[:80], out.stderr[-120:])); self.assertEqual(out.stdout, "")
         for cli in clis:
-            out = subprocess.run(cli + [V], capture_output=True, text=True)
+            out = subprocess.run(cli + [V], capture_output=True, text=True, encoding="utf-8")
             self.assertEqual(out.returncode, 0, cli[0]); self.assertTrue(json.loads(out.stdout)["valid"])
         for cli in clis:   # the control of the 1.6.0 review cases: a readable certificate is no usage error
-            out = subprocess.run(cli + [V, "--tsa-cert", os.path.join(_HERE, "spec", "vectors", "ap2", "anchor_probe_tsa.crt")], capture_output=True, text=True)
+            out = subprocess.run(cli + [V, "--tsa-cert", os.path.join(_HERE, "spec", "vectors", "ap2", "anchor_probe_tsa.crt")], capture_output=True, text=True, encoding="utf-8")
             self.assertEqual(out.returncode, 0, (cli[0], out.stderr[-120:]))
         for extra in (["--trust-anchor", os.path.join(_HERE, "no-such.pem")], ["--trust-anchor", os.devnull], ["--trust-anchor", _EMPTY], ["--trust-anchor", _NOT_PEM]):   # the reference only (JS: always usage)
-            out = subprocess.run(clis[0] + [V] + extra, capture_output=True, text=True)
+            out = subprocess.run(clis[0] + [V] + extra, capture_output=True, text=True, encoding="utf-8")
             self.assertEqual((out.returncode, out.stdout), (2, ""), extra)
             self.assertIn("cannot read", out.stderr)
         # r3: the BARE invocation (no subcommand at all) — the reference printed its help on stdout with exit 2, the JS verifier usage on stderr
         for cli in ([sys.executable, os.path.join(_HERE, "ap2_evidence.py")], clis[1]):   # r5: clis[-1] was the Python entry when node was absent, so the JS bare case never ran
-            out = subprocess.run(cli, capture_output=True, text=True)
+            out = subprocess.run(cli, capture_output=True, text=True, encoding="utf-8")
             self.assertEqual(out.returncode, 2, cli[0]); self.assertEqual(out.stdout, "", cli[0]); self.assertNotEqual(out.stderr, "", cli[0])
 
     @unittest.skipUnless(shutil.which("node"), "node absent: 'in both verifiers' is not measurable")
@@ -295,7 +295,7 @@ class TestAp2ConformanceVectors(unittest.TestCase):
         # review r1: artifacts / key / jwk / rfc3161_timestamp / producer_signatures of the wrong type were TypeError /
         # AttributeError tracebacks in the reference; {} as a producer block was "absent" (valid True)
         import copy, subprocess, tempfile
-        base = json.load(open(os.path.join(_HERE, "spec", "vectors", "ap2", "valid_signed.json"))); d = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, d, ignore_errors=True)   # 1.7.2: no directory left behind
+        base = json.load(open(os.path.join(_HERE, "spec", "vectors", "ap2", "valid_signed.json"), encoding="utf-8")); d = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, d, ignore_errors=True)   # 1.7.2: no directory left behind
         muts = {"artifacts-null": lambda e: e.__setitem__("artifacts", None), "artifacts-string": lambda e: e.__setitem__("artifacts", "x"),
                 "artifacts-list-of-null": lambda e: e.__setitem__("artifacts", [None]), "key-null": lambda e: e["artifacts"][0].__setitem__("key", None),
                 "jwk-list": lambda e: e["artifacts"][0]["key"].__setitem__("jwk", [1]), "rfc3161-null": lambda e: e.__setitem__("rfc3161_timestamp", None),
@@ -303,9 +303,9 @@ class TestAp2ConformanceVectors(unittest.TestCase):
                 "producer-empty": lambda e: e.__setitem__("producer_signatures", {}), "producer-list": lambda e: e.__setitem__("producer_signatures", []),
                 "producer-sigs-null-entry": lambda e: e.__setitem__("producer_signatures", {"signatures": [None]})}
         for name, mut in muts.items():
-            e = copy.deepcopy(base); mut(e); p = os.path.join(d, name + ".json"); json.dump(e, open(p, "w"))
+            e = copy.deepcopy(base); mut(e); p = os.path.join(d, name + ".json"); json.dump(e, open(p, "w", encoding="utf-8"))
             r = ap2.verify_evidence(p); self.assertFalse(r["valid"], name)
-            out = subprocess.run(["node", os.path.join(_HERE, "verifiers", "js", "ap2-verify.mjs"), p], capture_output=True, text=True)
+            out = subprocess.run(["node", os.path.join(_HERE, "verifiers", "js", "ap2-verify.mjs"), p], capture_output=True, text=True, encoding="utf-8")
             self.assertFalse(json.loads(out.stdout)["valid"], name)
 
     @unittest.skipUnless(shutil.which("openssl"), "openssl absent: TSA verification not measured")
@@ -318,7 +318,7 @@ class TestAp2ConformanceVectors(unittest.TestCase):
         self.assertTrue(r["valid"]); self.assertTrue(r["rfc3161"]["verified"]); self.assertTrue(r["rfc3161"]["tsa_verified"])
         r = ap2.verify_evidence(os.path.join(vdir, "anchor_wrong_digest.json"), require_anchor=True, tsa_cert=cert)
         self.assertFalse(r["valid"]); self.assertFalse(r["rfc3161"]["verified"])
-        base = json.load(open(os.path.join(vdir, "valid_signed.json")))
+        base = json.load(open(os.path.join(vdir, "valid_signed.json"), encoding="utf-8"))
         def der(tag, body):
             n = len(body); lb = bytes([n]) if n < 128 else bytes([0x82, n >> 8, n & 0xFF]); return bytes([tag]) + lb + body
         dg = bytes.fromhex(base["evidence_digest_sha256"])
@@ -326,7 +326,7 @@ class TestAp2ConformanceVectors(unittest.TestCase):
         eci = der(0x30, der(0x06, bytes.fromhex("2a864886f70d010904")) + der(0xA0, der(0x04, tst))); sd = der(0x30, der(0x02, b"\x03") + der(0x31, b"") + eci + der(0x31, b""))
         resp = der(0x30, der(0x30, der(0x02, b"\x00")) + der(0x30, der(0x06, bytes.fromhex("2a864886f70d010702")) + der(0xA0, sd)))
         e = dict(base); e["rfc3161_timestamp"] = {"anchored": True, "tsa_url": "forged", "tsr_b64": base64.b64encode(resp).decode()}
-        fd = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, fd, ignore_errors=True); p = os.path.join(fd, "forged.json"); json.dump(e, open(p, "w"))
+        fd = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, fd, ignore_errors=True); p = os.path.join(fd, "forged.json"); json.dump(e, open(p, "w", encoding="utf-8"))
         r = ap2.verify_evidence(p, require_anchor=True); self.assertTrue(r["rfc3161"]["verified"]); self.assertTrue(r["valid"])       # binding only: passes (declared)
         r = ap2.verify_evidence(p, require_anchor=True, tsa_cert=cert); self.assertFalse(r["rfc3161"]["tsa_verified"]); self.assertFalse(r["valid"])
 
@@ -337,7 +337,7 @@ class TestAp2ConformanceVectors(unittest.TestCase):
         # BOM skipped), verified 31/33-byte JWK coordinates, raised TypeError on `_sd: null` and AttributeError on `cnf: null`.
         import tempfile, base64, hashlib
         sys.path.insert(0, os.path.join(_HERE, "verifiers")); import differential_oracle as O
-        base = json.load(open(os.path.join(_HERE, "spec", "vectors", "ap2", "valid_signed.json")))
+        base = json.load(open(os.path.join(_HERE, "spec", "vectors", "ap2", "valid_signed.json"), encoding="utf-8"))
         sk, n = O._fresh_key(); H = '{"alg":"ES256","typ":"ap2-mandate+sd-jwt"}'; d = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, d, ignore_errors=True)   # 1.7.2: no directory left behind
         kb = ".".join(base64.urlsafe_b64encode(x).decode().rstrip("=") for x in (b'{"alg":"ES256","typ":"kb+jwt"}', b'{"sd_hash":"x"}', b"\x00" * 64))
         disc = base64.urlsafe_b64encode(b'["salt",[1],"v"]').decode().rstrip("="); dig = base64.urlsafe_b64encode(hashlib.sha256(disc.encode()).digest()).decode().rstrip("=")
@@ -349,22 +349,22 @@ class TestAp2ConformanceVectors(unittest.TestCase):
                "cnf-jwk-empty": ('{"iss":"x","cnf":{"jwk":{}}}', {"iss": "x", "cnf": {"jwk": {}}}, {"kb": kb}),
                "jwk-x-33": ('{"iss":"x"}', {"iss": "x"}, {"jwk_x_bytes": n.x.to_bytes(33, "big")})}
         for name, (payload, resolved, kw) in bad.items():
-            p = os.path.join(d, name + ".json"); json.dump(O._fresh_pack(base, sk, n, H, payload, resolved, **kw), open(p, "w"))
+            p = os.path.join(d, name + ".json"); json.dump(O._fresh_pack(base, sk, n, H, payload, resolved, **kw), open(p, "w", encoding="utf-8"))
             r = ap2.verify_evidence(p); self.assertFalse(r["valid"], name); self.assertTrue(r["digest_ok"], name); self.assertIn("error", r["artifacts"][0], name)
-        p = os.path.join(d, "ok.json"); json.dump(O._fresh_pack(base, sk, n, H, '{"iss":"x","_sd":[],"_sd_alg":"sha-256"}', {"iss": "x"}), open(p, "w"))
+        p = os.path.join(d, "ok.json"); json.dump(O._fresh_pack(base, sk, n, H, '{"iss":"x","_sd":[],"_sd_alg":"sha-256"}', {"iss": "x"}), open(p, "w", encoding="utf-8"))
         self.assertTrue(ap2.verify_evidence(p)["valid"])   # positive control of the builder
         # r4: strict base64url measured by the unit suite too (the ablation of that layer alone left the suite green): the same
         # signature segment padded, with a space, with '+' — a lenient decoder verifies it, the profile refuses it
         ok = O._fresh_pack(base, sk, n, H, '{"iss":"x"}', {"iss": "x"}); c = ok["artifacts"][0]["sd_jwt_compact"]; jwt, rest = c.split("~", 1); h_, p_, s_ = jwt.split(".")
         for nm, sig in (("padded", s_ + "=="), ("space", s_[:10] + " " + s_[10:]), ("plus", s_.replace("-", "+", 1) if "-" in s_ else s_[:-1] + "+")):
-            e = json.loads(json.dumps(ok)); e["artifacts"][0]["sd_jwt_compact"] = ".".join([h_, p_, sig]) + "~" + rest; p = os.path.join(d, "b64" + nm + ".json"); json.dump(O.rehash(e), open(p, "w"))
+            e = json.loads(json.dumps(ok)); e["artifacts"][0]["sd_jwt_compact"] = ".".join([h_, p_, sig]) + "~" + rest; p = os.path.join(d, "b64" + nm + ".json"); json.dump(O.rehash(e), open(p, "w", encoding="utf-8"))
             r = ap2.verify_evidence(p); self.assertFalse(r["valid"], nm); self.assertIn("error", r["artifacts"][0], nm)
         # top-level shapes of r2: anchored must be a boolean (refusal), provenance_class a string (artifact error), sig_alg a string (FAIL entry)
-        e = dict(base); e["rfc3161_timestamp"] = {"anchored": []}; p = os.path.join(d, "anch.json"); json.dump(e, open(p, "w"))
+        e = dict(base); e["rfc3161_timestamp"] = {"anchored": []}; p = os.path.join(d, "anch.json"); json.dump(e, open(p, "w", encoding="utf-8"))
         r = ap2.verify_evidence(p); self.assertFalse(r["valid"]); self.assertIn("anchored", r["refused"])
-        e = json.loads(json.dumps(base)); e["artifacts"][0]["key"]["provenance_class"] = ["x"]; p = os.path.join(d, "prov.json"); json.dump(O.rehash(e), open(p, "w"))
+        e = json.loads(json.dumps(base)); e["artifacts"][0]["key"]["provenance_class"] = ["x"]; p = os.path.join(d, "prov.json"); json.dump(O.rehash(e), open(p, "w", encoding="utf-8"))
         r = ap2.verify_evidence(p); self.assertFalse(r["valid"]); self.assertIn("provenance_class", r["artifacts"][0]["error"])
-        e = json.loads(json.dumps(base)); e["producer_signatures"]["signatures"].append({"sig_alg": ["ed25519"], "public_key_b64": "AA==", "signature_b64": "AA=="}); p = os.path.join(d, "alg.json"); json.dump(e, open(p, "w"))
+        e = json.loads(json.dumps(base)); e["producer_signatures"]["signatures"].append({"sig_alg": ["ed25519"], "public_key_b64": "AA==", "signature_b64": "AA=="}); p = os.path.join(d, "alg.json"); json.dump(e, open(p, "w", encoding="utf-8"))
         r = ap2.verify_evidence(p, trusted_producer_keys={"ed25519": [base["producer_signatures"]["signatures"][0]["public_key_b64"]]})
         self.assertFalse(r["valid"]); self.assertEqual(r["producer_signatures"]["signatures"][-1]["status"], "FAIL")
 
@@ -372,7 +372,7 @@ class TestAp2ConformanceVectors(unittest.TestCase):
     def test_js_verifier_is_conformant_on_all_normative_fields(self):
         # the JS verifier through the SAME conformance runner as the reference: every normative field of every vector
         import subprocess, run_ap2_conformance as rc
-        probe = subprocess.run(["node", "-e", "const{createPublicKey}=require('node:crypto');try{createPublicKey({key:Buffer.concat([Buffer.from('308207b2300b0609608648016503040312038207a100','hex'),Buffer.alloc(1952)]),format:'der',type:'spki'});console.log('yes')}catch{console.log('no')}"], capture_output=True, text=True)
+        probe = subprocess.run(["node", "-e", "const{createPublicKey}=require('node:crypto');try{createPublicKey({key:Buffer.concat([Buffer.from('308207b2300b0609608648016503040312038207a100','hex'),Buffer.alloc(1952)]),format:'der',type:'spki'});console.log('yes')}catch{console.log('no')}"], capture_output=True, text=True, encoding="utf-8")
         if probe.stdout.strip() != "yes":   # r2: on a Node build without ML-DSA-65 (OpenSSL < 3.5) the ML-DSA vectors are SKIP in the JS verifier, so 8/8 is NOT measured — skip, never a pass
             self.skipTest("Node build without ML-DSA-65 (OpenSSL < 3.5): JS conformance on the ML-DSA vectors not measured here")
         def js_verify(path, trusted_producer_keys=None, require_pq=False, require_producer=False, require_anchor=False, min_anchors=None,
@@ -385,7 +385,7 @@ class TestAp2ConformanceVectors(unittest.TestCase):
                 if on: flags.append(flag)
             if min_anchors is not None:
                 flags += ["--min-anchors", str(min_anchors)]
-            out = subprocess.run(["node", os.path.join(_HERE, "verifiers", "js", "ap2-verify.mjs"), path] + flags, capture_output=True, text=True)
+            out = subprocess.run(["node", os.path.join(_HERE, "verifiers", "js", "ap2-verify.mjs"), path] + flags, capture_output=True, text=True, encoding="utf-8")
             return json.loads(out.stdout)
         r = rc.run(verify_fn=js_verify, backends={"ml-dsa-65": True}, tools={"openssl": False})   # the probe above: this Node checks ML-DSA-65; it calls no openssl
         self.assertTrue(r["conformant"], r)
@@ -474,14 +474,14 @@ class TestExpectedFilesAndBackend(unittest.TestCase):
             open(p, "w", encoding="utf-8").write(raw)
         e = json.loads(raw)
         cases = {
-            "truncated": lambda: open(p, "w").write(raw[:-5]),
+            "truncated": lambda: open(p, "w", encoding="utf-8").write(raw[:-5]),
             "not utf-8": lambda: open(p, "wb").write(raw.encode().replace(b'"description": "', b'"description": "\xff', 1)),
-            "repeated key": lambda: open(p, "w").write(raw.rstrip()[:-1] + ', "requires_backend": ["ml-dsa-87"], "requires_backend": ["ml-dsa-65"]}'),
+            "repeated key": lambda: open(p, "w", encoding="utf-8").write(raw.rstrip()[:-1] + ', "requires_backend": ["ml-dsa-87"], "requires_backend": ["ml-dsa-65"]}'),
             "directory": lambda: (os.remove(p), os.mkdir(p)),
-            "policy string": lambda: json.dump(dict(e, policy=dict(e["policy"], require_pq="false")), open(p, "w")),
-            "min_anchors 0": lambda: json.dump(dict(e, policy=dict(e["policy"], min_anchors=0)), open(p, "w")),
-            "min_anchors bool": lambda: json.dump(dict(e, policy=dict(e["policy"], min_anchors=True)), open(p, "w")),
-            "pins not an object": lambda: json.dump(dict(e, policy=dict(e["policy"], trusted_producer_keys=5)), open(p, "w")),
+            "policy string": lambda: json.dump(dict(e, policy=dict(e["policy"], require_pq="false")), open(p, "w", encoding="utf-8")),
+            "min_anchors 0": lambda: json.dump(dict(e, policy=dict(e["policy"], min_anchors=0)), open(p, "w", encoding="utf-8")),
+            "min_anchors bool": lambda: json.dump(dict(e, policy=dict(e["policy"], min_anchors=True)), open(p, "w", encoding="utf-8")),
+            "pins not an object": lambda: json.dump(dict(e, policy=dict(e["policy"], trusted_producer_keys=5)), open(p, "w", encoding="utf-8")),
         }
         if hasattr(os, "mkfifo"):
             cases["fifo"] = lambda: (os.remove(p), os.mkfifo(p))
@@ -500,7 +500,7 @@ class TestExpectedFilesAndBackend(unittest.TestCase):
         os.remove(os.path.join(d, "zz_orphan.json"))
         self.assertTrue(rc.run(vector_dir=d)["conformant"])
         self.assertEqual(subprocess.run([sys.executable, os.path.join(self.VDIR, "run_ap2_conformance.py")],
-                                        capture_output=True, text=True).returncode, 0)
+                                        capture_output=True, text=True, encoding="utf-8").returncode, 0)
 
 
 class TestNotOkBlockStatesNothing(unittest.TestCase):
@@ -539,7 +539,7 @@ class TestNotOkBlockStatesNothing(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("node"), "node absent: the JS verifier is not measured")
     def test_js(self):
-        probe = subprocess.run(["node", "-e", "const{createPublicKey}=require('node:crypto');try{createPublicKey({key:Buffer.concat([Buffer.from('308207b2300b0609608648016503040312038207a100','hex'),Buffer.alloc(1952)]),format:'der',type:'spki'});console.log('yes')}catch{console.log('no')}"], capture_output=True, text=True)
+        probe = subprocess.run(["node", "-e", "const{createPublicKey}=require('node:crypto');try{createPublicKey({key:Buffer.concat([Buffer.from('308207b2300b0609608648016503040312038207a100','hex'),Buffer.alloc(1952)]),format:'der',type:'spki'});console.log('yes')}catch{console.log('no')}"], capture_output=True, text=True, encoding="utf-8")
         if probe.stdout.strip() != "yes":
             self.skipTest("Node build without ML-DSA-65: not measured here")
         js = os.path.join(_HERE, "verifiers", "js", "ap2-verify.mjs")
@@ -547,7 +547,7 @@ class TestNotOkBlockStatesNothing(unittest.TestCase):
             flags = ["--require-pq"]
             for alg, keys in (pin or {}).items():
                 for k in keys: flags += ["--trusted-producer-key", f"{alg}={k}"]
-            return json.loads(subprocess.run(["node", js, p] + flags, capture_output=True, text=True).stdout)
+            return json.loads(subprocess.run(["node", js, p] + flags, capture_output=True, text=True, encoding="utf-8").stdout)
         self._check(verify)
 
 
@@ -569,7 +569,7 @@ class TestSignatureEntryNamesTheKey(unittest.TestCase):
                 json.dump(ev, f, ensure_ascii=False)
             py = ap2.verify_evidence(path)
             js = json.loads(subprocess.run(["node", os.path.join(_HERE, "verifiers", "js", "ap2-verify.mjs"), path],
-                                           capture_output=True, text=True).stdout)
+                                           capture_output=True, text=True, encoding="utf-8").stdout)
         finally:
             shutil.rmtree(d)
         # 1.6.0 — SPEC §9.1/§6.9 (not additive): an unknown key in an entry is a refusal of class unknown_member naming the
@@ -588,7 +588,7 @@ class TestSignatureEntryNamesTheKey(unittest.TestCase):
                 json.dump(ev, f, ensure_ascii=False)
             py = ap2.verify_evidence(path)
             js = json.loads(subprocess.run(["node", os.path.join(_HERE, "verifiers", "js", "ap2-verify.mjs"), path],
-                                           capture_output=True, text=True).stdout)
+                                           capture_output=True, text=True, encoding="utf-8").stdout)
         finally:
             shutil.rmtree(d)
         return py, js
@@ -632,7 +632,7 @@ class TestSignatureEntryNamesTheKey(unittest.TestCase):
                 "print(sigsuite._entry_shape_note({'sig_alg': 'ed25519'}))") % os.path.join(_HERE, "pqcrypto")
         for seed in ("0", "1", "2", "3", "4", "5"):
             out = subprocess.run([sys.executable, "-B", "-c", code], capture_output=True, text=True,
-                                 env=dict(os.environ, PYTHONHASHSEED=seed)).stdout.strip()
+                                 env=dict(os.environ, PYTHONHASHSEED=seed), encoding="utf-8").stdout.strip()
             self.assertEqual(out, want, "PYTHONHASHSEED=" + seed)
 
     @unittest.skipUnless(shutil.which("node"), "node absent: the JS note is not measured")

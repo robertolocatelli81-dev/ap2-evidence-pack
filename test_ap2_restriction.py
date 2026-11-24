@@ -394,7 +394,7 @@ class TestBinding(PackCase):
 
     def test_a_refused_file_has_no_restriction(self):
         p = os.path.join(self.d, "x.json")
-        with open(p, "w") as f:
+        with open(p, "w", encoding="utf-8") as f:
             f.write('{"a": 1, "a": 2}')
         rec = ap2.verify_restrictions(p)
         self.assertEqual((rec["admission"], rec["restrictions"], rec["met"]), ("refused", [], False))
@@ -950,7 +950,7 @@ class TestPackEqualsDirect(PackCase):
 
 class TestCliAndReceipt(PackCase):
     def cli(self, *args):
-        return subprocess.run([sys.executable, "-B", os.path.join(_HERE, "ap2_evidence.py"), *args], capture_output=True, text=True, timeout=120)
+        return subprocess.run([sys.executable, "-B", os.path.join(_HERE, "ap2_evidence.py"), *args], capture_output=True, text=True, timeout=120, encoding="utf-8")
 
     def test_exit_codes(self):
         o = issue(PAY)
@@ -968,7 +968,7 @@ class TestCliAndReceipt(PackCase):
         r = self.cli("restriction", none)
         self.assertEqual((r.returncode, json.loads(r.stdout)["restrictions"], json.loads(r.stdout)["met"]), (1, [], False))
         junk = os.path.join(self.d, "junk.json")
-        with open(junk, "w") as f:
+        with open(junk, "w", encoding="utf-8") as f:
             f.write("[]")
         r = self.cli("restriction", junk)
         self.assertEqual((r.returncode, json.loads(r.stdout)["admission"]), (1, "refused"))
@@ -1190,8 +1190,11 @@ class TestMutantGaps(PackCase):
                 self.assertEqual(json.loads(out.getvalue())["restrictions"][0]["state"], "verified")
             else:
                 self.assertEqual(out.getvalue(), "")
-        with open(os.devnull, "w") as dn, open("/dev/full", "w") as full:   # the receipt cannot be written: 74
-            r = subprocess.run([sys.executable, "-B", os.path.join(_HERE, "ap2_evidence.py"), "restriction", p], stdout=full, stderr=subprocess.PIPE, text=True, timeout=120)
+        from _ap2_platform import full_sink, NO_FULL   # 1.11.0: /dev/full, or a file on a full volume (macOS, Windows)
+        if full_sink() is None:
+            self.skipTest(NO_FULL)
+        with open(os.devnull, "w", encoding="utf-8") as dn, open(full_sink(), "w", encoding="utf-8") as full:   # the receipt cannot be written: 74
+            r = subprocess.run([sys.executable, "-B", os.path.join(_HERE, "ap2_evidence.py"), "restriction", p], stdout=full, stderr=subprocess.PIPE, text=True, timeout=120, encoding="utf-8")
         self.assertEqual(r.returncode, 74, r.stderr)
         self.assertIn("receipt not written", r.stderr)
 
@@ -1200,7 +1203,7 @@ class TestMutantGaps(PackCase):
         p = self.pack(("o", o), ("r", restrict(o, PAY)))
         for argv in (["restriction", p, "--tsa-cert", self.d], ["restriction", p, "--tsa-c", p], ["restriction", p, "--tsa-cert="]):
             with self.subTest(argv=argv):
-                r = subprocess.run([sys.executable, "-B", os.path.join(_HERE, "ap2_evidence.py"), *argv], capture_output=True, text=True, timeout=120)
+                r = subprocess.run([sys.executable, "-B", os.path.join(_HERE, "ap2_evidence.py"), *argv], capture_output=True, text=True, timeout=120, encoding="utf-8")
                 self.assertEqual((r.returncode, r.stdout), (2, ""), r.stderr)
 
     @unittest.skipUnless(HAVE_OPENSSL, "openssl absent: the local TSA cannot run")

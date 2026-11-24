@@ -256,7 +256,7 @@ def run(quick=True, py_root=ROOT, old_root=None, sabotage=None, baselines_only=F
                     "    try: out[m['case']] = a.verify_evidence(m['path'], **kw)['valid']\n"
                     "    except a.Ap2WriteError: out[m['case']] = 'write-error'\n"
                     "print(json.dumps(out))")
-            p = subprocess.run([sys.executable, "-B", "-c", code, old_root, mf], capture_output=True, text=True, timeout=3600)
+            p = subprocess.run([sys.executable, "-B", "-c", code, old_root, mf], capture_output=True, text=True, timeout=3600, encoding="utf-8")
             old = json.loads(p.stdout)
             old_diff = sorted(k for k in valid_by_case if old.get(k) != valid_by_case[k])
         return {"files": len(c.recs), "receipts": n, "violations": viol, "design_equation_failures": design_fail,

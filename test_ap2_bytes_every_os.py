@@ -62,6 +62,31 @@ def _text_writes_without_newline(path):
     return bad
 
 
+def _text_calls_without_encoding(path):
+    """open() in text mode, and subprocess calls with text=True / universal_newlines=True, without encoding=: on Windows
+    each reads or writes in the ANSI code page (CI run of 2026-11-24: the tests' own packs were written as cp1252 there
+    and refused as not UTF-8, 193 errors in two test files)."""
+    with open(path, encoding="utf-8") as f:
+        tree = ast.parse(f.read())
+    bad = []
+    for n in ast.walk(tree):
+        if not isinstance(n, ast.Call):
+            continue
+        f = n.func
+        name = f.id if isinstance(f, ast.Name) else (f.attr if isinstance(f, ast.Attribute) else None)
+        kws = {k.arg for k in n.keywords}
+        if None in kws or "encoding" in kws:
+            continue
+        if name == "open" and not (isinstance(f, ast.Attribute) and getattr(f.value, "id", "") == "os"):
+            mode = n.args[1] if len(n.args) >= 2 else next((k.value for k in n.keywords if k.arg == "mode"), None)
+            m = mode.value if isinstance(mode, ast.Constant) and isinstance(mode.value, str) else ("r" if mode is None else "b?")
+            if "b" not in m:
+                bad.append(f"{os.path.relpath(path, ROOT)}:{n.lineno}")
+        elif name in ("run", "Popen", "check_output", "check_call") and kws & {"text", "universal_newlines"}:
+            bad.append(f"{os.path.relpath(path, ROOT)}:{n.lineno}")
+    return bad
+
+
 class Bytes(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp(prefix="ap2bytes_")
@@ -70,6 +95,20 @@ class Bytes(unittest.TestCase):
     def test_every_text_write_names_newline(self):
         bad = [b for p in PACKAGE_FILES for b in _text_writes_without_newline(os.path.join(ROOT, p))]
         self.assertEqual(bad, [])
+
+    def test_every_text_call_in_the_repository_names_its_encoding(self):
+        import glob
+        files = [p for pat in ("*.py", "pqcrypto/*.py", "verifiers/*.py", "spec/vectors/ap2/*.py", "examples/*.py", "interop/*.py")
+                 for p in glob.glob(os.path.join(ROOT, pat))]
+        self.assertGreater(len(files), 40)
+        self.assertEqual([b for p in files for b in _text_calls_without_encoding(p)], [])
+
+    def test_the_encoding_check_sees_a_call_without_one(self):   # positive control of the reader above
+        p = os.path.join(self.d, "probe.py")
+        with open(p, "w", encoding="utf-8", newline="\n") as f:
+            f.write('import subprocess\nopen("x")\nopen("y", "w")\nopen("z", "rb")\nopen("v", encoding="utf-8")\n'
+                    'subprocess.run(["a"], text=True)\nsubprocess.run(["a"], text=True, encoding="utf-8")\n')
+        self.assertEqual([b.split(":")[-1] for b in _text_calls_without_encoding(p)], ["2", "3", "6"])
 
     def test_the_check_sees_a_write_without_newline(self):   # positive control of the reader above
         p = os.path.join(self.d, "probe.py")
@@ -112,6 +151,19 @@ class Bytes(unittest.TestCase):
             self.assertEqual(A._text_layer_bytes(stream, buf, "SPEC \u00a79.1\n"), "SPEC \u00a79.1\n".encode("utf-8"))
         with mock.patch.dict(os.environ, dict(env, PYTHONIOENCODING="cp1252"), clear=True):
             self.assertEqual(A._text_layer_bytes(stream, buf, "\u00a7"), b"\xa7")
+
+    def test_a_crashed_openssl_is_known_on_each_system(self):
+        """SPEC §6.10: openssl that crashed gave no answer. POSIX: a signal, a negative exit. Windows has no signals: an
+        NTSTATUS error as the exit code (0xC0000005), read up to 1.10.0 as openssl's answer."""
+        self.assertTrue(A._crashed(-11))
+        self.assertFalse(A._crashed(1) or A._crashed(127))
+        with mock.patch.object(A.os, "name", "nt"):
+            self.assertTrue(A._crashed(0xC0000005) and A._crashed(0xC0000409))
+            self.assertFalse(A._crashed(1))
+        with mock.patch.object(A.os, "name", "posix"):
+            self.assertFalse(A._crashed(0xC0000005))
+        self.assertEqual(A._crash_text(0xC0000005), "ended by exception 0xC0000005")
+        self.assertEqual(A._crash_text(-11), "terminated by signal 11")
 
     def test_cli_receipt_has_no_cr(self):
         p = subprocess.run([sys.executable, os.path.join(ROOT, "ap2_evidence.py"), "verify", VECTOR], capture_output=True, timeout=120)

@@ -53,7 +53,7 @@ def _sdk():
     except Exception:                                # noqa: BLE001
         globals()["SDJWT_VERSION"] = "unknown"
     repo = os.path.abspath(os.path.join(p, "..", "..", ".."))
-    r = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], capture_output=True, text=True)
+    r = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], capture_output=True, text=True, encoding="utf-8")
     return sdk_sdjwt, JWK, (r.stdout.strip()[:12] or "unknown")
 
 

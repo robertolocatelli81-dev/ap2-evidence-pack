@@ -77,7 +77,7 @@ def _js_many(test, entries):
     m = os.path.join(d, "m.json")
     with open(m, "w", encoding="utf-8") as f:
         json.dump([{"name": n, "path": p, "flags": fl} for n, p, fl in entries], f)
-    out = subprocess.run(["node", _MANY, _JS, m], capture_output=True, text=True, timeout=600)
+    out = subprocess.run(["node", _MANY, _JS, m], capture_output=True, text=True, timeout=600, encoding="utf-8")
     test.assertEqual(out.returncode, 0, out.stderr[-500:])
     return json.loads(out.stdout)
 
@@ -690,11 +690,11 @@ class Chains(unittest.TestCase):
             for flag, rc in (("receipt->chain.1", 0), ("chain.0->receipt", 1), ("receipt", 2), ("->chain.1", 2),
                              ("receipt->", 2), ("a->b->c", 2), ("", 2)):
                 with self.subTest(verifier=base[-2] if base[0] == "node" else "python", flag=flag):
-                    p = subprocess.run(base + ["--require-binding", flag], capture_output=True, text=True, env=env, timeout=120)
+                    p = subprocess.run(base + ["--require-binding", flag], capture_output=True, text=True, env=env, timeout=120, encoding="utf-8")
                     self.assertEqual(p.returncode, rc, p.stderr[-300:])
             for flag in ("--require-binding=-x->y", "--require-binding=--a->b"):   # NEMESIS 2026-11-18: Python read it as a value
                 with self.subTest(verifier=base[-2] if base[0] == "node" else "python", flag=flag):
-                    p = subprocess.run(base + [flag], capture_output=True, text=True, env=env, timeout=120)
+                    p = subprocess.run(base + [flag], capture_output=True, text=True, env=env, timeout=120, encoding="utf-8")
                     self.assertEqual(p.returncode, 2, p.stderr[-300:])
 
 

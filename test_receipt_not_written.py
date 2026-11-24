@@ -36,7 +36,9 @@ _VEC = os.path.join(_HERE, "spec", "vectors", "ap2")
 _VALID = os.path.join(_VEC, "anchor_valid.json")
 _INVALID = os.path.join(_VEC, "digest_mismatch.json")
 _OPENSSL = shutil.which("openssl")
-_DEVFULL = os.path.exists("/dev/full")
+from _ap2_platform import full_sink, NO_FULL  # noqa: E402  (1.11.0: /dev/full, or a full volume on macOS/Windows)
+_FULL = full_sink()
+_DEVFULL = _FULL is not None
 
 
 def _run(cmd, mode, cwd=None, stderr_mode="capture"):
@@ -46,7 +48,7 @@ def _run(cmd, mode, cwd=None, stderr_mode="capture"):
     with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
         stdout, pre, close_after = out, None, None
         if mode == "devfull":
-            stdout = close_after = open("/dev/full", "wb")
+            stdout = close_after = open(_FULL, "wb")
         elif mode == "pipe":
             r, w = os.pipe()
             os.close(r)
@@ -55,7 +57,7 @@ def _run(cmd, mode, cwd=None, stderr_mode="capture"):
             stdout, pre = None, (lambda: os.close(1))
         se = err
         if stderr_mode == "devfull":
-            se = open("/dev/full", "wb")
+            se = open(_FULL, "wb")
         elif stderr_mode == "closed":   # fd 2 closed before exec
             se, pre0 = None, pre
             pre = (lambda: (pre0 and pre0(), os.close(2)))
@@ -71,7 +73,7 @@ def _run(cmd, mode, cwd=None, stderr_mode="capture"):
         return p.returncode, (out.read() if mode == "file" else None), err.read()
 
 
-@unittest.skipUnless(_DEVFULL and os.name == "posix", "/dev/full and POSIX file descriptors needed")
+@unittest.skipUnless(_DEVFULL and os.name == "posix", "a full device (" + NO_FULL + ") and POSIX file descriptors needed")
 class TestPythonVerify(unittest.TestCase):
     def test_file_mode_is_the_control(self):   # verdict code and the receipt byte for byte, as before 1.5.2
         for path, code in ((_VALID, 0), (_INVALID, 1)):
@@ -117,7 +119,7 @@ class TestPythonVerify(unittest.TestCase):
             shutil.rmtree(d, ignore_errors=True)
 
 
-@unittest.skipUnless(_NODE and _DEVFULL and os.name == "posix", "node, /dev/full and POSIX file descriptors needed")
+@unittest.skipUnless(_NODE and _DEVFULL and os.name == "posix", "node, a full device (" + NO_FULL + ") and POSIX file descriptors needed")
 class TestJsVerify(unittest.TestCase):
     def test_file_mode_is_the_control(self):
         for path, code in ((_VALID, 0), (_INVALID, 1)):
@@ -229,9 +231,9 @@ class _Tsa:
     def __init__(self):
         self.d = d = tempfile.mkdtemp(prefix="tsa_")
         j = lambda n: os.path.join(d, n)  # noqa: E731
-        with open(j("tsa.cnf"), "w") as f:
+        with open(j("tsa.cnf"), "w", encoding="utf-8") as f:
             f.write(self.CNF.format(d=d.replace("\\", "/")))  # OpenSSL reads a backslash in a .cnf as an escape: Windows paths with forward slashes (1.11.0)
-        with open(j("serial"), "w") as f:
+        with open(j("serial"), "w", encoding="utf-8") as f:
             f.write("01\n")
         ssl = lambda *a: subprocess.run([_OPENSSL] + list(a), check=True, capture_output=True)  # noqa: E731
         ssl("req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", j("ca.key"),
@@ -272,14 +274,14 @@ class _Tsa:
         shutil.rmtree(self.d, ignore_errors=True)
 
 
-@unittest.skipUnless(_DEVFULL and os.name == "posix", "/dev/full and POSIX file descriptors needed")
+@unittest.skipUnless(_DEVFULL and os.name == "posix", "a full device (" + NO_FULL + ") and POSIX file descriptors needed")
 class TestBuildAndStamp(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.d = tempfile.mkdtemp(prefix="ap2_74_")
         subprocess.run([sys.executable, os.path.join(_HERE, "examples", "make_samples.py")], cwd=cls.d, check=True,
                        capture_output=True)
-        with open(os.path.join(cls.d, "not_sdjwt.txt"), "w") as f:
+        with open(os.path.join(cls.d, "not_sdjwt.txt"), "w", encoding="utf-8") as f:
             f.write("this is not an SD-JWT\n")
         cls.tsa = _Tsa() if _OPENSSL else None
 
@@ -321,11 +323,11 @@ class TestBuildAndStamp(unittest.TestCase):
         self.assertTrue(issubclass(ap2.Ap2WriteError, ap2.Ap2EvidenceError))
         self.assertTrue(issubclass(ap2.Ap2WriteError, OSError))
         with self.assertRaises(ap2.Ap2WriteError):
-            ap2.build_evidence([{"name": "checkout", "sd_jwt": open(os.path.join(self.d, "checkout.sdjwt")).read().strip()}],
+            ap2.build_evidence([{"name": "checkout", "sd_jwt": open(os.path.join(self.d, "checkout.sdjwt"), encoding="utf-8").read().strip()}],
                                os.path.join(self.d, "no_such_dir", "x.json"))
 
     def test_build_into_a_pack_path_it_cannot_write_is_74(self):
-        for out in (os.path.join(self.d, "no_such_dir", "ev.json"), "/dev/full"):
+        for out in [x for x in (os.path.join(self.d, "no_such_dir", "ev.json"), _FULL) if x]:
             with self.subTest(out=out):
                 rc, raw, err = self._build(out, "file")
                 self.assertEqual(rc, 74, err)
@@ -399,7 +401,7 @@ def _run_err(cmd, emode, cwd=None):
     with tempfile.TemporaryFile() as out:
         se, pre = None, None
         if emode == "full":
-            se = open("/dev/full", "wb")
+            se = open(_FULL, "wb")
         else:
             pre = lambda: os.close(2)  # noqa: E731
         try:
@@ -411,7 +413,7 @@ def _run_err(cmd, emode, cwd=None):
         return p.returncode, out.read()
 
 
-@unittest.skipUnless(_DEVFULL and os.name == "posix", "/dev/full and POSIX file descriptors needed")
+@unittest.skipUnless(_DEVFULL and os.name == "posix", "a full device (" + NO_FULL + ") and POSIX file descriptors needed")
 class TestStderrLost(unittest.TestCase):
     """1.5.2 review: a usage message or a refusal that cannot reach stderr is EX_IOERR (74), never the interpreter's 120
     (stderr full) and never on stdout (stderr closed: argparse and print() fell back to stdout, exit 1 or 2)."""
@@ -421,7 +423,7 @@ class TestStderrLost(unittest.TestCase):
         cls.d = tempfile.mkdtemp(prefix="ap2_74e_")
         subprocess.run([sys.executable, os.path.join(_HERE, "examples", "make_samples.py")], cwd=cls.d, check=True,
                        capture_output=True)
-        with open(os.path.join(cls.d, "not_sdjwt.txt"), "w") as f:
+        with open(os.path.join(cls.d, "not_sdjwt.txt"), "w", encoding="utf-8") as f:
             f.write("this is not an SD-JWT\n")
         cls.bad = os.path.join(cls.d, "bad_digest.json")   # stamp refuses it before any TSA is asked
         shutil.copy(_INVALID, cls.bad)
@@ -482,7 +484,7 @@ def _run_prefilled(cmd, which=1, env=None, cwd=None, other_devfull=False, other_
         except BlockingIOError:
             break
     other = tempfile.TemporaryFile()
-    dest = open("/dev/full", "wb") if other_devfull else other
+    dest = open(_FULL, "wb") if other_devfull else other
     try:
         def pre():   # other_limit: the other stream is a regular file that stops growing at that many bytes
             if other_limit is not None:
@@ -536,7 +538,7 @@ class TestWholeOrWaited(unittest.TestCase):
     def setUpClass(cls):
         cls.d = tempfile.mkdtemp(prefix="ap2_wow_")
         cls.big = _big_valid_pack(cls.d)
-        with open(os.path.join(cls.d, "not_sdjwt.txt"), "w") as f:
+        with open(os.path.join(cls.d, "not_sdjwt.txt"), "w", encoding="utf-8") as f:
             f.write("this is not an SD-JWT\n")
 
     @classmethod
@@ -764,7 +766,7 @@ class TestPackWrittenWholeOrNotAtAll(unittest.TestCase):
     def test_mode_symlink_and_read_only(self):
         sub = tempfile.mkdtemp(dir=self.d)
         new = os.path.join(sub, "new.json")
-        with open(os.path.join(sub, "ref"), "w"):
+        with open(os.path.join(sub, "ref"), "w", encoding="utf-8"):
             pass
         rc, _, err = self._build(new)
         self.assertEqual(rc, 0, err)
@@ -997,7 +999,9 @@ class TestOpensslTemporaryFiles(unittest.TestCase):
         self.assertTrue(p.stderr.startswith(b"receipt not written: "), p.stderr)
         with self.assertRaises(ValueError):
             json.loads(written.decode("utf-8", "replace"))   # nothing (or a cut) — never a complete receipt
-        with open("/dev/full", "wb") as fo:   # the control: no openssl failure, only the write — the same branch
+        if _FULL is None:
+            self.skipTest(NO_FULL)
+        with open(_FULL, "wb") as fo:   # the control: no openssl failure, only the write — the same branch
             p = subprocess.run(_PY + ["verify", os.path.join(_VEC, "anchor_valid.json")], stdin=subprocess.DEVNULL, stdout=fo,
                                stderr=subprocess.PIPE, timeout=300)
         self.assertEqual(p.returncode, 74, p.stderr)
@@ -1190,7 +1194,7 @@ def _shim(d):
     if not cc or not sys.platform.startswith("linux"):
         return None
     src, so = os.path.join(d, "shim.c"), os.path.join(d, "shim.so")
-    with open(src, "w") as f:
+    with open(src, "w", encoding="utf-8") as f:
         f.write(_SHIM_C)
     p = subprocess.run([cc, "-shared", "-fPIC", "-o", so, src, "-ldl"], capture_output=True, timeout=120)
     return so if p.returncode == 0 else None
@@ -1305,7 +1309,7 @@ class TestNemesisFinal(unittest.TestCase):
         tsa = os.path.join(_VEC, "anchor_probe_tsa.crt")
         slow = os.path.join(self.d, "slowbin")
         os.makedirs(slow, exist_ok=True)
-        with open(os.path.join(slow, "openssl"), "w") as f:
+        with open(os.path.join(slow, "openssl"), "w", encoding="utf-8") as f:
             f.write('#!/bin/sh\nexec sleep 30\n')   # exec: the timeout's kill reaches the sleeping process itself
         os.chmod(os.path.join(slow, "openssl"), 0o755)
         code = ("import shutil, sys; sys.path.insert(0, sys.argv[1]); import ap2_evidence as a\n"

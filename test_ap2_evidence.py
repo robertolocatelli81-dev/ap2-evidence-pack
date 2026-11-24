@@ -116,20 +116,20 @@ class TestBenchCanFail(_Base):
 
     def test_tampered_evidence_file_is_invalid(self):
         ap2.build_evidence(self.arts, self.out)
-        ev = json.load(open(self.out))
+        ev = json.load(open(self.out, encoding="utf-8"))
         ev["subject"] = "riscritto dopo il sigillo"
-        json.dump(ev, open(self.out, "w"))
+        json.dump(ev, open(self.out, "w", encoding="utf-8"))
         r = ap2.verify_evidence(self.out)
         self.assertFalse(r["digest_ok"])
         self.assertFalse(r["valid"])
 
     def test_swapped_artifact_in_file_is_invalid(self):
         ap2.build_evidence(self.arts, self.out)
-        ev = json.load(open(self.out))
+        ev = json.load(open(self.out, encoding="utf-8"))
         other_sk, other_jwk = _make_signer()
         ev["artifacts"][0]["sd_jwt_compact"] = _make_sd_jwt(
             other_sk, {"iss": "forger"}, {"a": 1}, header_extra={"jwk": other_jwk})
-        json.dump(ev, open(self.out, "w"))
+        json.dump(ev, open(self.out, "w", encoding="utf-8"))
         r = ap2.verify_evidence(self.out)
         self.assertFalse(r["valid"])
 
@@ -238,7 +238,7 @@ class TestPositive(_Base):
 
     def test_binding_found_on_primary_quantity(self):
         ap2.build_evidence(self.arts, self.out)
-        ev = json.load(open(self.out))
+        ev = json.load(open(self.out, encoding="utf-8"))
         b = ev["bindings"][0]
         self.assertEqual((b["in"], b["commits_to"], b["encoding"]),
                          ("cart", "intent", "hex"))
@@ -274,8 +274,8 @@ class TestPositive(_Base):
     def test_cli_build_and_verify(self):
         ip = os.path.join(self.d, "checkout.sdjwt")
         cp = os.path.join(self.d, "payment.sdjwt")
-        open(ip, "w").write(self.intent)
-        open(cp, "w").write(self.cart)
+        open(ip, "w", encoding="utf-8").write(self.intent)
+        open(cp, "w", encoding="utf-8").write(self.cart)
         rc = ap2.main(["build", self.out, f"intent={ip}", f"cart={cp}"])
         self.assertEqual(rc, 0)
         self.assertEqual(ap2.main(["verify", self.out]), 0)
@@ -403,13 +403,13 @@ class TestReviewFixes(_Base):
     def test_zero_artifacts_is_not_valid(self):
         import ap2_evidence as ap2mod
         ap2.build_evidence([{"name": "i", "sd_jwt": self.intent}], self.out)
-        ev = json.load(open(self.out))
+        ev = json.load(open(self.out, encoding="utf-8"))
         ev["artifacts"] = []
         # ricalcola il digest così digest_ok resta True: isoliamo il SOLO effetto zero-artefatti
         e2 = {k: v for k, v in ev.items()
               if k not in ("evidence_digest_sha256", "rfc3161_timestamp")}
         ev["evidence_digest_sha256"] = ap2mod.hashlib.sha256(ap2mod._canon(e2)).hexdigest()
-        json.dump(ev, open(self.out, "w"))
+        json.dump(ev, open(self.out, "w", encoding="utf-8"))
         v = ap2.verify_evidence(self.out)
         self.assertTrue(v["digest_ok"])          # il file è intatto...
         self.assertFalse(v["valid"])             # ...ma non prova nulla → non valido
@@ -439,9 +439,9 @@ class TestProducerSignatureContentBinding(_Base):
         self.assertTrue(ok["valid"])
         self.assertTrue(ok["producer_signatures"]["ok"])
         # TAMPER-A: contenuto cambiato, digest+firma originali (stantii)
-        ev = json.load(open(self.out))
+        ev = json.load(open(self.out, encoding="utf-8"))
         ev["subject"] = "HACKED: pay 999999 to attacker"
-        tp = os.path.join(self.d, "tamperA.json"); json.dump(ev, open(tp, "w"))
+        tp = os.path.join(self.d, "tamperA.json"); json.dump(ev, open(tp, "w", encoding="utf-8"))
         r = ap2.verify_evidence(tp, trusted_producer_keys=pinned)
         self.assertFalse(r["valid"])                       # digest_ok lo prende comunque
         self.assertFalse(r["digest_ok"])
@@ -449,21 +449,20 @@ class TestProducerSignatureContentBinding(_Base):
 
     def test_producer_signature_resign_fails_without_key(self):
         pinned = self._signed()
-        ev = json.load(open(self.out))
+        ev = json.load(open(self.out, encoding="utf-8"))
         ev["subject"] = "HACKED"
         # ricalcola il digest per far combaciare digest_ok, ma senza la chiave privata
         e2 = {k: v for k, v in ev.items()
               if k not in ("evidence_digest_sha256", "rfc3161_timestamp", "producer_signatures")}
         ev["evidence_digest_sha256"] = ap2.hashlib.sha256(ap2._canon(e2)).hexdigest()
-        tp = os.path.join(self.d, "tamperB.json"); json.dump(ev, open(tp, "w"))
+        tp = os.path.join(self.d, "tamperB.json"); json.dump(ev, open(tp, "w", encoding="utf-8"))
         r = ap2.verify_evidence(tp, trusted_producer_keys=pinned)
         self.assertTrue(r["digest_ok"])
         self.assertFalse(r["producer_signatures"]["ok"])   # firma sul vecchio digest → fallisce
         self.assertFalse(r["valid"])
 
 
-@unittest.skipIf(not hasattr(os, "mkfifo"), "needs POSIX FIFOs and symlinks")
-class TestFileObjects(unittest.TestCase):
+class TestFileObjects(unittest.TestCase):   # 1.11.0: on Windows a named pipe and NUL are the FIFO and the device (_ap2_platform)
     """25/09/2026 — the evidence file must be a REGULAR file of at most MAX_EVIDENCE_BYTES, decided on the open
     descriptor. Measured on 1.2.0: a FIFO blocked both verifiers; a symlink to /dev/zero passed the size check (a device
     reports 0) and was read until memory ran out (MemoryError / abort); a directory was refused with an OS error name.
@@ -489,7 +488,7 @@ class TestFileObjects(unittest.TestCase):
         linux = resource is not None and sys.platform.startswith("linux")
         lim = (lambda: resource.setrlimit(resource.RLIMIT_DATA, (1500 << 20, 1500 << 20))) if linux else None  # noqa: E731
         try:
-            r = subprocess.run([sys.executable, os.path.join(_HERE, "ap2_evidence.py"), "verify", path], capture_output=True, text=True, timeout=20, preexec_fn=lim)
+            r = subprocess.run([sys.executable, os.path.join(_HERE, "ap2_evidence.py"), "verify", path], capture_output=True, text=True, timeout=20, preexec_fn=lim, encoding="utf-8")
         except subprocess.TimeoutExpired:
             return "BLOCKED", None
         if resource is not None and sys.platform == "darwin":
@@ -506,8 +505,9 @@ class TestFileObjects(unittest.TestCase):
         self.assertIn(why, j["refused"])
 
     def test_fifo_devzero_directory_refused_as_not_a_regular_file(self):
-        f = os.path.join(self.d, "fifo.json"); os.mkfifo(f)
-        z = os.path.join(self.d, "zero.json"); os.symlink("/dev/zero", z)
+        from _ap2_platform import device_link, fifo
+        f = fifo(self, os.path.join(self.d, "fifo.json"))
+        z = device_link(os.path.join(self.d, "zero.json"))
         dd = os.path.join(self.d, "dir.json"); os.makedirs(dd)
         for p in (f, z, dd):
             self.assert_refused(p, "not a regular file")
@@ -524,7 +524,7 @@ class TestFileObjects(unittest.TestCase):
                          [sys.executable, os.path.join(_HERE, "ap2_evidence.py"), "restriction", p]) + \
                         (([shutil.which("node"), js, p],) if shutil.which("node") else ()):
                 with self.subTest(argv=argv[1:]):
-                    r = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+                    r = subprocess.run(argv, capture_output=True, text=True, timeout=60, encoding="utf-8")
                     self.assertEqual((r.returncode, r.stdout), (2, ""), r.stderr)
         os.chmod(noread, 0o600)
         self.assertEqual(self.cli(noread)[0], 0)   # must-pass twin: the same file, readable, verifies
@@ -532,7 +532,8 @@ class TestFileObjects(unittest.TestCase):
     def test_relying_party_material_without_a_certificate_is_a_value_error(self):   # 1.10.0 — SPEC §6.10, the library
         empty = os.path.join(self.d, "empty.pem"); open(empty, "wb").close()
         junk = os.path.join(self.d, "junk.pem"); open(junk, "wb").write(b"garbage\n")
-        bad = [empty, junk, os.path.join(self.d, "missing.pem"), self.d, os.devnull, "/dev/zero"]
+        from _ap2_platform import DEVICE
+        bad = [empty, junk, os.path.join(self.d, "missing.pem"), self.d, os.devnull] + ([DEVICE] if DEVICE != os.devnull else [])
         for v in bad:
             for kw in ({"tsa_cert": v}, {"trust_anchor": v}):
                 with self.subTest(kw=kw):
@@ -562,7 +563,7 @@ class TestFileObjects(unittest.TestCase):
         if shutil.which("node"):
             js = os.path.join(_HERE, "verifiers", "js", "ap2-verify.mjs")
             for argv, exp in (([pack, "--tsa-cert", crt], want), ([pack], None)):
-                out = subprocess.run(["node", js] + argv, capture_output=True, text=True, timeout=60)
+                out = subprocess.run(["node", js] + argv, capture_output=True, text=True, timeout=60, encoding="utf-8")
                 self.assertEqual(json.loads(out.stdout).get("tsa_cert_sha256"), exp, argv)
 
     def _three_clis(self, p):
@@ -575,12 +576,15 @@ class TestFileObjects(unittest.TestCase):
     def test_a_path_that_is_no_regular_file_stays_a_refusal_whatever_its_permissions(self):   # 1.10.0 review — SPEC §3.1
         import subprocess
         dd = os.path.join(self.d, "dir000"); os.mkdir(dd); os.chmod(dd, 0)
-        ff = os.path.join(self.d, "fifo000"); os.mkfifo(ff); os.chmod(ff, 0)
+        from _ap2_platform import fifo
+        ff = fifo(self, os.path.join(self.d, "fifo000"))
+        if os.name != "nt":   # Windows: a named pipe has no mode; its name is still not a regular file
+            os.chmod(ff, 0)
         self.addCleanup(os.chmod, dd, 0o700)
         for p in (dd, ff):   # stat needs no read permission: `not readable` came first and made them a usage error
             for argv in self._three_clis(p):
                 with self.subTest(argv=argv[1:]):
-                    r = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+                    r = subprocess.run(argv, capture_output=True, text=True, timeout=60, encoding="utf-8")
                     self.assertEqual(r.returncode, 1, r.stderr)
                     self.assertEqual(json.loads(r.stdout)["admission"], "refused")
                     if "restriction" not in argv:   # the restriction receipt names the class, not the reason
@@ -590,7 +594,6 @@ class TestFileObjects(unittest.TestCase):
         r = ap2.verify_evidence("a\0b")
         self.assertEqual((r["admission"], r["refusal_class"]), ("refused", "malformed"), r)
 
-    @unittest.skipUnless(shutil.which("openssl"), "openssl absent: the TSA signature cannot be verified here")   # 1.11.0: failed in the CI cells without openssl
     def test_a_certificate_file_openssl_reads_is_no_usage_error(self):   # 1.10.0 review — SPEC §6.10: never stricter than openssl
         import shutil
         import subprocess
@@ -613,11 +616,15 @@ class TestFileObjects(unittest.TestCase):
                 f.write(b"\n".join(ls) + b"\n")
             with self.subTest(spelling=name):
                 r = ap2.verify_evidence(pack, tsa_cert=p)   # openssl reads it: 1.9.0 said verified, a usage error was a regression
-                self.assertEqual(r["states"]["time_anchor"]["state"], "verified", r["states"]["time_anchor"])
-                out = subprocess.run([sys.executable, os.path.join(_HERE, "ap2_evidence.py"), "verify", pack, "--tsa-cert", p], capture_output=True, text=True, timeout=60)
+                if shutil.which("openssl"):
+                    self.assertEqual(r["states"]["time_anchor"]["state"], "verified", r["states"]["time_anchor"])
+                else:   # 1.11.0, CI cell without openssl: still no usage error, the check is one not run here (SPEC §6.10)
+                    self.assertEqual((r["states"]["time_anchor"]["state"], r["states"]["time_anchor"]["reasons"]),
+                                     ("not_evaluated", ["instrument_failure"]), r["states"]["time_anchor"])
+                out = subprocess.run([sys.executable, os.path.join(_HERE, "ap2_evidence.py"), "verify", pack, "--tsa-cert", p], capture_output=True, text=True, timeout=60, encoding="utf-8")
                 self.assertEqual(out.returncode, 0, out.stderr[-200:])
                 if shutil.which("node"):
-                    out = subprocess.run(["node", os.path.join(_HERE, "verifiers", "js", "ap2-verify.mjs"), pack, "--tsa-cert", p], capture_output=True, text=True, timeout=60)
+                    out = subprocess.run(["node", os.path.join(_HERE, "verifiers", "js", "ap2-verify.mjs"), pack, "--tsa-cert", p], capture_output=True, text=True, timeout=60, encoding="utf-8")
                     self.assertEqual(out.returncode, 0, out.stderr[-200:])
 
     @unittest.skipUnless(__import__("shutil").which("node"), "node absent")
@@ -629,15 +636,16 @@ class TestFileObjects(unittest.TestCase):
         prog = ("const { verifyEvidence } = await import(process.argv[2]);"
                 "try { const r = verifyEvidence(process.argv[3], { tsaCert: process.argv[4] }); console.log('receipt ' + (r.tsa_cert_sha256 ? 'sha' : 'nosha')); }"
                 "catch (e) { console.log(e.constructor.name + ' ' + e.message); }")
-        js = "file://" + os.path.join(_HERE, "verifiers", "js", "ap2-verify.mjs")
+        js = __import__("pathlib").Path(os.path.join(_HERE, "verifiers", "js", "ap2-verify.mjs")).as_uri()   # 1.11.0: a file URL on Windows too
         script = os.path.join(self.d, "call.mjs")   # a file: under `node -e` the verifier takes itself for the entry point
-        with open(script, "w") as f:
+        with open(script, "w", encoding="utf-8") as f:
             f.write(prog)
-        for v in (empty, os.path.join(self.d, "missing.pem"), self.d, "/dev/zero", ""):   # /dev/zero was read until memory ran out
+        from _ap2_platform import DEVICE
+        for v in (empty, os.path.join(self.d, "missing.pem"), self.d, DEVICE, ""):   # /dev/zero was read until memory ran out
             with self.subTest(tsaCert=v):
-                out = subprocess.run(["node", script, js, pack, v], capture_output=True, text=True, timeout=60)
+                out = subprocess.run(["node", script, js, pack, v], capture_output=True, text=True, timeout=60, encoding="utf-8")
                 self.assertTrue(out.stdout.startswith("TypeError tsaCert: no PEM certificate"), (out.stdout, out.stderr[-200:]))
-        out = subprocess.run(["node", script, js, pack, crt], capture_output=True, text=True, timeout=60)
+        out = subprocess.run(["node", script, js, pack, crt], capture_output=True, text=True, timeout=60, encoding="utf-8")
         self.assertEqual(out.stdout.strip(), "receipt sha", out.stderr[-200:])   # must-pass twin
 
     def test_the_bound(self):   # trailing spaces change no digest: at the bound it verifies, one byte more is refused unread
@@ -658,13 +666,13 @@ class WeakEd25519Keys20260925(unittest.TestCase):
     def test_pinned_small_order_key_never_verifies(self):
         import base64 as _b, copy as _c
         from pqcrypto import sigsuite
-        d = json.load(open(os.path.join(_HERE, "spec", "vectors", "ap2", "valid_signed.json")))
+        d = json.load(open(os.path.join(_HERE, "spec", "vectors", "ap2", "valid_signed.json"), encoding="utf-8"))
         ident = _b.b64encode(bytes([1]) + bytes(31)).decode()
         f = _c.deepcopy(d)
         f["producer_signatures"]["signatures"] = [x for x in f["producer_signatures"]["signatures"] if x["sig_alg"] == "ed25519"]
         f["producer_signatures"]["signatures"][0].update(public_key_b64=ident, signature_b64=_b.b64encode(bytes([1]) + bytes(63)).decode())
         with tempfile.TemporaryDirectory() as t:
-            fp = os.path.join(t, "f.json"); json.dump(f, open(fp, "w"))
+            fp = os.path.join(t, "f.json"); json.dump(f, open(fp, "w", encoding="utf-8"))
             r = ap2.verify_evidence(fp, trusted_producer_keys={"ed25519": [ident]})
             st = [x for x in r["producer_signatures"]["signatures"] if x["sig_alg"] == "ed25519"][0]["status"]
             self.assertEqual(st, "FAIL")

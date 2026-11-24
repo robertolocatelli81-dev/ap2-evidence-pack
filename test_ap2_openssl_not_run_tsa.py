@@ -60,7 +60,7 @@ class KeyIdStepNotRun(unittest.TestCase):
     def _with_fake(self, name, case):
         d = os.path.join(self.td, name)
         os.makedirs(d)
-        with open(os.path.join(d, "openssl"), "w") as f:
+        with open(os.path.join(d, "openssl"), "w", encoding="utf-8") as f:
             f.write('#!/bin/sh\n%s\nexec "%s" "$@"\n' % (case, self.real))
         os.chmod(os.path.join(d, "openssl"), 0o755)
         old = os.environ["PATH"]

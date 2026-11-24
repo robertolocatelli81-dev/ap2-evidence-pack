@@ -48,9 +48,9 @@ class Lab:
         self.d = os.path.join(td, name)
         os.makedirs(self.d)
         j = self.j
-        with open(j("ext.cnf"), "w") as f:
+        with open(j("ext.cnf"), "w", encoding="utf-8") as f:
             f.write(EXT)
-        with open(j("req.cnf"), "w") as f:
+        with open(j("req.cnf"), "w", encoding="utf-8") as f:
             f.write("[ req ]\ndistinguished_name = dn\n[ dn ]\n" + EXT)
         _run("openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes",
              "-keyout", j("ca.key"), "-out", j("ca.crt"), "-subj", "/CN=%s-ca" % name, "-days", "2",
@@ -61,7 +61,7 @@ class Lab:
                  "-config", j("req.cnf"))
             _run("openssl", "x509", "-req", "-in", j(cert + ".csr"), "-CA", j("ca.crt"), "-CAkey", j("ca.key"),
                  "-CAcreateserial", "-out", j(cert + ".crt"), "-days", "2", "-extfile", j("ext.cnf"), "-extensions", ext)
-        with open(j("serial"), "w") as f:
+        with open(j("serial"), "w", encoding="utf-8") as f:
             f.write("01\n")
 
     def j(self, n):
@@ -70,7 +70,7 @@ class Lab:
     def token(self, tsa_name=False):
         """a token of `openssl ts -reply` (a ContentInfo); `tsa_name`: the TSTInfo carries the tsa field"""
         j = self.j
-        with open(j("tsa.cnf"), "w") as f:
+        with open(j("tsa.cnf"), "w", encoding="utf-8") as f:
             f.write("[ tsa ]\ndefault_tsa = t1\n[ t1 ]\nserial = %s\ncrypto_device = builtin\nsigner_cert = %s\n"
                     "certs = %s\nsigner_key = %s\nsigner_digest = sha256\ndefault_policy = 1.2.3.4.1\ndigests = sha256\n"
                     "accuracy = secs:1\nordering = yes\ntsa_name = %s\ness_cert_id_chain = no\ness_cert_id_alg = sha256\n"
@@ -378,7 +378,7 @@ class NamesAsOpenssl(unittest.TestCase):
 
     def test_tsa_in_subject_alt_name(self):
         j = self.a.j
-        with open(j("san.cnf"), "w") as f:
+        with open(j("san.cnf"), "w", encoding="utf-8") as f:
             f.write("[ v3_san ]\nextendedKeyUsage = critical,timeStamping\nbasicConstraints = CA:FALSE\n"
                     "subjectKeyIdentifier = hash\nsubjectAltName = DNS:tsa.example\n")
         _run("openssl", "x509", "-req", "-in", j("tsa.csr"), "-CA", j("ca.crt"), "-CAkey", j("ca.key"), "-CAcreateserial",
@@ -483,15 +483,12 @@ class ClosedShapes(unittest.TestCase):
             self.assertFalse(A._ski_policies_shape(el), el)
 
     def old_openssl(self):
-        import stat
-        bindir = os.path.join(self.td, "bin")
-        os.makedirs(bindir, exist_ok=True)
-        fake = os.path.join(bindir, "openssl")
-        with open(fake, "w") as f:
-            f.write("#!/bin/sh\nif [ \"$1\" = verify ]; then echo 'verify: Unknown option: -no-CAstore' >&2; exit 1; fi\n"
-                    "exec %s \"$@\"\n" % shutil.which("openssl"))
-        os.chmod(fake, os.stat(fake).st_mode | stat.S_IXUSR)
-        return bindir
+        from _ap2_platform import fake_tool   # 1.11.0: a program on every system (Windows: a .cmd)
+        return fake_tool(os.path.join(self.td, "bin"), "openssl",
+                         "import subprocess, sys\n"
+                         "if sys.argv[1:2] == ['verify']:\n"
+                         "    sys.stderr.write('verify: Unknown option: -no-CAstore\\n'); sys.exit(1)\n"
+                         "sys.exit(subprocess.run([%r] + sys.argv[1:]).returncode)\n" % shutil.which("openssl"))
 
     def test_openssl_without_no_castore(self):
         bindir, old = self.old_openssl(), os.environ["PATH"]

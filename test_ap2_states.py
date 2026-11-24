@@ -47,11 +47,11 @@ class TestStatesBench(unittest.TestCase):
                 "r = S.run(quick=True, sabotage=sys.argv[1], baselines_only=True); print(len(r['violations']))") % os.path.join(_HERE, "verifiers")
         for sb in SC.SABOTAGES:
             with self.subTest(sabotage=sb):
-                out = subprocess.run([sys.executable, "-B", "-c", code, sb], capture_output=True, text=True, timeout=600)
+                out = subprocess.run([sys.executable, "-B", "-c", code, sb], capture_output=True, text=True, timeout=600, encoding="utf-8")
                 self.assertEqual(out.returncode, 0, out.stderr[-600:])
                 self.assertGreater(int(out.stdout.split()[-1]), 0, sb)
         out = subprocess.run([sys.executable, "-B", "-c", code.replace("sabotage=sys.argv[1]", "sabotage=None"), "x"],
-                             capture_output=True, text=True, timeout=600)
+                             capture_output=True, text=True, timeout=600, encoding="utf-8")
         self.assertEqual(out.stdout.split()[-1], "0", out.stderr[-600:])   # the control: no sabotage, no violation
 
 
@@ -79,7 +79,7 @@ class TestReceiptShape(unittest.TestCase):
         kbr = r["artifacts"][0]["kb_jwt"]
         self.assertEqual((kbr["signature_ok"], kbr["sd_hash_ok"], r["valid"]), (False, False, False))   # both false: the case
         self.assertEqual(r["states"]["holder_binding"], {"state": "contradicted", "reasons": ["kb_signature_invalid"]})
-        out = subprocess.run(["node", JS, path], capture_output=True, text=True)
+        out = subprocess.run(["node", JS, path], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(json.loads(out.stdout)["states"]["holder_binding"], r["states"]["holder_binding"])
 
     @unittest.skipUnless(shutil.which("openssl"), "openssl absent: chain validation not measured")
@@ -198,22 +198,22 @@ class TestReceiptShape(unittest.TestCase):
     @unittest.skipUnless(HAVE_NODE, "node absent")
     def test_js_refuses_trust_anchor_and_takes_trust_set_complete(self):
         p = os.path.join(VEC, "issuer_x5c_no_anchor.json")
-        out = subprocess.run(["node", JS, p, "--trust-anchor", os.path.join(VEC, "issuer_ca.crt")], capture_output=True, text=True)
+        out = subprocess.run(["node", JS, p, "--trust-anchor", os.path.join(VEC, "issuer_ca.crt")], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual((out.returncode, out.stdout), (2, ""))   # 1.5.4: exit 0, chain_verified null — a flag that did nothing
         with open(os.path.join(VEC, "unpinned_producer.expected.json"), encoding="utf-8") as f:
             pins = json.load(f)["policy"]["trusted_producer_keys"]
         fl = [x for alg, ks in pins.items() for k in ks for x in ("--trusted-producer-key", f"{alg}={k}")]
-        out = subprocess.run(["node", JS, os.path.join(VEC, "unpinned_producer.json"), *fl, "--trust-set-complete"], capture_output=True, text=True)
+        out = subprocess.run(["node", JS, os.path.join(VEC, "unpinned_producer.json"), *fl, "--trust-set-complete"], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(out.returncode, 1)
         self.assertEqual(json.loads(out.stdout)["policy"]["unmet"], ["trusted_producer_keys", "trust_set_complete"])
-        out = subprocess.run(["node", JS, p, "--trust-set-complete=1"], capture_output=True, text=True)
+        out = subprocess.run(["node", JS, p, "--trust-set-complete=1"], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual((out.returncode, out.stdout), (2, ""))
 
     def test_cli_trust_set_complete_grammar(self):
         py = [sys.executable, "-B", os.path.join(_HERE, "ap2_evidence.py"), "verify", os.path.join(VEC, "valid_signed.json")]
-        out = subprocess.run(py + ["--trust-set-complete=1"], capture_output=True, text=True)
+        out = subprocess.run(py + ["--trust-set-complete=1"], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual((out.returncode, out.stdout), (2, ""))
-        out = subprocess.run(py + ["--trust-set-complete"], capture_output=True, text=True)
+        out = subprocess.run(py + ["--trust-set-complete"], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(out.returncode, 0, out.stderr)
 
     def test_openssl_absent_is_instrument_failure_and_the_exit_follows_valid(self):
@@ -222,7 +222,7 @@ class TestReceiptShape(unittest.TestCase):
         env = dict(os.environ, PATH=tempfile.mkdtemp(dir=self.d))
         py = [sys.executable, "-B", os.path.join(_HERE, "ap2_evidence.py"), "verify", os.path.join(VEC, "anchor_valid.json"),
               "--tsa-cert", os.path.join(VEC, "anchor_probe_tsa.crt")]
-        out = subprocess.run(py, capture_output=True, text=True, env=env)
+        out = subprocess.run(py, capture_output=True, text=True, env=env, encoding="utf-8")
         r = json.loads(out.stdout)
         self.assertEqual((out.returncode, r["valid"]), (0, True))
         self.assertEqual(r["states"]["time_anchor"], {"state": "not_evaluated", "reasons": ["instrument_failure"],

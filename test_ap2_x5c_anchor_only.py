@@ -77,7 +77,7 @@ class AnchorOnly(unittest.TestCase):
         cls.store_dir = os.path.join(cls.d, "store")
         os.mkdir(cls.store_dir)
         h = subprocess.run([OPENSSL, "x509", "-hash", "-noout", "-in", cls.rp_pem], capture_output=True, text=True,
-                           check=True).stdout.strip()
+                           check=True, encoding="utf-8").stdout.strip()
         shutil.copy(cls.rp_pem, os.path.join(cls.store_dir, h + ".0"))
         cls.store_env = {"SSL_CERT_FILE": cls.rp_pem, "SSL_CERT_DIR": cls.store_dir}
         hdr = {"alg": "ES256", "typ": "example+sd-jwt",
@@ -126,11 +126,9 @@ class AnchorOnly(unittest.TestCase):
     def test_openssl_before_3_is_a_check_not_run(self):
         # an openssl that does not know -no-CAstore (before 3.0) cannot keep the default store out: the check is not run
         # (instrument_failure), never reported as a chain that did not reach the anchor
-        fake = os.path.join(self.d, "fakebin")
-        os.makedirs(fake, exist_ok=True)
-        with open(os.path.join(fake, "openssl"), "w") as f:
-            f.write("#!/bin/sh\necho 'verify: Unknown option: -no-CAstore' >&2\nexit 1\n")
-        os.chmod(os.path.join(fake, "openssl"), 0o755)
+        from _ap2_platform import fake_tool   # 1.11.0: a program on every system (Windows: a .cmd)
+        fake = fake_tool(os.path.join(self.d, "fakebin"), "openssl",
+                         "import sys\nsys.stderr.write('verify: Unknown option: -no-CAstore\\n')\nsys.exit(1)\n")
         with mock.patch.dict(os.environ, {"PATH": fake + os.pathsep + os.environ.get("PATH", "")}):
             with self.assertRaisesRegex(A.Ap2WriteError, "OpenSSL 3.0 or later") as cm:   # SPEC §6.10: exit 74, receipt
                 A.verify_evidence(self.pack, trust_anchor=self.rp_pem)
@@ -143,7 +141,7 @@ class AnchorOnly(unittest.TestCase):
         env = dict(os.environ, **self.store_env)
         env.pop("PYTHONPATH", None)
         p = subprocess.run([sys.executable, os.path.join(ROOT, "ap2_evidence.py"), "verify", self.pack,
-                            "--trust-anchor", self.other_pem], capture_output=True, text=True, env=env)
+                            "--trust-anchor", self.other_pem], capture_output=True, text=True, env=env, encoding="utf-8")
         r = json.loads(p.stdout)
         self.assertEqual((r["states"]["issuer_identity"]["reasons"], r["self_asserted_only"]), (["chain_unresolved"], True))
 

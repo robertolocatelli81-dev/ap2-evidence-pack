@@ -57,7 +57,7 @@ class TestClosedSchemaMutants(unittest.TestCase):
             f.write(s.replace(anchor, ""))
         code = ("import sys; sys.path.insert(0, %r); import schema_mutants as M; r = M.run(quick=True, py_root=%r, js=None); "
                 "print(len(r['unmet']['py']), r['silent']['py'])") % (os.path.join(_HERE, "verifiers"), os.path.join(d, "ref"))
-        out = subprocess.run([sys.executable, "-B", "-c", code], capture_output=True, text=True, timeout=600)
+        out = subprocess.run([sys.executable, "-B", "-c", code], capture_output=True, text=True, timeout=600, encoding="utf-8")
         self.assertEqual(out.returncode, 0, out.stderr[-800:])
         unmet, silent = map(int, out.stdout.split()[-2:])
         self.assertGreater(unmet, 0, "the sabotaged reference passed the bench: the bench cannot fail")
@@ -83,7 +83,7 @@ class TestClosedSchemaMutants(unittest.TestCase):
         code = ("import sys; sys.path.insert(0, %r); import schema_mutants as M; r = M.run(quick=True, py_root=%r, js=None); "
                 "print(len(r['unmet']['py']), sum(1 for u in r['unmet']['py'] if '/artifacts[' in str(u) or '/signatures[' in str(u)))") % (
                     os.path.join(_HERE, "verifiers"), os.path.join(d, "ref"))
-        out = subprocess.run([sys.executable, "-B", "-c", code], capture_output=True, text=True, timeout=600)
+        out = subprocess.run([sys.executable, "-B", "-c", code], capture_output=True, text=True, timeout=600, encoding="utf-8")
         self.assertEqual(out.returncode, 0, out.stderr[-800:])
         unmet, in_scope = map(int, out.stdout.split()[-2:])
         self.assertGreater(unmet, 0, "the 1.5.x behaviour passed the 1.6.0 bench: the bench cannot fail")

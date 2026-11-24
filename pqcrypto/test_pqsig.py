@@ -131,9 +131,9 @@ class TestAp2ProducerSignature(unittest.TestCase):
     def test_tampered_digest_and_forged_pq_fail_closed(self):
         p = self._build()
         A.sign_evidence(p)
-        ev = json.load(open(p))
+        ev = json.load(open(p, encoding="utf-8"))
         ev["evidence_digest_sha256"] = "00" * 32
-        json.dump(ev, open(p, "w"))
+        json.dump(ev, open(p, "w", encoding="utf-8"))
         v = A.verify_evidence(p)
         self.assertFalse(v["valid"])
         # content-binding: la firma è verificata sul digest RICALCOLATO (contenuto intatto),
@@ -142,11 +142,11 @@ class TestAp2ProducerSignature(unittest.TestCase):
         # forged PQ
         p2 = self._build()
         A.sign_evidence(p2)
-        ev = json.load(open(p2))
+        ev = json.load(open(p2, encoding="utf-8"))
         for s in ev["producer_signatures"]["signatures"]:
             if s["post_quantum"]:
                 s["signature_b64"] = "AAAA"
-        json.dump(ev, open(p2, "w"))
+        json.dump(ev, open(p2, "w", encoding="utf-8"))
         v2 = A.verify_evidence(p2)
         self.assertFalse(v2["valid"] and v2["producer_signatures"]["ok"])
 
@@ -178,14 +178,14 @@ class TestProducerPinningAndPolicy(unittest.TestCase):
         return p
 
     def _recompute(self, p, mutate):
-        ev = json.load(open(p))
+        ev = json.load(open(p, encoding="utf-8"))
         mutate(ev)
         e2 = {k: v for k, v in ev.items()
               if k not in ("evidence_digest_sha256", "rfc3161_timestamp", "producer_signatures")}
         ev["evidence_digest_sha256"] = hashlib.sha256(
             json.dumps(e2, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         ev.pop("producer_signatures", None)
-        json.dump(ev, open(p, "w"))
+        json.dump(ev, open(p, "w", encoding="utf-8"))
         return p
 
     def test_pinned_and_require_pq_valid(self):
@@ -213,7 +213,7 @@ class TestProducerPinningAndPolicy(unittest.TestCase):
 
     def test_duplicate_json_key_rejected(self):
         p = os.path.join(self.tmp, "dup.json")
-        open(p, "w").write('{"evidence_format":"x","subject":"A","subject":"B","artifacts":[]}')
+        open(p, "w", encoding="utf-8").write('{"evidence_format":"x","subject":"A","subject":"B","artifacts":[]}')
         r = A.verify_evidence(p)          # 1.1.0: a refusal RECEIPT (valid False, digest_ok False, `refused`), never a traceback
         self.assertFalse(r["valid"]); self.assertFalse(r["digest_ok"]); self.assertIn("duplicate JSON key", r["refused"])
 

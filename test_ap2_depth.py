@@ -179,9 +179,9 @@ class TestResolvedDepth(unittest.TestCase):
         if not shutil.which("node"):
             self.skipTest("node absent: the JS verifier is not measured")
         mpath = os.path.join(self.tmp, "manifest_leaf.json")
-        with open(mpath, "w") as f:
+        with open(mpath, "w", encoding="utf-8") as f:
             json.dump(manifest, f)
-        pr = subprocess.run(["node", _MANY, _JS, mpath], capture_output=True, text=True, timeout=600)
+        pr = subprocess.run(["node", _MANY, _JS, mpath], capture_output=True, text=True, timeout=600, encoding="utf-8")
         self.assertEqual(pr.returncode, 0, pr.stderr[-500:])
         for k, r in json.loads(pr.stdout).items():
             with self.subTest(case=k, lens="verify js"):
@@ -196,11 +196,11 @@ class TestResolvedDepth(unittest.TestCase):
         base = os.path.join(self.tmp, "base.json")
         if not os.path.exists(base):
             ap2.build_evidence([{"name": "m", "sd_jwt": O._sign_compact(_SK, _NUM, '{"iss":"x"}')}], base)
-        with open(base) as f:
+        with open(base, encoding="utf-8") as f:
             ev = json.load(f)
         ev["artifacts"][0]["sd_jwt_compact"] = compact
         path = os.path.join(self.tmp, name)
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(O.rehash(ev), f)
         return path
 
@@ -234,9 +234,9 @@ class TestResolvedDepth(unittest.TestCase):
         if not shutil.which("node"):
             self.skipTest("node absent: the JS verifier is not measured")
         mpath = os.path.join(self.tmp, "manifest.json")
-        with open(mpath, "w") as f:
+        with open(mpath, "w", encoding="utf-8") as f:
             json.dump(manifest, f)
-        p = subprocess.run(["node", _MANY, _JS, mpath], capture_output=True, text=True, timeout=600)
+        p = subprocess.run(["node", _MANY, _JS, mpath], capture_output=True, text=True, timeout=600, encoding="utf-8")
         self.assertEqual(p.returncode, 0, p.stderr[-500:])
         receipts = json.loads(p.stdout)
         for i, c in enumerate(self.cases):
@@ -264,12 +264,12 @@ class TestBuildCommand(unittest.TestCase):
 
     def _build(self, compact, *extra):
         t = os.path.join(self.d, "t.sdjwt"); out = os.path.join(self.d, "p.json")
-        with open(t, "w") as f:
+        with open(t, "w", encoding="utf-8") as f:
             f.write(compact)
         if os.path.exists(out):
             os.unlink(out)
         p = subprocess.run([sys.executable, os.path.join(_HERE, "ap2_evidence.py"), "build", out, "m=" + t, *extra],
-                           capture_output=True, text=True, timeout=300)
+                           capture_output=True, text=True, timeout=300, encoding="utf-8")
         return p, out
 
     def test_chains_around_the_thresholds(self):
@@ -304,7 +304,7 @@ class TestBuildCommand(unittest.TestCase):
                 ("null", "null", 2, "not a non-empty JSON object"),
                 ("an empty object", "{}", 2, "not a non-empty JSON object")):
             k = os.path.join(self.d, "k.json")
-            with open(k, "w") as f:
+            with open(k, "w", encoding="utf-8") as f:
                 f.write(text)
             p, out = self._build(compact, "--key", "m=" + k)
             with self.subTest(key=name):
