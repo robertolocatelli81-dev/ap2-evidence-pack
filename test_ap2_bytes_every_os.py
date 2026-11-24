@@ -62,6 +62,13 @@ def _text_writes_without_newline(path):
     return bad
 
 
+def _rel(path):
+    try:
+        return os.path.relpath(path, ROOT)
+    except ValueError:   # Windows: another drive than the checkout's (a temporary file on C:, the checkout on D:)
+        return path
+
+
 def _text_calls_without_encoding(path):
     """open() in text mode, and subprocess calls with text=True / universal_newlines=True, without encoding=: on Windows
     each reads or writes in the ANSI code page (CI run of 2026-11-24: the tests' own packs were written as cp1252 there
@@ -81,9 +88,9 @@ def _text_calls_without_encoding(path):
             mode = n.args[1] if len(n.args) >= 2 else next((k.value for k in n.keywords if k.arg == "mode"), None)
             m = mode.value if isinstance(mode, ast.Constant) and isinstance(mode.value, str) else ("r" if mode is None else "b?")
             if "b" not in m:
-                bad.append(f"{os.path.relpath(path, ROOT)}:{n.lineno}")
+                bad.append(f"{_rel(path)}:{n.lineno}")
         elif name in ("run", "Popen", "check_output", "check_call") and kws & {"text", "universal_newlines"}:
-            bad.append(f"{os.path.relpath(path, ROOT)}:{n.lineno}")
+            bad.append(f"{_rel(path)}:{n.lineno}")
     return bad
 
 

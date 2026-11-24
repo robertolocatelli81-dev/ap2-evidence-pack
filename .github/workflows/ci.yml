@@ -11,7 +11,7 @@ jobs:
   tests:
     name: tests (python ${{ matrix.python }}, ${{ matrix.os }}, ${{ matrix.tools }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 150 || 60 }}   # Windows 3.13 took 55 minutes in run 45467635237
     defaults:
       run:
         shell: bash
@@ -94,7 +94,11 @@ jobs:
       - name: Unit + conformance tests (every suite in the repo, fail-closed; every file runs, the failures are listed at the end)
         run: |
           failed=""
-          for t in test_*.py pqcrypto/test_*.py; do echo "== $t"; python "$t" || failed="$failed $t"; done
+          # a file that hangs is ended after 15 minutes with the traceback of every thread (faulthandler), and the rest runs:
+          # on Windows 3.9 a hang in test_ap2_anchors.py used up the whole job (run 45467635237) and named nothing
+          for t in test_*.py pqcrypto/test_*.py; do echo "== $t"
+            (cd "$(dirname "$t")" && python -c "import faulthandler, runpy, sys; faulthandler.dump_traceback_later(900, exit=True); sys.argv = sys.argv[1:]; runpy.run_path(sys.argv[0], run_name='__main__')" "$(basename "$t")") || failed="$failed $t"
+          done
           if [ -n "$failed" ]; then echo "::error::failed:$failed"; exit 1; fi
       - name: "Every test in every module is actually collected (a stray unittest.main() once hid 13 tests from CI)"
         if: ${{ !cancelled() }}

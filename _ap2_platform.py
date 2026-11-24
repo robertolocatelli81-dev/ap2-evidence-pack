@@ -37,8 +37,8 @@ def fifo(tc, path):
     import secrets
     name = "\\\\.\\pipe\\ap2-" + secrets.token_hex(8)
     for _ in range(64):
-        h = _winapi.CreateNamedPipe(name, _winapi.PIPE_ACCESS_DUPLEX, _winapi.PIPE_TYPE_BYTE | _winapi.PIPE_WAIT,
-                                    _winapi.PIPE_UNLIMITED_INSTANCES, 65536, 65536, 0, _winapi.NULL)
+        # PIPE_ACCESS_DUPLEX 3, PIPE_TYPE_BYTE 0, PIPE_WAIT 0 (winbase.h): _winapi does not export the last two
+        h = _winapi.CreateNamedPipe(name, 3, 0, 255, 65536, 65536, 0, 0)   # PIPE_UNLIMITED_INSTANCES 255, no security attributes
         tc.addCleanup(_winapi.CloseHandle, h)
     return name
 

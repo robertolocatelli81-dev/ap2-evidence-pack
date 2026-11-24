@@ -36,7 +36,7 @@ def crafted_ids(lab, token, ids):
     j = lab.j
     with open(j("in.der"), "wb") as f:
         f.write(token)
-    _run("openssl", "cms", "-verify", "-noverify", "-inform", "DER", "-in", j("in.der"), "-out", j("tst.der"))
+    _run("openssl", "cms", "-verify", "-noverify", "-binary", "-inform", "DER", "-in", j("in.der"), "-out", j("tst.der"))
     with open(j("tst.der"), "rb") as f:
         tst = f.read()
     with open(j("tsa.crt"), "rb") as f:

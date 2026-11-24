@@ -87,7 +87,7 @@ class Lab:
         j = self.j
         with open(j("in.der"), "wb") as f:
             f.write(token)
-        _run("openssl", "cms", "-verify", "-noverify", "-inform", "DER", "-in", j("in.der"), "-out", j("tst.der"))
+        _run("openssl", "cms", "-verify", "-noverify", "-binary", "-inform", "DER", "-in", j("in.der"), "-out", j("tst.der"))
         _run("openssl", "cms", "-sign", "-binary", "-nodetach", "-econtent_type", OID_TSTINFO,
              *(["-keyid"] if key_id else []), *(["-cades"] if ess else []), "-md", "sha256", "-nosmimecap",
              "-signer", j(signer + ".crt"), "-inkey", j(signer + ".key"), "-certfile", j("ca.crt"), "-in", j("tst.der"),
@@ -139,7 +139,7 @@ def crafted(lab, token, ess="ok"):
     j = lab.j
     with open(j("in.der"), "wb") as f:
         f.write(token)
-    _run("openssl", "cms", "-verify", "-noverify", "-inform", "DER", "-in", j("in.der"), "-out", j("tst.der"))
+    _run("openssl", "cms", "-verify", "-noverify", "-binary", "-inform", "DER", "-in", j("in.der"), "-out", j("tst.der"))
     with open(j("tst.der"), "rb") as f:
         tst = f.read()
     with open(j("tsa.crt"), "rb") as f:
@@ -259,19 +259,23 @@ class SignerByKeyId(unittest.TestCase):
         store = os.path.join(self.td, "store")
         os.makedirs(store, exist_ok=True)
         shutil.copy(self.b.j("ca.crt"), os.path.join(store, "b-ca.pem"))
-        _run("openssl", "rehash", store)
+        # the default store: a hashed directory (SSL_CERT_DIR) on POSIX; `openssl rehash` does not run on Windows (exit 1,
+        # CI run of 2026-11-24), where the equivalent default store is a bundle file (SSL_CERT_FILE)
+        var, val = ("SSL_CERT_FILE", os.path.join(store, "b-ca.pem")) if os.name == "nt" else ("SSL_CERT_DIR", store)
+        if os.name != "nt":
+            _run("openssl", "rehash", store)
         ski = reply(self.b.resign(self.tok))
-        old = os.environ.get("SSL_CERT_DIR")
-        os.environ["SSL_CERT_DIR"] = store
+        old = os.environ.get(var)
+        os.environ[var] = val
         try:
             r = subprocess.run(["openssl", "verify", "-purpose", "timestampsign", self.b.j("tsa.crt")], capture_output=True)
             self.assertEqual(r.returncode, 0, r.stderr)                  # control: openssl trusts the directory
             v = tsa_ok(ski, self.a.j("ca.crt"))[0]
         finally:
             if old is None:
-                del os.environ["SSL_CERT_DIR"]
+                del os.environ[var]
             else:
-                os.environ["SSL_CERT_DIR"] = old
+                os.environ[var] = old
         self.assertEqual(v, False)
 
     def test_imprint_and_gen_time(self):
@@ -350,7 +354,7 @@ class NamesAsOpenssl(unittest.TestCase):
         j = self.a.j
         with open(j("in.der"), "wb") as f:
             f.write(tok or self.tok)
-        _run("openssl", "cms", "-verify", "-noverify", "-inform", "DER", "-in", j("in.der"), "-out", j("tst.der"))
+        _run("openssl", "cms", "-verify", "-noverify", "-binary", "-inform", "DER", "-in", j("in.der"), "-out", j("tst.der"))
         with open(j("tst.der"), "rb") as f:
             tst = f.read()
         n = tst[1] & 0x7F if tst[1] & 0x80 else 0
@@ -450,7 +454,7 @@ class ClosedShapes(unittest.TestCase):
         j, o = self.a.j, self.b.j
         with open(j("in2.der"), "wb") as f:
             f.write(self.tok)
-        _run("openssl", "cms", "-verify", "-noverify", "-inform", "DER", "-in", j("in2.der"), "-out", j("tst2.der"))
+        _run("openssl", "cms", "-verify", "-noverify", "-binary", "-inform", "DER", "-in", j("in2.der"), "-out", j("tst2.der"))
         _run("openssl", "cms", "-sign", "-binary", "-nodetach", "-econtent_type", OID_TSTINFO, *(["-keyid"] if key_id else []),
              "-cades", "-md", "sha256", "-nosmimecap", "-signer", j("tsa.crt"), "-inkey", j("tsa.key"),
              "-signer", o("tsa.crt"), "-inkey", o("tsa.key"), "-certfile", j("ca.crt"), "-in", j("tst2.der"),

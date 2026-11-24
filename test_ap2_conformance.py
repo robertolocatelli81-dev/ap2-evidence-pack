@@ -632,7 +632,7 @@ class TestSignatureEntryNamesTheKey(unittest.TestCase):
                 "print(sigsuite._entry_shape_note({'sig_alg': 'ed25519'}))") % os.path.join(_HERE, "pqcrypto")
         for seed in ("0", "1", "2", "3", "4", "5"):
             out = subprocess.run([sys.executable, "-B", "-c", code], capture_output=True, text=True,
-                                 env=dict(os.environ, PYTHONHASHSEED=seed), encoding="utf-8").stdout.strip()
+                                 env=dict(os.environ, PYTHONHASHSEED=seed, PYTHONIOENCODING="utf-8"), encoding="utf-8").stdout.strip()   # 1.11.0: print() in the ANSI code page on Windows, undecodable as UTF-8
             self.assertEqual(out, want, "PYTHONHASHSEED=" + seed)
 
     @unittest.skipUnless(shutil.which("node"), "node absent: the JS note is not measured")
