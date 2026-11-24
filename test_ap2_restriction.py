@@ -1256,6 +1256,7 @@ class TestMutantGaps(PackCase):
         res = direct(o, restrict(o, r))
         self.assertEqual([(x["state"], x["reason"]) for x in res["reasons"]], [("contradicted", "claim_changed")])
 
+    @unittest.skipUnless(HAVE_OPENSSL, "openssl absent: the local TSA cannot run")   # 1.11.0: an error in the CI cell without openssl
     def test_existed_by_is_the_earliest_counting_anchor_in_anchors_too(self):
         import time
         from test_ap2_anchors import LocalTSA

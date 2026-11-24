@@ -143,8 +143,13 @@ def main(argv):
                   "cannot be trusted to see a crash, so nothing is measured")
             return 2
 
-        n, bad, skipped, unchanged, usage = run([("python", PY), ("node", JS)], base, types, tmp)
-        print(f"{n} hostile mutations of {len(field_paths(base))} fields x {len(types)} types, two verifiers each "
+        import shutil    # noqa: PLC0415
+        # 1.11.0: without node (the CI cell that removes it) the reference alone is measured and the output says so; before,
+        # every node run there was counted as a crash ("the process did not finish", 695 of 1390, exit 1)
+        vs = [("python", PY)] + ([("node", JS)] if shutil.which("node") else [])
+        n, bad, skipped, unchanged, usage = run(vs, base, types, tmp)
+        print(f"{n} hostile mutations of {len(field_paths(base))} fields x {len(types)} types, "
+              f"{'two verifiers each' if len(vs) == 2 else 'the reference alone (node absent)'} "
               f"({unchanged} substitutions left the pack identical to the valid one and are not counted, "
               f"{skipped} paths could not be addressed, {usage} answers were a bare usage)")
         if skipped:
@@ -152,7 +157,7 @@ def main(argv):
             return 1
         for label, p, v, why in bad:
             print(f"  [CRASH] {label:7} {p} := {v}  -> {why}")
-        print(f"inputs answered with a verdict instead of a crash: {2 * n - len(bad)}/{2 * n}")
+        print(f"inputs answered with a verdict instead of a crash: {len(vs) * n - len(bad)}/{len(vs) * n}")
         return 1 if bad else 0
     finally:
         import shutil    # noqa: PLC0415

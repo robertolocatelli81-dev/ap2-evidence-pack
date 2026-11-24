@@ -3,9 +3,10 @@
 ## 1.11.0 — 2026-11-24 — the downgrade of a hybrid producer block, the same bytes on every system, one nesting bound on every Python
 
 A minor version: it adds refusals (README "Versioning"). A pack that was `valid` under a pinned producer set holding an
-`ml-dsa-65` key, with no `ml-dsa-65` signature in its block, is not any more; nothing else that was `valid` changes, and
+`ml-dsa-65` key, with no `ml-dsa-65` signature in its block, is not any more; nothing else that was `valid` changes but under a pinned set outside its grammar (now the caller's
+error) and, in the JS library, under a pin passed as one string, which no longer matches as a substring (both below); and
 every 1.10.0 vector keeps its expected file and is reproduced as before (all 59 by the reference, and by the JS
-verifier the 52 that do not need openssl). Of the 18 tests added, the 10 that state
+verifier the 52 that do not need openssl). Of the 22 tests added, the 14 that state
 the new behaviour fail on v1.10.0 on Python 3.9, 3.13 and 3.14; the other 8 are controls that pass on both.
 
 - SPEC §5, §6 step 6, §6.9, §10, both verifiers: a pinned producer set that holds an `ml-dsa-65` key requires a valid
@@ -18,12 +19,20 @@ the new behaviour fail on v1.10.0 on Python 3.9, 3.13 and 3.14; the other 8 are 
   `classical-only` block whose key it pins, as before. SPEC §5 says that a pinned set is one producer's: a set that
   joins a hybrid producer's keys with a `classical-only` producer's refuses the second's packs (no silent acceptance);
   a relying party keeps one set per producer. The canonical scope statement (§8) is unchanged.
-  `test_ap2_pin_pq.py` (9 tests, the content changed and re-signed with the classical key alone among them); two vectors,
+  `test_ap2_pin_pq.py` (12 tests, the content changed and re-signed with the classical key alone among them); two vectors,
   `producer_pq_stripped_pinned` and `producer_pq_stripped_classical_pin` (`make_vectors_1110.py`, derived from
   `valid_signed` with no new key).
 - JS verifier: a pin passed to `verifyEvidence` as one string (`trusted: {ed25519: "<key>"}`) was compared with
   `String.includes`, so `"x<key>y"` pinned `<key>`; it is now that one key, as in the reference. The command line always
   passed lists and was not affected.
+- SPEC §5, both verifiers: the pinned set has a grammar, `{sig_alg: key or list of keys}` with `sig_alg` one of `ed25519`,
+  `ecdsa-p256`, `ml-dsa-65`. A key pinned under another name (`--trusted-producer-key ML-DSA-65=…`) was not an `ml-dsa-65`
+  key of the set, so the stripped pack above stayed `valid` beside the `ed25519` pin (exit 0, both command lines); in the
+  JS library a `Set`, a number or an object under `ml-dsa-65` did the same, and `null` there was a TypeError from inside
+  the verifier; in the reference `None` there switched the rule off. Now each is the caller's error: a usage error (exit 2)
+  on both command lines, `ValueError` in the reference, `TypeError` in the JS library. A changed behaviour: a pin under a
+  name the format does not define (`--trusted-producer-key ml-dsa-87=…`, `{"ml-dsa-87": …}`) was ignored up to 1.10.0
+  and is now that error too.
 - Files are written with `\n` on every system. `build`, `sign_evidence`, `stamp`, the private copy of `restriction` and
   `ProducerIdentity.save` opened their file in text mode without `newline=`, so on Windows every line end was `\r\n`
   (reported by cryptovalid-opencore's Windows port on 2026-11-24): the bytes of the pack, and the SHA-256 of the whole
@@ -41,7 +50,18 @@ the new behaviour fail on v1.10.0 on Python 3.9, 3.13 and 3.14; the other 8 are 
   `JWKS body is not JSON: json_too_deep: nesting exceeds 512`. `test_ap2_depth.py` updated (two keys of its table).
 - CI: every push to any branch; Linux on Python 3.9, 3.10, 3.11, 3.12, 3.13 and 3.14, macOS and Windows on 3.13, each
   with node 24 and OpenSSL 3, and Linux 3.9 and 3.14 with node and openssl removed from the runner; every action pinned
-  by commit SHA. `release.yml` (new): on a tag, the wheel and the sdist built from `git archive` of the tag, their
+  by commit SHA. In the cells without openssl and node, `test_ap2_conformance.py`,
+  `test_ap2_evidence.py`, `test_ap2_restriction.py` and `verifiers/type_fuzz.py` skip, with the reason, what needs them:
+  without them they failed.
+- Receipts and messages are written as UTF-8 whatever the encoding of the stream, unless `PYTHONIOENCODING` is set (then the
+  encoding it names, as before). Windows gives a pipe the ANSI code page, so a message with `§` was written as 0xA7 there
+  and not as the JS verifier writes it. This holds on every system: under a stream that is not UTF-8 (a Latin-1 locale,
+  a UTF-16 stream set by a caller in process) `§` was 0xA7, or UTF-16 with its byte order mark, and is now 0xC2 0xA7
+  (measured on Linux); set `PYTHONIOENCODING` to keep the stream's encoding.
+- `stamp` on Windows: the lock of the read-modify-write is a named mutex of the session, keyed by the directory's real
+  path; `os.open` of a directory is PermissionError there, so up to 1.10.0 every `stamp` on Windows was "cannot open the
+  pack's directory" (CI run of 2026-11-24). On POSIX the lock is flock on the directory, as before.
+- `release.yml` (new): on a tag, the wheel and the sdist built from `git archive` of the tag, their
   SHA256SUMS checked on a line of its own, build provenance attested, a draft release; `pypi.yml` also checks that
   attestation before it uploads. `verifiers/lax_python_ablation.sh` takes the interpreter from `PYTHON` and reads and
   writes its copy as UTF-8.

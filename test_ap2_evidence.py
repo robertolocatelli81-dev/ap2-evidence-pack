@@ -590,6 +590,7 @@ class TestFileObjects(unittest.TestCase):
         r = ap2.verify_evidence("a\0b")
         self.assertEqual((r["admission"], r["refusal_class"]), ("refused", "malformed"), r)
 
+    @unittest.skipUnless(shutil.which("openssl"), "openssl absent: the TSA signature cannot be verified here")   # 1.11.0: failed in the CI cells without openssl
     def test_a_certificate_file_openssl_reads_is_no_usage_error(self):   # 1.10.0 review — SPEC §6.10: never stricter than openssl
         import shutil
         import subprocess

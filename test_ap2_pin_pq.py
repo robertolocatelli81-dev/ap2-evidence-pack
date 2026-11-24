@@ -10,7 +10,7 @@ PyPI wheel 1.10.0, google-agentic-commerce/AP2#338); only `require_pq` refused i
 `policy_ok` is false and `policy.unmet` names `trusted_producer_keys`, in the reference and in the JS verifier, whatever
 ML-DSA-65 backend the verifier has. Controls: the hybrid pack under the same set, the stripped pack under a set without
 an `ml-dsa-65` key (a classical-only producer's pins) and without a set, stay as in 1.10.0. On v1.10.0 the tests
-`test_stripped_*`, `test_resigned_*`, `test_shared_set_*`, `test_js_*` and `test_js_string_pin_is_one_key` fail; the
+`test_stripped_*`, `test_resigned_*`, `test_shared_set_*`, `test_pin*` and `test_js_*` fail; the
 `test_control_*` tests pass on both."""
 import json
 import os
@@ -159,6 +159,53 @@ class PinHoldsMlDsa(unittest.TestCase):
             json.dumps(self.stripped), json.dumps("x" + PINS["ed25519"][0] + "y"))
         p = subprocess.run([NODE, "--input-type=module", "-e", code], capture_output=True, timeout=120)
         self.assertEqual(json.loads(p.stdout.decode("utf-8")), [False, False], p.stderr)
+
+    # ---- the pinned set has a grammar: outside it, an error of the caller, never a set read in silence
+    def test_pin_under_a_name_the_format_does_not_define_is_refused(self):
+        """Measured on bce80ef: `--trusted-producer-key ML-DSA-65=<key>` beside the ed25519 pin left the stripped pack valid
+        (exit 0) in both verifiers — the key was not an `ml-dsa-65` key of the set."""
+        e, q = PINS["ed25519"][0], PINS["ml-dsa-65"][0]
+        for alg in ("ML-DSA-65", "mldsa65", "ml-dsa-65 ", "ml-dsa-87", "constructor"):
+            with self.subTest(alg=alg):
+                args = [self.stripped, "--trusted-producer-key", "ed25519=" + e, "--trusted-producer-key", alg + "=" + q]
+                p = subprocess.run([sys.executable, os.path.join(ROOT, "ap2_evidence.py"), "verify"] + args, capture_output=True, timeout=120)
+                self.assertEqual((p.returncode, p.stdout), (2, b""), p.stderr)
+                self.assertIn(b"is not a producer signature algorithm", p.stderr)
+                with self.assertRaises(ValueError):
+                    A.verify_evidence(self.stripped, trusted_producer_keys={"ed25519": [e], alg: [q]})
+                if NODE:
+                    p = subprocess.run([NODE, JS] + args, capture_output=True, timeout=120)
+                    self.assertEqual((p.returncode, p.stdout), (2, b""), p.stderr)
+        for alg in ("ed25519", "ecdsa-p256", "ml-dsa-65"):   # control: the three names of SPEC §5 are pins
+            self.assertFalse(A.verify_evidence(self.stripped, trusted_producer_keys={alg: ["x"]})["valid"])
+
+    def test_pinned_set_of_another_type_is_an_error(self):
+        e, q = PINS["ed25519"], PINS["ml-dsa-65"]
+        for bad in ([e[0], q[0]], {"ed25519": e, "ml-dsa-65": None}, {"ed25519": e, "ml-dsa-65": 7}, {"ed25519": e, "ml-dsa-65": [q]},
+                    {"ed25519": e, "ml-dsa-65": {"k": q[0]}}, "ed25519=" + e[0], {"ed25519": e, 7: q}):
+            with self.subTest(bad=repr(bad)[:40]):
+                with self.assertRaises(ValueError):
+                    A.verify_evidence(self.stripped, trusted_producer_keys=bad)
+        for good in ({"ed25519": e[0], "ml-dsa-65": tuple(q)}, {"ed25519": e, "ml-dsa-65": set(q)}):   # control: these are sets
+            self.assertEqual(self._py(self.stripped, good), (False, False, ["trusted_producer_keys"], "verified"))
+        self.assertEqual(self._py(self.stripped, {})[0], False)   # control: an empty set pins nothing
+
+    @unittest.skipUnless(NODE, "node absent: the JS verifier cannot be measured")
+    def test_js_pinned_set_of_another_type_is_an_error(self):
+        """Measured on bce80ef: `new Set([key])`, 7 or {0: key} under "ml-dsa-65" left the stripped pack valid in the JS library
+        (the reference refused it), and null there was a TypeError from inside the verifier."""
+        e, q = json.dumps(PINS["ed25519"]), json.dumps(PINS["ml-dsa-65"][0])
+        bads = ["{ed25519: %s, 'ml-dsa-65': new Set([%s])}" % (e, q), "{ed25519: %s, 'ml-dsa-65': 7}" % e, "{ed25519: %s, 'ml-dsa-65': null}" % e,
+                "{ed25519: %s, 'ml-dsa-65': {0: %s}}" % (e, q), "{ed25519: %s, 'ml-dsa-65': [[%s]]}" % (e, q), "{ed25519: %s, 'ML-DSA-65': [%s]}" % (e, q),
+                "new Map([['ed25519', %s]])" % e, "[%s]" % q, "%s" % q]
+        code = ("import { verifyEvidence } from %s;\nconst out = [];\nfor (const t of [%s]) { try { out.push(verifyEvidence(%s, { trusted: t }).valid); }"
+                " catch (x) { out.push(x instanceof TypeError && /^trusted must be/.test(x.message) ? 'TypeError' : String(x)); } }\n"
+                "out.push(verifyEvidence(%s, { trusted: { ed25519: %s, 'ml-dsa-65': %s } }).policy.unmet);\n"
+                "out.push(verifyEvidence(%s, { trusted: { ed25519: %s, 'ml-dsa-65': [] } }).valid);   // control: no ml-dsa-65 key in the set\n"
+                "process.stdout.write(JSON.stringify(out));\n") % (json.dumps(pathlib.Path(JS).as_uri()), ", ".join(bads), json.dumps(self.stripped),
+                                                                   json.dumps(self.stripped), e, q, json.dumps(self.stripped), e)
+        p = subprocess.run([NODE, "--input-type=module", "-e", code], capture_output=True, timeout=120)
+        self.assertEqual(json.loads(p.stdout.decode("utf-8")), ["TypeError"] * len(bads) + [["trusted_producer_keys"], True], p.stderr)
 
 
 if __name__ == "__main__":

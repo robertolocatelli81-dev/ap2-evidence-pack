@@ -3297,6 +3297,9 @@ def check_not_before(nb: Dict, ev: Dict, art_results: List[Dict], proven_time: O
     return out
 
 
+PIN_ALGS = tuple(_sigsuite.CLASSICAL) + tuple(_sigsuite.POST_QUANTUM)   # the names a pinned producer key can be given under (SPEC §5)
+
+
 def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = False,
                     require_producer: bool = False, require_anchor: bool = False, tsa_cert: Optional[str] = None,
                     trust_anchor: Optional[str] = None, min_anchors: Optional[int] = None,
@@ -3310,6 +3313,14 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
     and the receipt is the 1.7.1 receipt but for the message of an artifact whose token has such a literal."""
     if type(accept_integral_floats) is not bool:   # SPEC §7 discipline: an option of the wrong type never changes a verdict in silence
         raise ValueError(f"accept_integral_floats must be a boolean (got {accept_integral_floats!r})")
+    # 1.11.0 (SPEC §5): the pinned set is {sig_alg: key or list of keys} over the algorithms the format defines. Anything else
+    # is the caller's error, never a set read in silence: a key pinned under "ML-DSA-65" was not an ml-dsa-65 key of the set
+    # (the stripped block stayed valid), and None under "ml-dsa-65" switched the rule off.
+    if trusted_producer_keys is not None and not (isinstance(trusted_producer_keys, dict) and all(
+            isinstance(k, str) and k in PIN_ALGS and (isinstance(v, str) or (isinstance(v, (list, tuple, set, frozenset))
+                                                                           and all(isinstance(x, str) for x in v)))
+            for k, v in trusted_producer_keys.items())):
+        raise ValueError("trusted_producer_keys must be {sig_alg: key or list of keys}, sig_alg one of " + ", ".join(PIN_ALGS))
     if require_bindings is not None and not (isinstance(require_bindings, (list, tuple)) and all(
             isinstance(pr, (list, tuple)) and len(pr) == 2 and all(isinstance(x, str) and x for x in pr) for pr in require_bindings)):
         raise ValueError(f"require_bindings must be a list of (in, commits_to) pairs of non-empty names (got {require_bindings!r})")
@@ -4653,6 +4664,8 @@ def _main(argv: Optional[List[str]] = None) -> int:
                 alg, sep, key = spec.partition("=")
                 if not sep or not alg or not key:
                     p.error(f"--trusted-producer-key expects ALG=B64 (got {spec!r})")
+                if alg not in PIN_ALGS:   # 1.11.0 (SPEC §5): "ML-DSA-65=…" pinned nothing and the stripped block stayed valid
+                    p.error(f"--trusted-producer-key: {alg!r} is not a producer signature algorithm ({', '.join(PIN_ALGS)})")
                 trusted.setdefault(alg, []).append(key)
         if _pack_unreadable(a.evidence):
             p.error(f"cannot read the evidence file {a.evidence!r}")

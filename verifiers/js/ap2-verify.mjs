@@ -1046,7 +1046,13 @@ export function checkDisclosure(path, disclosure) {   // read-only; Refused for 
   return { ...out, outcome: got === ev.not_before.payment[m] ? "matches" : "disclosure_mismatch" };
 }
 export { checkNotBefore, parseNotBefore };
+const PIN_ALGS = ["ed25519", "ecdsa-p256", "ml-dsa-65"];   // the names a pinned producer key can be given under (SPEC §5)
 export function verifyEvidence(path, opts = {}) {
+  // 1.11.0 (SPEC §5): trusted is {sig_alg: key or list of keys} over the algorithms the format defines, as in the reference;
+  // anything else is the caller's error (a Set or a number under "ml-dsa-65" switched the 1.11.0 rule off in silence)
+  if ((opts.trusted ?? null) !== null && !(typeof opts.trusted === "object" && !Array.isArray(opts.trusted) && [null, Object.prototype].includes(Object.getPrototypeOf(opts.trusted))
+      && Object.keys(opts.trusted).every((k) => PIN_ALGS.includes(k) && (typeof opts.trusted[k] === "string" || (Array.isArray(opts.trusted[k]) && opts.trusted[k].every((x) => typeof x === "string"))))))
+    throw new TypeError("trusted must be {sig_alg: key or list of keys}, sig_alg one of " + PIN_ALGS.join(", "));
   // 1.7.2 (SPEC §3.1): acceptIntegralFloats, a boolean, default false; when true the receipt says so
   if (opts.acceptIntegralFloats !== undefined && typeof opts.acceptIntegralFloats !== "boolean") throw new TypeError("acceptIntegralFloats must be a boolean");
   // 1.9.0 (SPEC §6.9): requireBindings, a list of [in, commits_to] pairs of non-empty names, as the reference's require_bindings
@@ -1204,7 +1210,7 @@ function main(argv) {
   const a = argv.slice(2); const opts = { trusted: null }; let path = null;
   for (let i = 0; i < a.length; i++) { let tok = a[i], eqv = null; const eq = tok.indexOf("="); if (eq > 0 && tok.startsWith("--")) { eqv = tok.slice(eq + 1); tok = tok.slice(0, eq); }
     const nx = () => { const v = eqv !== null ? eqv : a[++i]; if (v === undefined || v === "" || v.startsWith("-")) usage(); return v; };
-    if (tok === "--trusted-producer-key") { const v = nx(); const k = v.indexOf("="); if (k <= 0 || k === v.length - 1) usage(); opts.trusted = opts.trusted ?? Object.create(null); (opts.trusted[v.slice(0, k)] ??= []).push(v.slice(k + 1)); }   // r2: a null-prototype table, so "constructor=…" is a pin like any other
+    if (tok === "--trusted-producer-key") { const v = nx(); const k = v.indexOf("="); if (k <= 0 || k === v.length - 1 || !PIN_ALGS.includes(v.slice(0, k))) usage(); opts.trusted = opts.trusted ?? Object.create(null); (opts.trusted[v.slice(0, k)] ??= []).push(v.slice(k + 1)); }   // r2: a null-prototype table, so "constructor=…" is a pin like any other
     else if (tok === "--tsa-cert") opts.tsaCert = nx();
     else if (tok === "--min-anchors") { const v = nx(); if (!/^[1-9][0-9]{0,5}$/.test(v)) usage(); opts.minAnchors = Number(v); }   // 1.5.0 — the reference's grammar
     else if (tok === "--require-binding") { const v = nx(); const k = v.indexOf("->"); if (k <= 0 || k + 2 >= v.length || v.indexOf("->", k + 2) !== -1) usage(); (opts.requireBindings ??= []).push([v.slice(0, k), v.slice(k + 2)]); }   // 1.9.0 — SPEC §6.9
