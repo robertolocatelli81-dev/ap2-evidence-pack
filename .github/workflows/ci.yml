@@ -1,21 +1,68 @@
 name: ci
+# Every push to any branch and every pull request (1.11.0). Linux on every Python from the declared floor (3.9) to 3.14,
+# macOS and Windows, each with the optional tools (node 24 for the JS verifier, OpenSSL 3 for the TSA and x5c checks), and
+# Linux without them (both removed from the runner: the suites must skip what needs them, with the reason, and pass).
 on:
   push:
-    branches: [master]
   pull_request:
+permissions:
+  contents: read
 jobs:
   tests:
-    runs-on: ${{ matrix.python-version == '3.9' && 'ubuntu-24.04' || 'ubuntu-latest' }}   # 3.9 has no build for ubuntu-26.04 (ubuntu-latest from 2026-10-19)
+    name: tests (python ${{ matrix.python }}, ${{ matrix.os }}, ${{ matrix.tools }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.9", "3.11", "3.13"]   # pyproject declares >=3.9: the floor is tested too
+        os: [ubuntu-24.04]   # 3.9 has no build for ubuntu-26.04 (ubuntu-latest from 2026-10-19)
+        python: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+        tools: [with-tools]
+        include:
+          - {os: ubuntu-24.04, python: "3.9", tools: without-tools}
+          - {os: ubuntu-24.04, python: "3.14", tools: without-tools}
+          - {os: macos-latest, python: "3.13", tools: with-tools}
+          - {os: windows-latest, python: "3.13", tools: with-tools}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      # the bytes as committed: Git for Windows turns LF into CRLF by default (core.autocrlf=true); the vectors and the
+      # files a test compares byte for byte are read as they are in the repository
+      - name: check out without line-end conversion
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          python-version: ${{ matrix.python-version }}
-      - name: "Dependencies — cryptography (Ed25519/P-256 and, from 48, ML-DSA-65 for the hybrid producer signature)"
-        run: pip install cryptography
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: matrix.tools == 'with-tools'
+        with:
+          node-version: "24"   # OpenSSL >= 3.5 inside node: the JS verifier checks ML-DSA-65 too
+      - name: "macOS: OpenSSL 3 before the system's LibreSSL (the reference needs OpenSSL 3.0 options)"
+        if: runner.os == 'macOS' && matrix.tools == 'with-tools'
+        run: |
+          brew list openssl@3 >/dev/null 2>&1 || brew install openssl@3
+          echo "$(brew --prefix openssl@3)/bin" >> "$GITHUB_PATH"
+      - name: "without-tools: node and openssl removed from the runner (not hidden from one step: from every step after this)"
+        if: matrix.tools == 'without-tools'
+        run: |
+          set -e
+          for t in node openssl; do
+            while p=$(command -v "$t"); do sudo mv "$p" "$p.removed-by-ci"; hash -r; done
+          done
+          if command -v node || command -v openssl; then echo "::error::a tool is still on PATH"; exit 1; fi
+          echo "node and openssl are absent"
+      - name: "interpreter, tools and the one dependency (cryptography: Ed25519/P-256 and, from 48, ML-DSA-65)"
+        run: |
+          set -e
+          python --version
+          python -m pip install --disable-pip-version-check cryptography
+          python -c "import cryptography, sys; print('cryptography', cryptography.__version__, 'on', sys.platform)"
+          if command -v node; then node --version; else echo "node: absent"; fi
+          if command -v openssl; then openssl version; else echo "openssl: absent"; fi
       - name: Unit + conformance tests (every suite in the repo, fail-closed)
         run: |
           set -e
@@ -39,46 +86,50 @@ jobs:
           python ap2_evidence.py verify out.json > /dev/null
           python - <<'PY'
           import json
-          with open("out.json") as fh:
+          with open("out.json", encoding="utf-8") as fh:
               d = json.load(fh)
           v = d["artifacts"][0]["sd_jwt_compact"]
           d["artifacts"][0]["sd_jwt_compact"] = v[:30] + ("A" if v[30] != "A" else "B") + v[31:]
-          with open("tampered.json", "w") as fh:
+          with open("tampered.json", "w", encoding="utf-8", newline="\n") as fh:
               json.dump(d, fh)
           PY
           if python ap2_evidence.py verify tampered.json > /dev/null; then
             echo "::error::the verifier accepted a tampered evidence pack"; exit 1; fi
           echo "tampered pack rejected (exit 1), intact pack accepted (exit 0)"
-      - uses: actions/setup-node@v7
-        with:
-          node-version: "24"   # OpenSSL >= 3.5: the JS verifier checks ML-DSA-65 too
       - name: "Differential oracle: Python reference vs Node verifier on every vector, hostile file and CLI case"
+        if: matrix.tools == 'with-tools'
         run: python verifiers/differential_oracle.py
+      - name: "without-tools — the differential oracle compares with the Node verifier, which this cell has removed"
+        if: matrix.tools == 'without-tools'
+        run: echo "skipped with its reason - no node here; the oracle runs in every with-tools cell"
       - name: "Ablation: the strict layers removed from a copy of the reference must turn the suite red"
+        env:
+          PYTHON: python
         run: bash verifiers/lax_python_ablation.sh
       - name: "Every malformed input gets a VERDICT, never a traceback (with its own crashing-verifier control)"
         run: python verifiers/type_fuzz.py
       - name: "The DISTRIBUTED package, not the repository: build the wheel, install it alone in a clean venv, import and verify a vector"
         run: |
           set -e
+          RT=$(cd "$RUNNER_TEMP" && pwd)   # a POSIX path on Windows too (D:\a\_temp is /d/a/_temp in Git's bash): globs work on it
           python -m pip install -q build
-          python -m build --wheel --outdir /tmp/dist .
-          python -m venv /tmp/pkgvenv
-          /tmp/pkgvenv/bin/pip install -q /tmp/dist/*.whl          # no other install: the wheel must bring what it needs
+          python -m build --wheel --outdir "$RT/dist" .
+          python -m venv "$RT/pkgvenv"
+          vb="$RT/pkgvenv/bin"; [ -d "$vb" ] || vb="$RT/pkgvenv/Scripts"
+          "$vb/python" -m pip install -q "$RT"/dist/*.whl          # no other install: the wheel must bring what it needs
           # -I keeps this checkout off sys.path: measured 2026-10-05, without it `python -c` and `python -m` run from the
           # checkout imported ./ap2_evidence.py and ./pqcrypto/sigsuite.py (the repository, not the wheel) and the step was
           # green for the wrong reason. The asserts name the origin, so the step cannot go green on the checkout again.
-          /tmp/pkgvenv/bin/python -I - <<'PY'
-          import ap2_evidence, sigsuite
-          assert ap2_evidence.__file__.startswith("/tmp/pkgvenv/"), ap2_evidence.__file__
-          assert sigsuite.__file__.startswith("/tmp/pkgvenv/") and "/ap2_pqcrypto/" in sigsuite.__file__, sigsuite.__file__
+          "$vb/python" -I - <<'PY'
+          import os, sys, ap2_evidence, sigsuite, ap2_nist_beacon
+          for m in (ap2_evidence, sigsuite, ap2_nist_beacon):
+              assert os.path.realpath(m.__file__).startswith(os.path.realpath(sys.prefix)), m.__file__
+          assert os.path.basename(os.path.dirname(sigsuite.__file__)) == "ap2_pqcrypto", sigsuite.__file__
           print("import ok", ap2_evidence.EVIDENCE_FORMAT, sigsuite.__file__)
           PY
-          /tmp/pkgvenv/bin/python -I -m ap2_evidence verify spec/vectors/ap2/valid_signed.json > /dev/null
-          # 1.8.0: the installed ACVP test finds its vectors in the wheel (the 1.7.3 wheel shipped the test without them,
-          # FileNotFoundError); test_ap2_wheel_contents.py skips in the job above, which has no `build` module
-          (cd /tmp && /tmp/pkgvenv/bin/python -I -m unittest ap2_pqcrypto.test_acvp_mldsa65)
-          /tmp/pkgvenv/bin/python -I -c "import ap2_nist_beacon as b; assert b.__file__.startswith('/tmp/pkgvenv/'), b.__file__"
+          "$vb/python" -I -m ap2_evidence verify spec/vectors/ap2/valid_signed.json > /dev/null   # ML-DSA-65 from cryptography
+          # 1.8.0: the installed ACVP test finds its vectors in the wheel (the 1.7.3 wheel shipped the test without them)
+          (cd "$RT" && "$vb/python" -I -m unittest ap2_pqcrypto.test_acvp_mldsa65)
           echo "the published package imports and verifies on its own"
       - name: "The wheel carries the ACVP vectors, positive control included (test_ap2_wheel_contents.py on the checkout, 1.10.0)"
         run: |
@@ -89,16 +140,24 @@ jobs:
       - name: "Wheel — no path shared with PyPI's pqcrypto (1.3.0): the suite ships as ap2_pqcrypto/"
         run: |
           set -e
-          unzip -l /tmp/dist/*.whl | grep -q ' ap2_pqcrypto/sigsuite.py'
-          if unzip -l /tmp/dist/*.whl | grep -q ' pqcrypto/'; then echo "::error::the wheel ships pqcrypto/"; exit 1; fi
-          echo "the wheel ships ap2_pqcrypto/ and no pqcrypto/"
+          RT=$(cd "$RUNNER_TEMP" && pwd)
+          python - "$RT"/dist/*.whl <<'PY'
+          import sys, zipfile
+          names = zipfile.ZipFile(sys.argv[1]).namelist()
+          assert "ap2_pqcrypto/sigsuite.py" in names, "no ap2_pqcrypto/sigsuite.py"
+          assert not any(n.startswith("pqcrypto/") for n in names), "the wheel ships pqcrypto/"
+          print("the wheel ships ap2_pqcrypto/ and no pqcrypto/")
+          PY
 
   floor:
     # pyproject declares cryptography >= 48: the floor is measured, not asserted (ML-DSA-65 works from 48.0.0)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11"
       - run: pip install "cryptography==48.0.0"
@@ -111,11 +170,14 @@ jobs:
     # cryptovalid-opencore >= 0.18.0 imports `ap2_evidence` from THIS package (its `ap2` extra) and ships no copy.
     # The other side of that link is asked the same question on every change here: build the wheel from this checkout,
     # clone cryptovalid-opencore master and run its AP2 tests against it — a skipped AP2 test is a red, not a green.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     needs: tests
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11"
       - name: "The wheel from this checkout (what cryptovalid installs), alone in a venv with cryptography"
@@ -154,11 +216,11 @@ jobs:
           "$RUNNER_TEMP/venv/bin/python" "$RUNNER_TEMP/cvo/verify_evidence.py" auto ev.json > /dev/null   # needs cvo >= the auto-detect fix
           "$RUNNER_TEMP/venv/bin/python" - <<'PY'
           import json
-          with open("ev.json") as fh:
+          with open("ev.json", encoding="utf-8") as fh:
               d = json.load(fh)
           v = d["artifacts"][0]["sd_jwt_compact"]
           d["artifacts"][0]["sd_jwt_compact"] = v[:30] + ("A" if v[30] != "A" else "B") + v[31:]
-          with open("tampered.json", "w") as fh:
+          with open("tampered.json", "w", encoding="utf-8", newline="\n") as fh:
               json.dump(d, fh)
           PY
           if "$RUNNER_TEMP/venv/bin/python" "$RUNNER_TEMP/cvo/verify_evidence.py" ap2 tampered.json > /dev/null; then
@@ -171,10 +233,13 @@ jobs:
     # `sd-jwt` reference implementation — the same questions about the same tokens. `sd-jwt` is deliberately NOT pinned:
     # if a future release changes the declared divergence, this job turns red and the declaration gets re-measured
     # instead of quietly staying in the README.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11"
       - name: "Third-party stack (pinned commit of google-agentic-commerce/AP2)"

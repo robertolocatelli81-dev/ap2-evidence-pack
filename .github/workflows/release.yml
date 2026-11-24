@@ -1,0 +1,79 @@
+name: release
+# On a tag v* (1.11.0): the wheel and the sdist built from the tag, their SHA256SUMS, build provenance attested, and a
+# DRAFT GitHub release that carries them. The maintainer adds the release's other assets (SBOM, CRA evidence pack, built
+# from these same files) and publishes the draft; publishing runs pypi.yml, which uploads exactly these two files after
+# checking them against SHA256SUMS and against this workflow's attestation. Nothing here uploads to PyPI.
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Wheel and sdist of the tag (git archive, the commit's time as SOURCE_DATE_EPOCH) and SHA256SUMS
+        env:
+          TAG: ${{ github.ref_name }}
+          TZ: UTC
+        run: |
+          set -euo pipefail
+          case "$TAG" in v[0-9]*) ;; *) echo "tag '$TAG' is not vX.Y.Z"; exit 1;; esac
+          v="${TAG#v}"
+          grep -qx "version = \"$v\"" pyproject.toml || { echo "pyproject.toml does not say version $v"; exit 1; }
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct "$TAG"); export SOURCE_DATE_EPOCH
+          src="$RUNNER_TEMP/src"; mkdir "$src"
+          git archive "$TAG" | tar -x -C "$src"
+          python -m pip install -q build
+          python -B -m build --outdir "$GITHUB_WORKSPACE/dist" "$src"
+          cd dist
+          ls
+          [ -e "ap2_evidence_pack-$v-py3-none-any.whl" ] && [ -e "ap2_evidence_pack-$v.tar.gz" ] || { echo "not one wheel and one sdist of $v"; exit 1; }
+          sha256sum -- * > SHA256SUMS && cat SHA256SUMS
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+  attest:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: "dist/*.whl, dist/*.tar.gz, dist/SHA256SUMS"
+  release:
+    needs: attest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      - name: Check SHA256SUMS and create the DRAFT release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          (cd dist; sha256sum -c SHA256SUMS)   # alone on its line: in an && list a failed check would not end the step
+          gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --title "$TAG" --verify-tag --draft \
+            --notes "Draft: wheel, sdist and SHA256SUMS built from the tag by release.yml; changes in CHANGELOG.md. Provenance: gh attestation verify <file> --repo $GITHUB_REPOSITORY"

@@ -1,7 +1,8 @@
 name: pypi
 
 # Uploads to PyPI the wheel and sdist of a GitHub Release exactly as released (the files listed in the release's
-# SHA256SUMS, nothing rebuilt), through PyPI Trusted Publishing; the publish action adds PEP 740 attestations.
+# SHA256SUMS, nothing rebuilt), through PyPI Trusted Publishing; the publish action adds PEP 740 attestations. Since
+# 1.11.0 the two files must also carry the build-provenance attestation of release.yml (built from the tag in CI).
 # Runs on a published release, or by hand for an existing tag.
 
 on:
@@ -21,6 +22,7 @@ jobs:
     environment: pypi
     permissions:
       contents: read
+      attestations: read
       id-token: write
     steps:
       - name: Download the released files and check them against SHA256SUMS
@@ -47,6 +49,15 @@ jobs:
             mv "$f" ../dist/; n=$((n+1))
           done
           [ "$n" -eq 2 ] || { echo "expected one wheel and one sdist, found $n files"; exit 1; }
+        shell: bash
+      - name: The two files are the ones release.yml built from the tag (its build-provenance attestation, 1.11.0)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for f in dist/*.whl dist/*.tar.gz; do
+            gh attestation verify "$f" --repo "$GITHUB_REPOSITORY" --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml"
+          done
         shell: bash
       - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with:
