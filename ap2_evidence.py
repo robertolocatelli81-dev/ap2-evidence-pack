@@ -1335,7 +1335,7 @@ def _openssl_tmpdir() -> str:
     except OSError as e:   # its message lists the candidate paths: a reason that would change with the environment
         raise Ap2WriteError("cannot write a temporary file for openssl: no usable temporary directory") from e
     try:
-        return tempfile.mkdtemp(prefix="ap2-openssl-", dir=base)
+        return _private_tmpdir("ap2-openssl-", base)   # 1.11.0: not tempfile.mkdtemp, which can retry a PermissionError for ever on Windows
     except OSError as e:
         raise _tmp_error(e) from e
 
@@ -2401,6 +2401,41 @@ def _verify_one(parsed: Dict, key: Dict) -> Dict:
             "disclosures_ok": True}     # resolve_disclosures raised otherwise
 
 
+def _create_exclusive(d: str, prefix: str, mode: int):
+    """A new file in directory `d` with an unpredictable name, created O_EXCL (a fixed name could be a planted symlink),
+    never following a link; returns (fd, path). Only a name already taken is tried again, at most 64 times; any other
+    OSError is raised at once (1.11.0). tempfile.mkstemp, used by `stamp` up to 1.10.0, also retries a PermissionError on
+    Windows while os.access says the directory is writable — and os.access there reads only the read-only attribute, not
+    the access list — so `stamp` into a directory whose list denies writing tried name after name and never ended
+    (Windows, Python 3.9, CI run 45481354290: test_ap2_anchors cut by its 15-minute bound) instead of exit 74."""
+    import secrets
+    flags = (os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+             | getattr(os, "O_BINARY", 0))
+    for _ in range(64):
+        p = os.path.join(d, "%s%s.tmp" % (prefix, secrets.token_hex(8)))
+        try:
+            return os.open(p, flags, mode), p
+        except FileExistsError:
+            continue
+    raise FileExistsError(errno.EEXIST, "64 unpredictable names in a row already taken", d)
+
+
+def _private_tmpdir(prefix: str, base: Optional[str] = None) -> str:
+    """tempfile.mkdtemp's job (a new directory, mode 0700, in the temporary directory) with the bound of _create_exclusive:
+    mkdtemp retries a PermissionError on Windows as mkstemp does (1.11.0)."""
+    import secrets
+    import tempfile
+    base = tempfile.gettempdir() if base is None else base
+    for _ in range(64):
+        p = os.path.join(base, prefix + secrets.token_hex(8))
+        try:
+            os.mkdir(p, 0o700)
+            return p
+        except FileExistsError:
+            continue
+    raise FileExistsError(errno.EEXIST, "64 unpredictable names in a row already taken", base)
+
+
 def _fchmod(fd: int, path: str, mode: int) -> None:
     """os.fchmod where it exists; on Windows Python has it only from 3.13 (its documentation), and os.chmod of the same
     new file is the equivalent (1.11.0; the CI runs Windows on 3.9 and 3.13)."""
@@ -2420,7 +2455,6 @@ def _write_pack_file(path: str, obj) -> None:
     replaced, the link stays); an existing file this process may not write is refused as before (PermissionError); a
     path that is not a regular file (a FIFO, /dev/stdout, /dev/null) is written directly, as before, since it cannot be
     renamed onto. Raises OSError."""
-    import secrets
     try:
         st = os.stat(path)
     except FileNotFoundError:
@@ -2435,14 +2469,7 @@ def _write_pack_file(path: str, obj) -> None:
     if st is not None:   # the kernel's own check, without truncating: a read-only pack is not replaced behind its back
         os.close(os.open(real, os.O_WRONLY | getattr(os, "O_CLOEXEC", 0)))
     d = os.path.dirname(real) or "."
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
-    while True:
-        tmp = os.path.join(d, ".ap2-pack-%s.tmp" % secrets.token_hex(8))
-        try:
-            fd = os.open(tmp, flags, 0o666)   # 0o666 less the umask, as open(path, "w") gives a new file
-            break
-        except FileExistsError:
-            continue
+    fd, tmp = _create_exclusive(d, ".ap2-pack-", 0o666)   # 0o666 less the umask, as open(path, "w") gives a new file
     try:
         if st is not None:
             _fchmod(fd, tmp, stat.S_IMODE(st.st_mode))   # the pack keeps its permissions
@@ -2673,7 +2700,6 @@ def add_anchor(path: str, tsa_url: str) -> Dict:
     only: it is not an RFC 4998 renewal. The token is requested for the digest RECOMPUTED from the sealed content, and
     the pack is refused unchanged when that differs from the declared digest (stamping a pack that does not verify would attest
     nothing). The digest and the producer signatures do not change: `anchors` lies outside them. Written atomically."""
-    import tempfile
     path = os.path.realpath(path)   # a symlink is followed: the pack it names is stamped, the link stays a link
     # the read-modify-write under an exclusive lock on the directory: measured on b3edfc8, six concurrent stamps of one
     # pack all reported success and the file kept ONE anchor (the others lost), two raised FileNotFoundError
@@ -2698,7 +2724,7 @@ def add_anchor(path: str, tsa_url: str) -> Dict:
         mode = os.stat(path).st_mode & 0o7777
         tmp = None
         try:   # a fresh, unpredictable name created O_EXCL (a fixed name could be a planted symlink: measured, it overwrote its target)
-            fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".ap2-stamp-", suffix=".tmp")
+            fd, tmp = _create_exclusive(os.path.dirname(path) or ".", ".ap2-stamp-", 0o600)
             _fchmod(fd, tmp, mode)   # the pack keeps its permissions (0600 became 0644)
             if os.name == "nt":   # 1.11.0: and, on Windows, its access list (a mode sets only the read-only attribute there)
                 _sigsuite.win_copy_dacl(path, tmp)
@@ -4170,7 +4196,6 @@ def _verify_restrictions(path: str, tsa_cert: Optional[str] = None) -> Dict:
     the copy cannot be written (no receipt), or — like verify_evidence — when a check asked for could not be run here: its
     `receipt` is then the complete restriction receipt."""
     import shutil
-    import tempfile
     not_run, ev = None, None
     try:
         ev = read_evidence_file(path)
@@ -4178,7 +4203,7 @@ def _verify_restrictions(path: str, tsa_cert: Optional[str] = None) -> Dict:
         receipt = _refusal_receipt(str(e), "malformed")
     else:
         try:
-            tmp = tempfile.mkdtemp(prefix="ap2-restriction-")
+            tmp = _private_tmpdir("ap2-restriction-")   # 1.11.0: bounded, as _create_exclusive
         except OSError as e:
             raise Ap2WriteError(f"cannot write the private copy of the pack: {type(e).__name__}: "
                                 f"{os.strerror(e.errno) if isinstance(e.errno, int) else e}") from e

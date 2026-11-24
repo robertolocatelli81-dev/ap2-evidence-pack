@@ -44,6 +44,12 @@ import json
 import os
 import sys
 
+if __name__ == "__main__" and not os.environ.get("PYTHONIOENCODING"):   # 1.11.0: UTF-8 output on every system, as the receipts (Windows
+    for _s in (sys.stdout, sys.stderr):       # gives a pipe the ANSI code page: "§" was 0xA7, undecodable by the caller)
+        if hasattr(_s, "reconfigure"):
+            _s.reconfigure(encoding="utf-8")
+
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 VEC = os.path.join(HERE, "elara_vectors.json")
 

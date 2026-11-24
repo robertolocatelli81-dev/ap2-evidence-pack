@@ -172,6 +172,42 @@ class Bytes(unittest.TestCase):
         self.assertEqual(A._crash_text(0xC0000005), "ended by exception 0xC0000005")
         self.assertEqual(A._crash_text(-11), "terminated by signal 11")
 
+    def test_a_denied_directory_is_refused_at_once(self):
+        """1.11.0: a PermissionError creating the temporary file beside the pack is raised at the first try. tempfile's
+        mkstemp retries it on Windows while os.access says the directory is writable (and os.access there reads only the
+        read-only attribute, not the access list): `stamp` into a directory whose list denies writing never ended (CI run
+        45481354290, Windows, Python 3.9). The control shows tempfile looping under the same conditions."""
+        import tempfile
+        calls = []
+        real_open = os.open
+
+        def denied(path, flags, mode=0o777, **kw):
+            if os.path.dirname(path) == self.d and flags & os.O_CREAT:   # a new file there: the directory denies writing
+                calls.append(path)
+                if len(calls) > 50:
+                    raise RuntimeError("still trying")
+                raise PermissionError(13, "Access is denied", path)
+            return real_open(path, flags, mode, **kw)
+        with mock.patch.object(os, "open", denied):
+            with self.assertRaises(PermissionError):
+                A._create_exclusive(self.d, ".ap2-stamp-", 0o600)
+            self.assertEqual(len(calls), 1)
+            calls.clear()
+            with mock.patch.object(tempfile._os, "name", "nt"), mock.patch.object(tempfile._os, "access", lambda *a, **k: True):
+                with self.assertRaises((RuntimeError, PermissionError)):   # 3.14 stops at TMP_MAX; 51 tries are enough here
+                    tempfile.mkstemp(dir=self.d)
+            self.assertGreater(len(calls), 1)   # control: tempfile tries again
+        pack = os.path.join(self.d, "p.json")
+        shutil.copy(VECTOR, pack)
+        calls.clear()
+        with mock.patch.object(A, "_rfc3161_stamp", lambda digest, url, timeout=20: {"anchored": True, "tsr_b64": "AA=="}), \
+                mock.patch.object(os, "open", denied), mock.patch.object(A, "_lock_directory", lambda d: (lambda: None)), \
+                mock.patch.object(tempfile._os, "name", "nt"), mock.patch.object(tempfile._os, "access", lambda *a, **k: True):
+            # Windows' conditions for tempfile too: up to 1.10.0 (mkstemp) this call tried again and again
+            with self.assertRaisesRegex(A.Ap2WriteError, "cannot write the stamped pack: PermissionError: not stamped"):
+                A.add_anchor(pack, "https://tsa.example")
+        self.assertEqual(len(calls), 1)
+
     def test_cli_receipt_has_no_cr(self):
         p = subprocess.run([sys.executable, os.path.join(ROOT, "ap2_evidence.py"), "verify", VECTOR], capture_output=True, timeout=120)
         self.assertEqual(p.returncode, 0, p.stderr)

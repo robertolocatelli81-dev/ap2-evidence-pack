@@ -34,6 +34,12 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 import schema_mutants as M  # noqa: E402
 
+if __name__ == "__main__" and not os.environ.get("PYTHONIOENCODING"):   # 1.11.0: UTF-8 output on every system, as the receipts (Windows
+    for _s in (sys.stdout, sys.stderr):       # gives a pipe the ANSI code page: "§" was 0xA7, undecodable by the caller)
+        if hasattr(_s, "reconfigure"):
+            _s.reconfigure(encoding="utf-8")
+
+
 RANK = {"contradicted": 0, "not_evaluated": 1, "indeterminate": 1, "verified": 2}
 
 

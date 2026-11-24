@@ -33,6 +33,12 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _OPENCORE = os.path.abspath(os.path.join(_HERE, "..", "..", ".."))
 sys.path.insert(0, _OPENCORE)
 import ap2_evidence as ap2  # noqa: E402
+
+if __name__ == "__main__" and not os.environ.get("PYTHONIOENCODING"):   # 1.11.0: UTF-8 output on every system, as the receipts (Windows
+    for _s in (sys.stdout, sys.stderr):       # gives a pipe the ANSI code page: "§" was 0xA7, undecodable by the caller)
+        if hasattr(_s, "reconfigure"):
+            _s.reconfigure(encoding="utf-8")
+
 sigsuite = ap2._sigsuite   # the signature suite the reference really uses (its ML-DSA-65 backend)
 
 # 1.5.4 — SPEC §7: the closed schema of <name>.expected.json

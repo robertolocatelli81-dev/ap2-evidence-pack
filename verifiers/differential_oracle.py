@@ -6,6 +6,12 @@ hostile files that a lenient verifier would accept (every one carries a digest r
 and a CLI-grammar table (usage exit 2, no verdict, in both). Exit 1 on any disagreement. 1.1.0 (2026-09-22): the cases
 were measured red on the 1.0.2 reference first (see README)."""
 import base64, copy, glob, hashlib, json, os, shutil, subprocess, sys, tempfile
+
+if __name__ == "__main__" and not os.environ.get("PYTHONIOENCODING"):   # 1.11.0: UTF-8 output on every system, as the receipts (Windows
+    for _s in (sys.stdout, sys.stderr):       # gives a pipe the ANSI code page: "§" was 0xA7, undecodable by the caller)
+        if hasattr(_s, "reconfigure"):
+            _s.reconfigure(encoding="utf-8")
+
 try:
     import resource
 except ImportError:   # non-POSIX: the file-object cases then run without a per-child memory bound

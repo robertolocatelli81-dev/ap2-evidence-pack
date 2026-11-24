@@ -68,6 +68,15 @@ the new behaviour fail on v1.10.0 on Python 3.9, 3.13 and 3.14; the other 8 are 
   read-only attribute there); `os.fchmod`, which Python has on Windows only from 3.13, is `os.chmod` of the same new file
   before that; and an openssl that crashed (an NTSTATUS code such as 0xC0000005 as its exit code, Windows having no
   signals) is a check not run here, as a signal is on POSIX (SPEC §6.10), not openssl's answer.
+- `stamp` into a directory that does not let this user create a file is exit 74 at once on every system. Up to 1.10.0 it
+  used tempfile.mkstemp, which on Windows tries another name after a PermissionError whenever os.access calls the
+  directory writable, and os.access there reads only the read-only attribute, not the access list: into a directory
+  whose list denies writing, `stamp` tried name after name and did not end (CI, Windows, Python 3.9: the test was cut by
+  its 15-minute bound). The temporary file beside the pack (`stamp`, `sign`, `build`) and the private directories of
+  openssl and of `restriction` are now created by the package, retrying only a name already taken, at most 64 times.
+- The tools that print (`verifiers/*.py`, the conformance runner, the vector generators, `examples/make_samples.py`)
+  write UTF-8 unless PYTHONIOENCODING names another encoding: on Windows the differential oracle printed `§` in the ANSI
+  code page and the test that reads its output got nothing.
 - `release.yml` (new): on a tag, the wheel and the sdist built from `git archive` of the tag, their
   SHA256SUMS checked on a line of its own, build provenance attested, a draft release; `pypi.yml` also checks that
   attestation before it uploads. `verifiers/lax_python_ablation.sh` takes the interpreter from `PYTHON` and reads and

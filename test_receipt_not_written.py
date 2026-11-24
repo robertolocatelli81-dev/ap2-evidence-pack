@@ -1124,20 +1124,26 @@ class TestOpensslTemporaryFiles(unittest.TestCase):
             tsa.close()
 
     def test_a_temporary_directory_that_cannot_be_made_is_the_write_error(self):
-        """tempfile.mkdtemp failing after gettempdir passed (no inode left, a directory that stopped taking entries) is the
-        same "cannot write a temporary file for openssl", with the reason and no path in it; made to fail here in process."""
+        """The private directory failing after gettempdir passed (no inode left, a directory that stopped taking entries) is
+        the same "cannot write a temporary file for openssl", with the reason and no path in it; made to fail here in
+        process. 1.11.0: the directory is made by os.mkdir (ap2_evidence._private_tmpdir), no longer tempfile.mkdtemp —
+        patching mkdtemp now proves nothing, so the call that makes it fails."""
         import errno
-        import tempfile as _tf
-        real = _tf.mkdtemp
+        real = os.mkdir
+        calls = []
 
-        def full(*a, **k):
-            raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC), "/somewhere/ap2-openssl-x")
-        _tf.mkdtemp = full
+        def full(path, *a, **k):
+            if os.path.basename(path).startswith("ap2-openssl-"):
+                calls.append(path)
+                raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC), path)
+            return real(path, *a, **k)
+        os.mkdir = full
         try:
             with self.assertRaises(ap2.Ap2WriteError) as cm:
                 ap2.verify_evidence(self.x5c, trust_anchor=self.ca)
         finally:
-            _tf.mkdtemp = real
+            os.mkdir = real
+        self.assertEqual(len(calls), 1)   # ENOSPC is not a name already taken: no second try
         self.assertEqual(str(cm.exception), "cannot write a temporary file for openssl: OSError: " + os.strerror(errno.ENOSPC))
 
     def test_stamp_query_needs_no_temporary_file(self):

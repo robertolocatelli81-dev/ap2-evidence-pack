@@ -35,6 +35,12 @@ from cryptography.hazmat.primitives import hashes  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric import ec  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature  # noqa: E402
 
+if __name__ == "__main__" and not os.environ.get("PYTHONIOENCODING"):   # 1.11.0: UTF-8 output on every system, as the receipts (Windows
+    for _s in (sys.stdout, sys.stderr):       # gives a pipe the ANSI code page: "§" was 0xA7, undecodable by the caller)
+        if hasattr(_s, "reconfigure"):
+            _s.reconfigure(encoding="utf-8")
+
+
 REFUSAL = {"valid": False, "digest_ok": False, "bindings_ok": False, "policy_ok": False, "pq_protected": False,
            "producer_present": False, "producer_ok": None, "producer_trusted": None, "rfc3161_claimed": False,
            "rfc3161_verified": None, "self_asserted_only": True}
