@@ -110,18 +110,24 @@ jobs:
         run: |
           set -e
           # counted, not run: the step above has run them (running them twice more here took 64 of 100 minutes on Windows).
-          # As a script: what unittest.main() would collect when it is reached; as a module: what the loader collects
+          # As a script: what unittest.main(...) would collect when it is reached, with the arguments the file gives it
+          # (unittest's own TestProgram, stopped before it runs); as a module: what the loader collects.
+          # The count is written as bytes: on Windows print() ends a line with \r\n and bash keeps the \r
           cat > "$RUNNER_TEMP/count_tests.py" <<'PY'
           import os, runpy, sys, unittest
           load = unittest.defaultTestLoader
           sys.path.insert(0, os.getcwd())
+          def say(n):
+              sys.stdout.buffer.write(b"%d\n" % n)
+              sys.stdout.buffer.flush()
           if sys.argv[2] == "module":
-              print(load.loadTestsFromName(sys.argv[1]).countTestCases())
+              say(load.loadTestsFromName(sys.argv[1]).countTestCases())
               sys.exit(len(load.errors) != 0)
-          def main(*args, **kwargs):
-              print(load.loadTestsFromModule(sys.modules["__main__"]).countTestCases())
-              raise SystemExit(0)
-          unittest.main = main
+          class Count(unittest.TestProgram):
+              def runTests(self):
+                  say(self.test.countTestCases())
+                  raise SystemExit(0)
+          unittest.main = Count
           path, sys.argv = sys.argv[1] + ".py", [sys.argv[1] + ".py"]
           runpy.run_path(path, run_name="__main__")
           sys.exit("unittest.main() was not reached")
@@ -133,9 +139,14 @@ jobs:
             echo "$1: as a script $direct, as a module $full"
             [ "$direct" = "$full" ] && [ "$full" -gt 0 ]
           }
-          # the control: a test after unittest.main() must be seen as hidden
+          # the controls: a test after unittest.main(), and one that unittest.main(defaultTest=...) leaves out, must be seen
+          # as hidden, by their counts (1 as a script, 2 as a module) and not by a check that fails for another reason
           printf 'import unittest\nclass A(unittest.TestCase):\n    def test_a(self): pass\nif __name__ == "__main__":\n    unittest.main()\nclass B(unittest.TestCase):\n    def test_b(self): pass\n' > "$RUNNER_TEMP/test_hidden.py"
-          if check "$RUNNER_TEMP/test_hidden.py"; then echo "::error::the control was not seen"; exit 1; fi
+          printf 'import unittest\nclass A(unittest.TestCase):\n    def test_a(self): pass\n    def test_b(self): pass\nif __name__ == "__main__":\n    unittest.main(defaultTest="A.test_a")\n' > "$RUNNER_TEMP/test_left_out.py"
+          for c in test_hidden test_left_out; do
+            if check "$RUNNER_TEMP/$c.py"; then echo "::error::the control $c was not seen"; exit 1; fi
+            if [ "$direct" != 1 ] || [ "$full" != 2 ]; then echo "::error::the control $c counted '$direct' and '$full', not 1 and 2"; exit 1; fi
+          done
           for t in test_*.py pqcrypto/test_*.py; do
             check "$t" || { echo "::error::$t does not collect the same tests as a script and as a module"; exit 1; }
           done
