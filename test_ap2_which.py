@@ -89,6 +89,15 @@ class NeverTheCurrentFolder(unittest.TestCase):
         self.assertTrue(calls and all(os.path.isabs(c) for c in calls), calls)
         self.assertFalse(os.path.exists(self.marker))
 
+    def test_absolute_on_windows_names_a_drive_or_a_share(self):
+        import ntpath
+        with mock.patch.object(A.os, "name", "nt"), mock.patch.object(A.os, "path", ntpath):
+            got = {p: A._is_absolute(p) for p in ("\\tools", "/tools", "tools", "C:tools", "", "C:\\tools", "c:/tools",
+                                                  "\\\\host\\share\\tools")}
+        self.assertEqual([p for p in got if got[p]], ["C:\\tools", "c:/tools", "\\\\host\\share\\tools"])
+        if os.name != "nt":
+            self.assertTrue(A._is_absolute("/tools"))   # POSIX: as before
+
     def test_a_name_with_a_separator_is_refused(self):
         for bad in ("", ".", "..", "a/openssl", "a\\openssl", "open\0ssl"):
             with self.subTest(name=bad), self.assertRaises(ValueError):

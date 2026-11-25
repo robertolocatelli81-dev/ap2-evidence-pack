@@ -1426,8 +1426,8 @@ class TestNemesisFinal(unittest.TestCase):   # 1.11.0: every system (faults: LD_
         time limit: the check did not run here, so Ap2WriteError, never `tsa_verified: false` / "not valid"."""
         tsa = os.path.join(_VEC, "anchor_probe_tsa.crt")
         slow = P.fake_tool(os.path.join(self.d, "slowbin"), "openssl", "import time; time.sleep(30)\n")   # 1.11.0: every system
-        code = ("import shutil, sys; sys.path.insert(0, sys.argv[1]); import ap2_evidence as a\n"
-                "if sys.argv[4] == 'gone':\n w = shutil.which; shutil.which = lambda n, *x, **k: '/nonexistent/openssl' if n == 'openssl' else w(n, *x, **k)\n"
+        code = ("import os, shutil, sys; sys.path.insert(0, sys.argv[1]); import ap2_evidence as a\n"
+                "if sys.argv[4] == 'gone':\n w = shutil.which; shutil.which = lambda n, *x, **k: os.path.abspath('/nonexistent/openssl') if n == 'openssl' else w(n, *x, **k)\n"
                 "else:\n a._verify_rfc3161.__defaults__ = (1, None)\n"
                 "try:\n r = a.verify_evidence(sys.argv[2], tsa_cert=sys.argv[3], require_anchor=True)\n print('verdict', r['valid'], r['rfc3161'].get('tsa_verified'))\n"
                 "except a.Ap2WriteError as e:\n print(e)\n")

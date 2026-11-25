@@ -2181,6 +2181,12 @@ def _ski_policies_shape(el):
     return True
 
 
+def _is_absolute(path: str) -> bool:
+    """os.path.isabs, and on Windows with a drive or a share: `\\tools` is absolute to Python up to 3.12 and not from 3.13,
+    and names a folder of whatever drive is current (CI run 45575984198, 1.11.0)."""
+    return os.path.isabs(path) and (os.name != "nt" or os.path.splitdrive(path)[0] != "")
+
+
 def _which_absolute(name: str) -> Optional[str]:
     """shutil.which, never the current folder (1.11.0, security). On Windows shutil.which looks in the current folder
     before PATH (CPython 3.9 and 3.11 always, 3.13 unless NoDefaultCurrentDirectoryInExePath is set), and on every system
@@ -2194,7 +2200,7 @@ def _which_absolute(name: str) -> Optional[str]:
         raise ValueError("not a bare program name: %r" % (name,))
     import shutil
     exe = shutil.which(name)
-    if exe is not None and os.path.isabs(exe):
+    if exe is not None and _is_absolute(exe):
         return exe
     if os.name == "nt":
         exts = [e for e in os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(os.pathsep) if e]
@@ -2202,7 +2208,7 @@ def _which_absolute(name: str) -> Optional[str]:
     else:
         names = [name]
     for folder in os.environ.get("PATH", "").split(os.pathsep):
-        if os.path.isabs(folder):
+        if _is_absolute(folder):
             for n in names:
                 path = os.path.join(folder, n)
                 if os.path.isfile(path) and os.access(path, os.X_OK):
@@ -2219,7 +2225,7 @@ def key_id_token_problem(der, digest_hex, ca_file, at, tmp, exe=None):
     first on Windows)."""
     import hashlib
     import os
-    if exe is None or not (isinstance(exe, str) and os.path.isabs(exe)):
+    if exe is None or not (isinstance(exe, str) and _is_absolute(exe)):
         found = _which_absolute("openssl" if exe is None else exe)
         if found is None:
             raise Ap2WriteError("cannot run openssl here: FileNotFoundError: %s" % os.strerror(errno.ENOENT))
@@ -4410,9 +4416,14 @@ def _write_all(stream, text: str) -> None:
         stream.flush()
         return
     data = memoryview(_text_layer_bytes(stream, buf, text))
+    # Windows before Python 3.12 reports a full non-blocking pipe as ENOSPC with no count, and a BufferedWriter given more
+    # than its buffer can have handed part of it to the pipe before raising: retried whole, that part came twice (CI run
+    # 45561704870, Windows, Python 3.9: a receipt of about 98 KB arrived as 47 MB). There it is written in pieces of 4096 bytes, under
+    # the buffer's 8192: each is copied whole into the buffer or not at all (a flush that fails keeps what it did not write).
+    step = 4096 if os.name == "nt" else len(data)
     while data:
         try:
-            n = buf.write(data)
+            n = buf.write(data[:step])
             waited = False
         except BlockingIOError as e:   # buffered stream on a full non-blocking pipe: part of it taken
             n, waited = e.characters_written, True
@@ -4422,7 +4433,7 @@ def _write_all(stream, text: str) -> None:
             n, waited = 0, True
         if n is None:   # raw stream on a full non-blocking pipe: nothing taken
             n, waited = 0, True
-        if n < 0 or n > len(data) or (n == 0 and not waited):
+        if n < 0 or n > min(len(data), step) or (n == 0 and not waited):
             raise OSError(f"short write: {len(data)} bytes not written")
         data = data[n:]
         if data and waited:

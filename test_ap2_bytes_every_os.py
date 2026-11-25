@@ -353,6 +353,50 @@ class Bytes(unittest.TestCase):
         with mock.patch.object(A, "_rfc3161_stamp", lambda digest, url, timeout=20: {"anchored": True, "tsr_b64": "AA=="}):
             self.assertEqual(A.add_anchor(pack, "https://tsa.example")["anchors"], 1)   # control: the same pack is stamped
 
+    def test_a_full_pipe_on_windows_never_gets_a_piece_twice(self):
+        """Windows before Python 3.12 (CI run 45561704870): a BufferedWriter given more than its buffer hands part of it to
+        the full non-blocking pipe and then raises ENOSPC with no count; retried whole, that part came again (a receipt
+        of about 98 KB arrived as 47 MB). Here the real BufferedWriter is over a stand-in pipe that takes 4096 bytes and is then
+        full (ENOSPC) once. On "Windows" the receipt arrives once, whole; the control (one write of everything, as on
+        POSIX) repeats its start, until the stand-in breaks after 200 calls: without that end it would fill the memory."""
+        import errno as _errno
+
+        class Pipe(io.RawIOBase):
+            def __init__(self):
+                self.got, self.n, self.done = bytearray(), 0, False
+
+            def writable(self):
+                return True
+
+            def write(self, b):
+                if self.done:
+                    return len(b)
+                self.n += 1
+                if self.n > 200:
+                    raise OSError(_errno.EPIPE, "stand-in: too many calls")
+                if self.n % 2 == 0:
+                    raise OSError(_errno.ENOSPC, "No space left on device")
+                b = bytes(b)[:4096]
+                self.got += b
+                return len(b)
+
+        text = "".join("%06d\n" % i for i in range(5000))   # 35 000 bytes
+        for name in ("nt", "posix"):
+            raw = Pipe()
+            stream = io.TextIOWrapper(io.BufferedWriter(raw, 8192), encoding="utf-8", newline="\n")
+            with self.subTest(os_name=name), mock.patch.object(A.os, "name", name), \
+                    mock.patch.object(A, "_full_pipe_error", lambda e, b: e.errno == _errno.ENOSPC), \
+                    mock.patch.object(A, "_wait_writable", lambda b: None):
+                if name == "nt":
+                    A._write_all(stream, text)
+                    self.assertEqual(bytes(raw.got), text.encode("ascii"))
+                else:   # the control: the piece passed before the error comes again
+                    with self.assertRaises(OSError) as e:
+                        A._write_all(stream, text)
+                    self.assertEqual(e.exception.errno, _errno.EPIPE)
+                    self.assertEqual(bytes(raw.got[:8192]), text.encode("ascii")[:4096] * 2)
+            raw.done = True   # what the control left in the buffer is written when it is collected, with no error printed
+
     def test_cli_receipt_has_no_cr(self):
         p = subprocess.run([sys.executable, os.path.join(ROOT, "ap2_evidence.py"), "verify", VECTOR], capture_output=True, timeout=120)
         self.assertEqual(p.returncode, 0, p.stderr)

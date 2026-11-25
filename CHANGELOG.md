@@ -6,9 +6,9 @@ A minor version: it adds refusals (README "Versioning"). A pack that was `valid`
 `ml-dsa-65` key, with no `ml-dsa-65` signature in its block, is not any more; nothing else that was `valid` changes but under a pinned set outside its grammar (now the caller's
 error) and, in the JS library, under a pin passed as one string, which no longer matches as a substring (both below); and
 every 1.10.0 vector keeps its expected file and is reproduced as before (all 59 by the reference, and by the JS
-verifier the 52 that do not need openssl). Of the 29 tests added, the 20 that state
-the new behaviour fail on v1.10.0 (as a failure or as an error) on Python 3.9, 3.13 and 3.14; the other 9 are controls
-that pass on both.
+verifier the 52 that do not need openssl). Of the 37 tests added, 26
+fail on v1.10.0 (as a failure or as an error) on Python 3.9, 3.13 and 3.14 on Linux, and the other 11 pass on both; on
+1.11.0 all 37 pass there.
 
 - Security: the openssl the reference runs is never one in the current folder. Up to 1.10.0 it ran what
   `shutil.which("openssl")` answered (`verify --tsa-cert`, `--trust-anchor`, `build --tsa`, `stamp`), and
@@ -16,7 +16,8 @@ that pass on both.
   name, look in the current folder before PATH (CPython 3.9 and 3.11 always, 3.13 unless
   NoDefaultCurrentDirectoryInExePath is set), and on every system an empty or relative PATH entry is the current folder:
   an `openssl.exe` placed beside the evidence was run. Now `_which_absolute` keeps only an absolute answer and searches
-  only the absolute folders of PATH (from omega-nucleo-comune `which_absolute`, dd6317f, itself from
+  only the absolute folders of PATH, on Windows those that name a drive or a share (`\tools` is absolute to Python up to
+  3.12, not from 3.13, and is a folder of the current drive) (from omega-nucleo-comune `which_absolute`, dd6317f, itself from
   cryptovalid-opencore `verifier.which`, f7883c9; same author, Apache-2.0). `test_ap2_which.py`: a planted openssl
   that leaves a marker is not run (reached through an empty PATH entry on POSIX, through shutil.which's own rule on
   Windows); with shutil.which put back, it is (the positive control).
@@ -81,6 +82,12 @@ that pass on both.
   read-only attribute there); `os.fchmod`, which Python has on Windows only from 3.13, is `os.chmod` of the same new file
   before that; and an openssl that crashed (an NTSTATUS code such as 0xC0000005 as its exit code, Windows having no
   signals) is a check not run here, as a signal is on POSIX (SPEC §6.10), not openssl's answer.
+- A full non-blocking pipe on Windows. Python before 3.12 reports it as ENOSPC and not as BlockingIOError: it is waited for
+  like one, only when the descriptor is a pipe (a full disk stays exit 74), and the receipt is written there in pieces of
+  4096 bytes: a BufferedWriter given more than its buffer had handed part of it to the pipe before raising, and that part
+  came again at every retry (a receipt of about 98 KB arrived as 47 MB, CI run 45561704870, Windows, Python 3.9, before the
+  release). The JS verifier's `writeSync` takes 0 bytes there with no error and was exit 74 with the usage line lost; on
+  Windows 0 on anything but a regular file is now waited for (CI run 45575984198: both pass on Python 3.9 and 3.13, node 24).
 - `stamp` into a directory that does not let this user create a file is exit 74 at once on every system. Up to 1.10.0 it
   used tempfile.mkstemp, which on Windows tries another name after a PermissionError: up to Python 3.12 whenever os.access
   calls the directory writable, and os.access there reads only the read-only attribute, not the access list, so into a

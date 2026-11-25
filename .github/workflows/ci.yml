@@ -7,6 +7,10 @@ on:
   pull_request:
 permissions:
   contents: read
+# a push to a trial branch ends the run of the commit it replaces; every other ref runs to the end
+concurrency:
+  group: ${{ startsWith(github.ref, 'refs/heads/ci-prova-') && github.ref || github.run_id }}
+  cancel-in-progress: true
 jobs:
   tests:
     name: tests (python ${{ matrix.python }}, ${{ matrix.os }}, ${{ matrix.tools }})
