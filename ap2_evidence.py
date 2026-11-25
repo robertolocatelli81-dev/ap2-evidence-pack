@@ -4336,8 +4336,12 @@ def _wait_writable(buf) -> None:
     """The stream is non-blocking and full: wait until it can take more, as a blocking write would (the reader is slow,
     not gone; one that goes away makes the next write EPIPE). `select` sleeps in the kernel and Python retries it after a
     signal (PEP 475). The descriptor is asked for only here: a byte stream with no descriptor (an io.BytesIO under a
-    TextIOWrapper, as pytest's capsys) never blocks. POSIX only: on Windows `select` waits on sockets only, so a full
-    non-blocking pipe there is reported as 74 (not measured)."""
+    TextIOWrapper, as pytest's capsys) never blocks. On Windows `select` waits on sockets only: there the full pipe is
+    tried again after 5 ms, as the JS verifier does everywhere (1.11.0; up to 1.10.0 it was reported as 74)."""
+    if os.name == "nt":
+        import time
+        time.sleep(0.005)
+        return
     import select
     try:
         select.select([], [buf.fileno()], [])

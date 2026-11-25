@@ -37,6 +37,9 @@ _VALID = os.path.join(_VEC, "anchor_valid.json")
 _INVALID = os.path.join(_VEC, "digest_mismatch.json")
 _OPENSSL = shutil.which("openssl")
 from _ap2_platform import full_sink, NO_FULL  # noqa: E402  (1.11.0: /dev/full, or a full volume on macOS/Windows)
+import _ap2_platform as P  # noqa: E402  (1.11.0: closed descriptors, RLIMIT_NPROC, CPU time: each system's equivalent)
+_WIN = os.name == "nt"
+_CUT = b"No space left on device" if _WIN else b"File too large"   # the full volume (Windows) for RLIMIT_FSIZE
 _FULL = full_sink()
 _DEVFULL = _FULL is not None
 
@@ -46,7 +49,7 @@ def _run(cmd, mode, cwd=None, stderr_mode="capture"):
     closed before the child starts: EPIPE on the first write), "closed" (fd 1 closed before exec). Returns
     (exit code, bytes on stdout in "file" mode else None, stderr bytes)."""
     with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
-        stdout, pre, close_after = out, None, None
+        stdout, close, close_after = out, [], None
         if mode == "devfull":
             stdout = close_after = open(_FULL, "wb")
         elif mode == "pipe":
@@ -54,15 +57,16 @@ def _run(cmd, mode, cwd=None, stderr_mode="capture"):
             os.close(r)
             stdout = close_after = os.fdopen(w, "wb")
         elif mode == "closed":
-            stdout, pre = None, (lambda: os.close(1))
+            stdout = None
+            close.append(1)
         se = err
         if stderr_mode == "devfull":
             se = open(_FULL, "wb")
         elif stderr_mode == "closed":   # fd 2 closed before exec
-            se, pre0 = None, pre
-            pre = (lambda: (pre0 and pre0(), os.close(2)))
-        try:
-            p = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=stdout, stderr=se, preexec_fn=pre, cwd=cwd, timeout=300)
+            se = None
+            close.append(2)
+        try:   # 1.11.0: P.run closes them in a preexec_fn on POSIX, through Git's bash on Windows
+            p = P.run(cmd, close=tuple(close), stdin=subprocess.DEVNULL, stdout=stdout, stderr=se, cwd=cwd, timeout=300)
         finally:
             if close_after is not None:
                 close_after.close()
@@ -73,7 +77,7 @@ def _run(cmd, mode, cwd=None, stderr_mode="capture"):
         return p.returncode, (out.read() if mode == "file" else None), err.read()
 
 
-@unittest.skipUnless(_DEVFULL and os.name == "posix", "a full device (" + NO_FULL + ") and POSIX file descriptors needed")
+@unittest.skipUnless(_DEVFULL, "a full device (" + NO_FULL + ")")
 class TestPythonVerify(unittest.TestCase):
     def test_file_mode_is_the_control(self):   # verdict code and the receipt byte for byte, as before 1.5.2
         for path, code in ((_VALID, 0), (_INVALID, 1)):
@@ -119,7 +123,7 @@ class TestPythonVerify(unittest.TestCase):
             shutil.rmtree(d, ignore_errors=True)
 
 
-@unittest.skipUnless(_NODE and _DEVFULL and os.name == "posix", "node, a full device (" + NO_FULL + ") and POSIX file descriptors needed")
+@unittest.skipUnless(_NODE and _DEVFULL, "node and a full device (" + NO_FULL + ")")
 class TestJsVerify(unittest.TestCase):
     def test_file_mode_is_the_control(self):
         for path, code in ((_VALID, 0), (_INVALID, 1)):
@@ -175,8 +179,7 @@ def _big_valid_pack(d):
         t.tearDown()
 
 
-@unittest.skipUnless(os.name == "posix", "RLIMIT_FSIZE needed")
-class TestShortWriteToAFile(unittest.TestCase):
+class TestShortWriteToAFile(unittest.TestCase):   # 1.11.0: Windows, without RLIMIT_FSIZE, writes to a full volume instead
     """1.5.2 review: stdout on a regular file that stops growing (RLIMIT_FSIZE, as `ulimit -f 4`): Node wrote 4 096 bytes of
     the receipt and exited 0 (no error reported); it must be 74 with the reason, as the Python CLI (EFBIG, "File too large")."""
 
@@ -190,15 +193,16 @@ class TestShortWriteToAFile(unittest.TestCase):
         shutil.rmtree(cls.d, ignore_errors=True)
 
     def _run_limited(self, cmd, limit):
-        import resource
-        import signal
-
-        def pre():
-            signal.signal(signal.SIGXFSZ, signal.SIG_DFL)   # as from a plain shell
-            if limit is not None:
-                resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
+        if limit is not None and _WIN:   # a file that cannot grow: on a full volume (ENOSPC), Windows' equivalent
+            o = P.full_volume_with(self, "short")
+            with open(o, "wb") as out, tempfile.TemporaryFile() as err:
+                p = P.run(cmd, stdin=subprocess.DEVNULL, stdout=out, stderr=err, timeout=300)
+                err.seek(0)
+                e = err.read()
+            with open(o, "rb") as f:
+                return p.returncode, f.read(), e
         with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
-            p = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=out, stderr=err, preexec_fn=pre, timeout=300)
+            p = P.run(cmd, fsize=limit, stdin=subprocess.DEVNULL, stdout=out, stderr=err, timeout=300)
             out.seek(0); err.seek(0)
             return p.returncode, out.read(), err.read()
 
@@ -213,11 +217,11 @@ class TestShortWriteToAFile(unittest.TestCase):
         self.assertTrue(err.startswith(b"receipt not written: ") and why in err and err.count(b"\n") == 1, err)
 
     def test_python(self):
-        self._check(_PY + ["verify", self.big], b"File too large")
+        self._check(_PY + ["verify", self.big], _CUT)
 
     @unittest.skipUnless(_NODE, "node needed")
     def test_js(self):
-        self._check([_NODE, _JS, self.big], b"EFBIG")
+        self._check([_NODE, _JS, self.big], b"ENOSPC" if _WIN else b"EFBIG")
 
 
 class _Tsa:
@@ -274,7 +278,7 @@ class _Tsa:
         shutil.rmtree(self.d, ignore_errors=True)
 
 
-@unittest.skipUnless(_DEVFULL and os.name == "posix", "a full device (" + NO_FULL + ") and POSIX file descriptors needed")
+@unittest.skipUnless(_DEVFULL, "a full device (" + NO_FULL + ")")
 class TestBuildAndStamp(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -376,7 +380,7 @@ class TestBuildAndStamp(unittest.TestCase):
         with open(p, "rb") as f:
             self.assertEqual(hashlib.sha256(f.read()).hexdigest(), before)
 
-    @unittest.skipUnless(_OPENSSL and hasattr(os, "geteuid") and os.geteuid() != 0, "openssl and a non-root user needed")
+    @unittest.skipUnless(_OPENSSL, "openssl absent: no local TSA")
     def test_stamp_into_a_directory_it_cannot_write_is_74_and_the_pack_is_unchanged(self):
         sub = os.path.join(self.d, "ro")
         os.mkdir(sub)
@@ -384,11 +388,9 @@ class TestBuildAndStamp(unittest.TestCase):
         shutil.copy(self._pack("s_ro_src.json"), p)
         with open(p, "rb") as f:
             before = f.read()
-        os.chmod(sub, 0o555)
-        try:
-            rc, raw, err = _run(_PY + ["stamp", p, "--tsa", self.tsa.url], "file")
-        finally:
-            os.chmod(sub, 0o755)
+        P.deny_writes_in(self, sub)   # 1.11.0: mode 0555, or a deny ACE on Windows
+        rc, raw, err = _run(_PY + ["stamp", p, "--tsa", self.tsa.url], "file")
+        self.doCleanups()
         self.assertEqual(rc, 74, err)
         self.assertEqual(raw, b"")
         self.assertTrue(err.startswith(b"receipt not written: cannot write the stamped pack") and err.count(b"\n") == 1, err)
@@ -399,13 +401,13 @@ class TestBuildAndStamp(unittest.TestCase):
 def _run_err(cmd, emode, cwd=None):
     """stdout on a regular file, stderr "full" (/dev/full) or "closed" (fd 2 closed before exec)."""
     with tempfile.TemporaryFile() as out:
-        se, pre = None, None
+        se, close = None, ()
         if emode == "full":
             se = open(_FULL, "wb")
         else:
-            pre = lambda: os.close(2)  # noqa: E731
+            close = (2,)
         try:
-            p = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=out, stderr=se, preexec_fn=pre, cwd=cwd, timeout=300)
+            p = P.run(cmd, close=close, stdin=subprocess.DEVNULL, stdout=out, stderr=se, cwd=cwd, timeout=300)
         finally:
             if se is not None:
                 se.close()
@@ -413,7 +415,7 @@ def _run_err(cmd, emode, cwd=None):
         return p.returncode, out.read()
 
 
-@unittest.skipUnless(_DEVFULL and os.name == "posix", "a full device (" + NO_FULL + ") and POSIX file descriptors needed")
+@unittest.skipUnless(_DEVFULL, "a full device (" + NO_FULL + ")")
 class TestStderrLost(unittest.TestCase):
     """1.5.2 review: a usage message or a refusal that cannot reach stderr is EX_IOERR (74), never the interpreter's 120
     (stderr full) and never on stdout (stderr closed: argparse and print() fell back to stdout, exit 1 or 2)."""
@@ -462,10 +464,8 @@ class TestStderrLost(unittest.TestCase):
 
 
 def _cpu_seconds(pid):
-    """utime + stime of a live process, all its threads, from /proc (Linux)."""
-    with open(f"/proc/{pid}/stat", "rb") as f:
-        fields = f.read().rsplit(b")", 1)[1].split()
-    return (int(fields[11]) + int(fields[12])) / os.sysconf("SC_CLK_TCK")
+    """utime + stime of a live process, all its threads: /proc on Linux, its equivalent elsewhere (P.cpu_seconds)."""
+    return P.cpu_seconds(pid)
 
 
 def _run_prefilled(cmd, which=1, env=None, cwd=None, other_devfull=False, other_limit=None):
@@ -474,24 +474,24 @@ def _run_prefilled(cmd, which=1, env=None, cwd=None, other_devfull=False, other_
     window (looked at from the 1st to the 10th second, so a slow start is not taken for a spin) using under 0.2 s of CPU,
     which a loop retrying EAGAIN never does — and once the pipe is drained what it had to say must arrive whole. The other
     stream goes to a regular file (or /dev/full). Returns (idle, rc, bytes after the filler or None, the other stream's bytes)."""
-    import fcntl
     r, w = os.pipe()
-    fcntl.fcntl(w, fcntl.F_SETFL, fcntl.fcntl(w, fcntl.F_GETFL) | os.O_NONBLOCK)
+    P.set_nonblocking(w)   # 1.11.0: O_NONBLOCK on POSIX, PIPE_NOWAIT on Windows
     filled = 0
     while True:
         try:
-            filled += os.write(w, b"P" * 4096)
+            n = os.write(w, b"P" * 4096)
         except BlockingIOError:
             break
+        if not n:   # Windows: a PIPE_NOWAIT pipe that is full takes 0 bytes instead of raising
+            break
+        filled += n
     other = tempfile.TemporaryFile()
+    if _WIN and other_limit is not None:   # no per-process file-size limit there: the full volume is its equivalent
+        other_devfull, other_limit = True, None
     dest = open(_FULL, "wb") if other_devfull else other
-    try:
-        def pre():   # other_limit: the other stream is a regular file that stops growing at that many bytes
-            if other_limit is not None:
-                import resource
-                resource.setrlimit(resource.RLIMIT_FSIZE, (other_limit, other_limit))
-        p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=w if which == 1 else dest,
-                             stderr=w if which == 2 else dest, cwd=cwd, env=dict(os.environ, **(env or {})), preexec_fn=pre)
+    try:   # other_limit: the other stream is a regular file that stops growing at that many bytes
+        p = P.popen(cmd, fsize=other_limit, stdin=subprocess.DEVNULL, stdout=w if which == 1 else dest,
+                    stderr=w if which == 2 else dest, cwd=cwd, env=dict(os.environ, **(env or {})))
     finally:
         os.close(w)
         if dest is not other:
@@ -525,8 +525,7 @@ def _run_prefilled(cmd, which=1, env=None, cwd=None, other_devfull=False, other_
     return idle, rc, (data[filled:] if data[:filled] == b"P" * filled else None), rest
 
 
-@unittest.skipUnless(os.name == "posix" and os.path.exists("/proc/self/stat"), "POSIX pipes and /proc needed")
-class TestWholeOrWaited(unittest.TestCase):
+class TestWholeOrWaited(unittest.TestCase):   # 1.11.0: every system (non-blocking pipes, CPU time: _ap2_platform)
     """1.5.2, second pass (13/10/2026, measured on a410964 with real processes): with PYTHONUNBUFFERED=1 (or -u) the
     receipt went to a raw FileIO whose short write the text layer dropped in silence (exit 0 or 1 with 24 bytes of it on a
     file of 1 000 bytes under `ulimit -f 1`; exit 0 through `| head -c 100` with a receipt of 84 620 bytes); a full
@@ -546,19 +545,17 @@ class TestWholeOrWaited(unittest.TestCase):
         shutil.rmtree(cls.d, ignore_errors=True)
 
     def _fsize_cut(self, cmd, env):
-        """stdout appended to a file that already holds 1 000 bytes, under RLIMIT_FSIZE 1 024: 24 bytes, then EFBIG."""
-        import resource
-        import signal
-        o = os.path.join(self.d, "cut")
-        with open(o, "wb") as f:
-            f.write(b"x" * 1000)
-
-        def pre():
-            signal.signal(signal.SIGXFSZ, signal.SIG_DFL)
-            resource.setrlimit(resource.RLIMIT_FSIZE, (1024, 1024))
+        """stdout appended to a file that already holds 1 000 bytes, under RLIMIT_FSIZE 1 024: 24 bytes, then EFBIG.
+        Windows (1.11.0), which has no per-process file-size limit: the file on a full volume, so it cannot grow (ENOSPC)."""
+        data = b"x" * 1000
+        if _WIN:
+            o, limit = P.full_volume_with(self, "cut", data), None
+        else:
+            o, limit = os.path.join(self.d, "cut"), 1024
+            with open(o, "wb") as f:
+                f.write(data)
         with open(o, "ab") as f, tempfile.TemporaryFile() as err:
-            p = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=f, stderr=err, preexec_fn=pre,
-                               env=dict(os.environ, **env), timeout=300)
+            p = P.run(cmd, fsize=limit, stdin=subprocess.DEVNULL, stdout=f, stderr=err, env=dict(os.environ, **env), timeout=300)
             err.seek(0)
             return p.returncode, err.read()
 
@@ -568,13 +565,13 @@ class TestWholeOrWaited(unittest.TestCase):
             with self.subTest(input=os.path.basename(path)):
                 rc, err = self._fsize_cut(_PY + ["verify", path], u)
                 self.assertEqual(rc, 74, err)
-                self.assertTrue(err.startswith(b"receipt not written: ") and b"File too large" in err and err.count(b"\n") == 1, err)
+                self.assertTrue(err.startswith(b"receipt not written: ") and _CUT in err and err.count(b"\n") == 1, err)
         rc, err = self._fsize_cut(_PY + ["verify", _VALID], {})   # the control: buffered was 74 already
         self.assertEqual(rc, 74, err)
 
     def test_unbuffered_big_receipt_to_a_reader_that_left_is_74(self):
-        p = subprocess.run(["bash", "-c", '{ sleep 0.2; exec "$@"; } | head -c 100 >/dev/null; exit "${PIPESTATUS[0]}"', "_"]
-                           + _PY + ["verify", self.big], env=dict(os.environ, PYTHONUNBUFFERED="1"),
+        p = subprocess.run([shutil.which("bash"), "-c", '{ sleep 0.2; exec "$@"; } | head -c 100 >/dev/null; exit "${PIPESTATUS[0]}"', "_"]
+                           + [c.replace("\\", "/") for c in _PY + ["verify", self.big]], env=dict(os.environ, PYTHONUNBUFFERED="1"),
                            stdin=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=300)
         self.assertEqual(p.returncode, 74, p.stderr)
         self.assertTrue(p.stderr.startswith(b"receipt not written: "), p.stderr)
@@ -608,7 +605,7 @@ class TestWholeOrWaited(unittest.TestCase):
         self.assertEqual(rc, code, got)
         self.assertTrue(got is not None and got.startswith(start) and got.endswith(b"\n")
                         and (got.count(b"\n") == 1 or not start.startswith(b"receipt not written")), got)
-        if stdout_limit is None:
+        if stdout_limit is None or _WIN:   # Windows: the full volume stands for the limit, nothing gets there
             self.assertEqual(out, b"")
         else:
             self.assertEqual(len(out), stdout_limit)
@@ -627,7 +624,7 @@ class TestWholeOrWaited(unittest.TestCase):
         self._stderr_waited([_NODE, _JS, _VALID], 74, b"receipt not written: ", stdout_devfull=True)
         # stdout a regular file that stops growing (the receipt written in a loop of writeSync, EFBIG): the line that
         # says so goes through the same loop, so a full non-blocking stderr is waited for there too
-        self._stderr_waited([_NODE, _JS, self.big], 74, b"receipt not written: EFBIG", stdout_limit=4096)
+        self._stderr_waited([_NODE, _JS, self.big], 74, b"receipt not written: " + (b"ENOSPC" if _WIN else b"EFBIG"), stdout_limit=4096)
 
     def test_the_74_line_after_a_file_that_stops_growing_waits_for_a_full_stderr_python(self):
         self._stderr_waited(_PY + ["verify", self.big], 74, b"receipt not written: ", stdout_limit=4096)
@@ -658,7 +655,9 @@ class TestWholeOrWaited(unittest.TestCase):
         text_path = os.path.join(self.d, "receipt.txt")
         with open(text_path, "w", encoding="utf-8", newline="") as f:
             f.write(json.dumps(ap2.verify_evidence(_VALID), indent=1) + "\n")
-        ref = [sys.executable, "-c", "import sys; sys.stdout.write(open(sys.argv[1], encoding='utf-8', newline='').read())", text_path]
+        # the reference keeps "\n" (1.11.0: so does the package, on every system; Windows' text layer would write "\r\n")
+        ref = [sys.executable, "-c", "import sys; sys.stdout.reconfigure(newline='\\n'); "
+               "sys.stdout.write(open(sys.argv[1], encoding='utf-8', newline='').read())", text_path]
 
         def out_of(argv, enc, dest, env):
             e = dict(os.environ, PYTHONIOENCODING=enc, **env)
@@ -706,7 +705,6 @@ class TestWholeOrWaited(unittest.TestCase):
         self.assertEqual((rc, head, json.loads(rest)["valid"]), (0, "before", True))
 
 
-@unittest.skipUnless(os.name == "posix", "POSIX permissions and RLIMIT_FSIZE needed")
 class TestPackWrittenWholeOrNotAtAll(unittest.TestCase):
     """1.5.2, second pass: `build` (and `sign_evidence`) opened the pack path with "w" and wrote into it, so a write that
     failed part way (a full disk, `ulimit -f`) truncated an earlier pack at that path (measured on 1.5.1 and a410964:
@@ -723,17 +721,18 @@ class TestPackWrittenWholeOrNotAtAll(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.d, ignore_errors=True)
 
-    def _build(self, out, limit=None, tsa=None):
-        import resource
-        import signal
+    def _sub(self):
+        """A directory for the pack: a temporary one; on Windows (1.11.0) one on the full volume, which _build fills
+        when a test asks for a limit — no per-process file-size limit there, a full volume is the equivalent."""
+        return P.volume_dir(self) if _WIN else tempfile.mkdtemp(dir=self.d)
 
-        def pre():
-            signal.signal(signal.SIGXFSZ, signal.SIG_DFL)
-            if limit is not None:
-                resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
+    def _build(self, out, limit=None, tsa=None):
+        if limit is not None and _WIN:
+            P.fill_volume(P.volume_root())
+            limit = None
         cmd = _PY + ["build", out, "checkout=checkout.sdjwt", "payment=payment.sdjwt"] + (["--tsa", tsa] if tsa else [])
         with tempfile.TemporaryFile() as o, tempfile.TemporaryFile() as e:
-            p = subprocess.run(cmd, cwd=self.d, stdin=subprocess.DEVNULL, stdout=o, stderr=e, preexec_fn=pre, timeout=300)
+            p = P.run(cmd, fsize=limit, cwd=self.d, stdin=subprocess.DEVNULL, stdout=o, stderr=e, timeout=300)
             o.seek(0); e.seek(0)
             return p.returncode, o.read(), e.read()
 
@@ -741,7 +740,7 @@ class TestPackWrittenWholeOrNotAtAll(unittest.TestCase):
         return [n for n in os.listdir(d) if n.endswith(".tmp")]
 
     def test_a_failed_build_leaves_the_earlier_pack_as_it_was(self):
-        sub = tempfile.mkdtemp(dir=self.d)
+        sub = self._sub()
         out = os.path.join(sub, "ev.json")
         rc, _, err = self._build(out)
         self.assertEqual(rc, 0, err)
@@ -751,14 +750,14 @@ class TestPackWrittenWholeOrNotAtAll(unittest.TestCase):
         rc, raw, err = self._build(out, limit=2048)
         self.assertEqual(rc, 74, err)
         self.assertEqual(raw, b"")
-        self.assertTrue(err.startswith(b"receipt not written: cannot write the pack ") and b"File too large" in err, err)
+        self.assertTrue(err.startswith(b"receipt not written: cannot write the pack ") and _CUT in err, err)
         with open(out, "rb") as f:
             self.assertEqual(f.read(), before)
         self.assertEqual(self._leftovers(sub), [])
         self.assertTrue(ap2.verify_evidence(out)["valid"])
 
     def test_a_failed_first_build_leaves_nothing(self):
-        sub = tempfile.mkdtemp(dir=self.d)
+        sub = self._sub()
         rc, _, err = self._build(os.path.join(sub, "ev.json"), limit=2048)
         self.assertEqual(rc, 74, err)
         self.assertEqual(os.listdir(sub), [])
@@ -771,18 +770,27 @@ class TestPackWrittenWholeOrNotAtAll(unittest.TestCase):
         rc, _, err = self._build(new)
         self.assertEqual(rc, 0, err)
         self.assertEqual(stat.S_IMODE(os.stat(new).st_mode), stat.S_IMODE(os.stat(os.path.join(sub, "ref")).st_mode))
-        os.chmod(new, 0o640)
-        rc, _, err = self._build(new)
-        self.assertEqual(rc, 0, err)
-        self.assertEqual(stat.S_IMODE(os.stat(new).st_mode), 0o640)   # the pack it replaces keeps its permissions
+        if _WIN:   # 1.11.0: the access list is what the pack keeps there (a mode is only the read-only attribute)
+            ap2._sigsuite.win_owner_only(new)
+            kept = P.acl(new)
+            self.assertNotEqual(kept, P.acl(os.path.join(sub, "ref")))   # control: a new file gets another list
+            rc, _, err = self._build(new)
+            self.assertEqual(rc, 0, err)
+            self.assertEqual(P.acl(new), kept)
+        else:
+            os.chmod(new, 0o640)
+            rc, _, err = self._build(new)
+            self.assertEqual(rc, 0, err)
+            self.assertEqual(stat.S_IMODE(os.stat(new).st_mode), 0o640)   # the pack it replaces keeps its permissions
         link = os.path.join(sub, "link.json")
         os.symlink("new.json", link)
         rc, raw, err = self._build(link)
         self.assertEqual(rc, 0, err)
         self.assertTrue(os.path.islink(link))   # the file it names is replaced, the link stays
         self.assertEqual(json.loads(raw.decode("ascii"))["out"], link)
-        if os.geteuid() != 0:
+        if not (hasattr(os, "geteuid") and os.geteuid() == 0):   # Windows: 0o444 is the read-only attribute, which refuses too
             os.chmod(new, 0o444)
+            self.addCleanup(os.chmod, new, 0o644)
             with open(new, "rb") as f:
                 before = f.read()
             rc, _, err = self._build(new)
@@ -848,6 +856,8 @@ class TestPackWrittenWholeOrNotAtAll(unittest.TestCase):
                         with open(planted, "wb") as f:
                             f.write(b"planted")
                     elif what == "fifo":
+                        if not hasattr(os, "mkfifo"):
+                            self.skipTest("a FIFO at a name in a directory: Windows has named pipes only under \\\\.\\pipe\\")
                         os.mkfifo(planted)
                     else:
                         os.symlink(victim, planted)
@@ -871,26 +881,40 @@ class TestPackWrittenWholeOrNotAtAll(unittest.TestCase):
         """pqcrypto ProducerIdentity.save wrote a private key file O_TRUNC in place: under RLIMIT_FSIZE a failed save left an
         earlier key file cut and no longer loadable (measured on 732705d: 223 bytes became 100), and a re-save kept an
         existing file's mode (0644 stayed 0644). Now: the earlier file intact and loadable, no temporary file left, 0600."""
-        sub = tempfile.mkdtemp(dir=self.d)
+        # 1.11.0, Windows: the key on the full volume (filled after the first save) stands for RLIMIT_FSIZE, and the
+        # owner-only access list for mode 0600
+        sub = P.volume_dir(self) if _WIN else tempfile.mkdtemp(dir=self.d)
         k = os.path.join(sub, "id.json")
-        code = ("import resource, signal, sys; sys.path.insert(0, sys.argv[1]); from pqcrypto import sigsuite as s\n"
+        code = ("import sys; sys.path.insert(0, sys.argv[1]); from pqcrypto import sigsuite as s\n"
                 "if sys.argv[3] == 'first':\n s.ProducerIdentity.create().save(sys.argv[2])\n"
                 "if sys.argv[3] == 'cut':\n"
-                " signal.signal(signal.SIGXFSZ, signal.SIG_IGN); resource.setrlimit(resource.RLIMIT_FSIZE, (100, 100))\n"
+                " if sys.argv[4] == 'rlimit':\n"
+                "  import resource, signal; signal.signal(signal.SIGXFSZ, signal.SIG_IGN); resource.setrlimit(resource.RLIMIT_FSIZE, (100, 100))\n"
                 " try:\n  s.ProducerIdentity.create().save(sys.argv[2])\n except OSError as e:\n  print(type(e).__name__); sys.exit(3)\n")
-        p = subprocess.run([sys.executable, "-c", code, _HERE, k, "first"], capture_output=True, timeout=60)
+        how = "volume" if _WIN else "rlimit"
+        p = subprocess.run([sys.executable, "-c", code, _HERE, k, "first", how], capture_output=True, timeout=60)
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertEqual(stat.S_IMODE(os.stat(k).st_mode), 0o600)
+        if not _WIN:
+            self.assertEqual(stat.S_IMODE(os.stat(k).st_mode), 0o600)
         with open(k, "rb") as f:
             before = f.read()
         self.assertGreater(len(before), 100)
-        p = subprocess.run([sys.executable, "-c", code, _HERE, k, "cut"], capture_output=True, timeout=60)
+        if _WIN:
+            P.fill_volume(P.volume_root())
+        p = subprocess.run([sys.executable, "-c", code, _HERE, k, "cut", how], capture_output=True, timeout=60)
         self.assertEqual(p.returncode, 3, p.stderr)
         with open(k, "rb") as f:
             self.assertEqual(f.read(), before)
         from pqcrypto import sigsuite
         sigsuite.ProducerIdentity.load(k)
         self.assertEqual(os.listdir(sub), ["id.json"])
+        if _WIN:   # the access list (the FAT volume has none): a key saved in an NTFS directory has one entry, this user
+            nt = os.path.join(tempfile.mkdtemp(dir=self.d), "id.json")
+            sigsuite.ProducerIdentity.create().save(nt)
+            lines = [x for x in P.acl(nt).splitlines() if ":" in x]
+            self.assertEqual(len(lines), 1, P.acl(nt))
+            self.assertIn(os.environ["USERNAME"].lower(), lines[0].lower())
+            return
         os.chmod(k, 0o644)
         link = os.path.join(sub, "link.json")
         os.symlink("id.json", link)
@@ -901,23 +925,26 @@ class TestPackWrittenWholeOrNotAtAll(unittest.TestCase):
             self.assertNotEqual(f.read(), before)
 
     def test_sign_evidence_leaves_the_pack_as_it_was_when_it_cannot_write(self):
-        sub = tempfile.mkdtemp(dir=self.d)
+        sub = self._sub()
         out = os.path.join(sub, "ev.json")
         rc, _, err = self._build(out)
         self.assertEqual(rc, 0, err)
         with open(out, "rb") as f:
             before = f.read()
-        code = ("import resource, signal, sys; sys.path.insert(0, sys.argv[1]); import ap2_evidence as a; "
-                "signal.signal(signal.SIGXFSZ, signal.SIG_IGN); resource.setrlimit(resource.RLIMIT_FSIZE, (2048, 2048))\n"
+        code = ("import sys; sys.path.insert(0, sys.argv[1]); import ap2_evidence as a\n"
+                "if sys.argv[3] == 'rlimit':\n"
+                " import resource, signal; signal.signal(signal.SIGXFSZ, signal.SIG_IGN); resource.setrlimit(resource.RLIMIT_FSIZE, (2048, 2048))\n"
                 "try:\n a.sign_evidence(sys.argv[2])\nexcept OSError as e:\n print(type(e).__name__); sys.exit(3)\n")
-        p = subprocess.run([sys.executable, "-c", code, _HERE, out], capture_output=True, timeout=300)
+        if _WIN:   # 1.11.0: the full volume stands for RLIMIT_FSIZE
+            P.fill_volume(P.volume_root())
+        p = subprocess.run([sys.executable, "-c", code, _HERE, out, "volume" if _WIN else "rlimit"], capture_output=True, timeout=300)
         self.assertEqual(p.returncode, 3, p.stderr)
         with open(out, "rb") as f:
             self.assertEqual(f.read(), before)
         self.assertEqual(self._leftovers(sub), [])
 
 
-@unittest.skipUnless(_OPENSSL and os.name == "posix", "openssl and RLIMIT_FSIZE needed")
+@unittest.skipUnless(_OPENSSL, "openssl needed")
 class TestOpensslTemporaryFiles(unittest.TestCase):
     """1.5.2, second pass: `verify --tsa-cert` and `verify --trust-anchor` hand openssl files in a temporary directory, and
     `stamp` / `build --tsa` wrote the query there. Measured on a410964 (13/10/2026) with no writable temporary file
@@ -945,18 +972,26 @@ class TestOpensslTemporaryFiles(unittest.TestCase):
         shutil.rmtree(cls.d, ignore_errors=True)
 
     def _run(self, cmd, limit):
-        import resource
-
-        def pre():
-            if limit is not None:
-                resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
-        p = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, preexec_fn=pre, timeout=300)
+        if limit is not None and _WIN:
+            self.skipTest(P.NO_TEMP_LIMIT)
+        p = P.run(cmd, fsize=limit, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300)
         return p.returncode, p.stdout, p.stderr
+
+    def _line_74(self, err, posix_line):
+        """The exact line on POSIX; on Windows the reason is the system's (no fork, no signals): the same opening, one line."""
+        if _WIN:
+            self.assertTrue(err.startswith(posix_line.split(b": ")[0]) and err.endswith(b"\n") and err.count(b"\n") == 1, err)
+        else:
+            self.assertEqual(err, posix_line)
 
     def _full_receipt_74(self, rc, out, err, subject, err_line):
         """1.6.0 — SPEC §6.10: a check that could not be RUN here is exit 74 WITH the complete receipt: that subject
         not_evaluated/instrument_failure, every other subject evaluated (1.5.2–1.5.4: exit 74 and no receipt at all)."""
-        self.assertEqual((rc, err), (74, err_line))
+        self.assertEqual(rc, 74, err)
+        if _WIN:   # the system's own reason after the same opening (Windows: no fork, no signals)
+            self.assertTrue(err.startswith(b"check not run here: cannot run openssl here: ") and err.count(b"\n") == 1, err)
+        else:
+            self.assertEqual(err, err_line)
         r = json.loads(out.decode("utf-8"))   # complete JSON: the reader's rule (SPEC §10) — a receipt = the instrument
         self.assertEqual(r["admission"], "admitted")
         self.assertEqual(r["states"][subject]["state"], "not_evaluated")
@@ -988,11 +1023,10 @@ class TestOpensslTemporaryFiles(unittest.TestCase):
         stdout. The receipt itself not written (stdout a regular file under RLIMIT_FSIZE 0, or /dev/full): no complete
         JSON, and "receipt not written" on stderr."""
         cmd = _PY + ["verify", os.path.join(_VEC, "anchor_valid.json"), "--tsa-cert", os.path.join(_VEC, "anchor_probe_tsa.crt")]
-        import resource
-        out_path = os.path.join(self.d, "receipt.json")
+        # stdout a file that cannot grow: RLIMIT_FSIZE 0, or (Windows) a file on a full volume
+        out_path = P.full_volume_with(self, "receipt.json") if _WIN else os.path.join(self.d, "receipt.json")
         with open(out_path, "wb") as fo:
-            p = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=fo, stderr=subprocess.PIPE, timeout=300,
-                               preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_FSIZE, (0, 0)))
+            p = P.run(cmd, fsize=None if _WIN else 0, stdin=subprocess.DEVNULL, stdout=fo, stderr=subprocess.PIPE, timeout=300)
         with open(out_path, "rb") as f:
             written = f.read()
         self.assertEqual(p.returncode, 74, p.stderr)
@@ -1008,6 +1042,8 @@ class TestOpensslTemporaryFiles(unittest.TestCase):
         self.assertTrue(p.stderr.startswith(b"receipt not written: "), p.stderr)
 
     def test_library_raises_the_write_error(self):   # never a check reported as failed
+        if _WIN:
+            self.skipTest(P.NO_TEMP_LIMIT)
         code = ("import resource, sys; sys.path.insert(0, sys.argv[1]); import ap2_evidence as a; "
                 "resource.setrlimit(resource.RLIMIT_FSIZE, (0, 0))\n"
                 "try:\n a.verify_evidence(sys.argv[2], trust_anchor=sys.argv[3])\n"
@@ -1017,11 +1053,9 @@ class TestOpensslTemporaryFiles(unittest.TestCase):
         self.assertTrue(p.stdout.startswith(b"cannot write a temporary file for openssl"), p.stdout)
 
     def _nproc(self, cmd):
-        import resource
-
-        def pre():
-            resource.setrlimit(resource.RLIMIT_NPROC, (1, 1))   # this user runs more than one process: fork is refused
-        p = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, preexec_fn=pre, timeout=300)
+        # RLIMIT_NPROC 1 (this user runs more than one process: fork is refused); Windows: a Job Object whose
+        # ActiveProcessLimit is 1, the child alone in it (1.11.0)
+        p = P.run(cmd, nproc=1, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300)
         return p.returncode, p.stdout, p.stderr
 
     @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "RLIMIT_NPROC does not bind root")
@@ -1051,11 +1085,11 @@ class TestOpensslTemporaryFiles(unittest.TestCase):
         74 WITH the complete receipt, that subject instrument_failure (SPEC §6.10). The control: an openssl that answers
         "no" (exit 1, no signal) stays a check that ran."""
         fake = tempfile.mkdtemp(dir=self.d)
-        for name, body in (("crash", "#!/bin/sh\nkill -SEGV $$\n"), ("no", "#!/bin/sh\necho 'Verification: FAILED'\nexit 1\n")):
-            os.makedirs(os.path.join(fake, name))
-            with open(os.path.join(fake, name, "openssl"), "w", encoding="ascii") as f:
-                f.write(body)
-            os.chmod(os.path.join(fake, name, "openssl"), 0o755)
+        # 1.11.0: a program on every system (_ap2_platform.fake_tool). The crash: SIGSEGV on POSIX; on Windows, which has
+        # no signals, a real access violation (a read at address 0), exit code 0xC0000005
+        crash = ("import ctypes; ctypes.string_at(0)\n" if _WIN else "import os, signal; os.kill(os.getpid(), signal.SIGSEGV)\n")
+        P.fake_tool(os.path.join(fake, "crash"), "openssl", crash)
+        P.fake_tool(os.path.join(fake, "no"), "openssl", "import sys; print('Verification: FAILED'); sys.exit(1)\n")
         cases = ((_PY + ["verify", os.path.join(_VEC, "anchor_valid.json"), "--tsa-cert", os.path.join(_VEC, "anchor_probe_tsa.crt"),
                          "--require-anchor"], "time_anchor", "tsa_invalid"),
                  (_PY + ["verify", self.x5c, "--trust-anchor", self.ca], "issuer_identity", "chain_unresolved"))
@@ -1065,6 +1099,8 @@ class TestOpensslTemporaryFiles(unittest.TestCase):
                 p = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, env=env, timeout=300)
                 self._full_receipt_74(p.returncode, p.stdout, p.stderr, subject,
                                       b"check not run here: cannot run openssl here: terminated by signal 11\n")
+                if _WIN:
+                    self.assertTrue(p.stderr.endswith(b"ended by exception 0xC0000005\n"), p.stderr)
                 env["PATH"] = os.path.join(fake, "no") + os.pathsep + os.environ.get("PATH", "")
                 p = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, env=env, timeout=300)
                 r = json.loads(p.stdout)
@@ -1087,8 +1123,9 @@ class TestOpensslTemporaryFiles(unittest.TestCase):
             with open(p, "rb") as f:
                 before = f.read()
             rc, out, err = self._nproc(_PY + ["stamp", p, "--tsa", tsa.url])
-            self.assertEqual((rc, out, err), (74, b"", b"receipt not written: cannot run openssl here: BlockingIOError: "
-                                                       b"Resource temporarily unavailable: not stamped\n"))
+            self.assertEqual((rc, out), (74, b""), err)
+            self._line_74(err, b"receipt not written: cannot run openssl here: BlockingIOError: Resource temporarily unavailable: not stamped\n")
+            self.assertTrue(err.endswith(b": not stamped\n"), err)
             with open(p, "rb") as f:
                 self.assertEqual(f.read(), before)
             rc, out, err = self._nproc(_PY + ["stamp", p, "--tsa", tsa.url + "html"])   # refused before: still 74, the
@@ -1101,15 +1138,22 @@ class TestOpensslTemporaryFiles(unittest.TestCase):
                                             "payment=" + os.path.join(sub, "payment.sdjwt"), "--tsa", tsa.url])
             self.assertEqual(rc, 0, err)   # build under the same limit: the pack, with the reason as its note
             with open(q, encoding="utf-8") as f:
-                self.assertEqual(json.load(f)["rfc3161_timestamp"], {"anchored": False, "note": "Ap2WriteError: cannot "
-                                 "run openssl here: BlockingIOError: Resource temporarily unavailable"})
+                ts = json.load(f)["rfc3161_timestamp"]
+            self.assertEqual(ts["anchored"], False)
+            self.assertTrue(ts["note"].startswith("Ap2WriteError: cannot run openssl here: "), ts)
+            if not _WIN:
+                self.assertEqual(ts["note"], "Ap2WriteError: cannot run openssl here: BlockingIOError: Resource temporarily unavailable")
             r3 = os.path.join(sub, "ev3.json")   # a further --tsa goes through the same note (anchors_failed), never 74
             rc, out, err = self._nproc(_PY + ["build", r3, "checkout=" + os.path.join(sub, "checkout.sdjwt"),
                                               "payment=" + os.path.join(sub, "payment.sdjwt"), "--tsa", tsa.url,
                                               "--tsa", tsa.url])
             self.assertEqual(rc, 0, err)
-            self.assertEqual(json.loads(out.decode("ascii"))["anchors_failed"], [{"tsa_url": tsa.url, "note": "Ap2WriteError: "
-                             "cannot run openssl here: BlockingIOError: Resource temporarily unavailable"}])
+            failed = json.loads(out.decode("ascii"))["anchors_failed"]
+            self.assertEqual([(x["tsa_url"], x["note"].startswith("Ap2WriteError: cannot run openssl here: ")) for x in failed],
+                             [(tsa.url, True)])
+            if not _WIN:
+                self.assertEqual(failed, [{"tsa_url": tsa.url, "note": "Ap2WriteError: "
+                                 "cannot run openssl here: BlockingIOError: Resource temporarily unavailable"}])
             import socket   # the control: a TSA that cannot be reached is still the refusal, exit 1, not a traceback
             with socket.socket() as s:
                 s.bind(("127.0.0.1", 0))
@@ -1149,7 +1193,7 @@ class TestOpensslTemporaryFiles(unittest.TestCase):
     def test_stamp_query_needs_no_temporary_file(self):
         tsa = _Tsa()
         try:
-            sub = tempfile.mkdtemp(dir=self.d)
+            sub = P.volume_dir(self) if _WIN else tempfile.mkdtemp(dir=self.d)
             subprocess.run([sys.executable, os.path.join(_HERE, "examples", "make_samples.py")], cwd=sub, check=True,
                            capture_output=True)
             p = os.path.join(sub, "ev.json")
@@ -1157,8 +1201,16 @@ class TestOpensslTemporaryFiles(unittest.TestCase):
             self.assertEqual(rc, 0, err)
             with open(p, "rb") as f:
                 before = f.read()
-            # under RLIMIT_FSIZE 0 the token is obtained (no temporary file), then the pack cannot be written: 74, unchanged
-            rc, out, err = self._run(_PY + ["stamp", p, "--tsa", tsa.url], 0)
+            # under RLIMIT_FSIZE 0 the token is obtained (no temporary file), then the pack cannot be written: 74, unchanged.
+            # Windows (1.11.0): the pack on a full volume, the equivalent of a file this process cannot make grow
+            if _WIN:
+                P.fill_volume(P.volume_root())
+                p0 = P.run(_PY + ["stamp", p, "--tsa", tsa.url], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, timeout=300)
+                rc, out, err = p0.returncode, p0.stdout, p0.stderr
+                P.unfill_volume(P.volume_root())
+            else:
+                rc, out, err = self._run(_PY + ["stamp", p, "--tsa", tsa.url], 0)
             self.assertEqual((rc, out), (74, b""), err)
             self.assertTrue(err.startswith(b"receipt not written: cannot write the stamped pack"), err)
             with open(p, "rb") as f:
@@ -1206,8 +1258,29 @@ def _shim(d):
     return so if p.returncode == 0 else None
 
 
-@unittest.skipUnless(os.name == "posix", "POSIX needed")
-class TestNemesisFinal(unittest.TestCase):
+_SITE_FAULTS = r"""
+# 1.11.0: the equivalent of the LD_PRELOAD shim where there is none (macOS, Windows): the same two faults injected at the
+# start of the Python process, in the calls the package makes (os.fsync; the raw stdout's write under -u)
+import errno, io, os, sys
+if os.environ.get("AP2_TEST_FSYNC_EIO"):
+    def _fsync(fd):
+        raise OSError(errno.EIO, os.strerror(errno.EIO))
+    os.fsync = _fsync
+if os.environ.get("AP2_TEST_ZERO_FD") == "1":
+    class _Zero(io.FileIO):
+        done = False
+
+        def write(self, b):
+            if not _Zero.done and len(b):
+                _Zero.done = True
+                return 0
+            return super().write(b)
+    sys.stdout = io.TextIOWrapper(_Zero(1, "wb", closefd=False), encoding=sys.stdout.encoding, errors=sys.stdout.errors,
+                                  write_through=True)
+"""
+
+
+class TestNemesisFinal(unittest.TestCase):   # 1.11.0: every system (faults: LD_PRELOAD on Linux, a sitecustomize elsewhere)
     """Cases the 1.5.2 tests did not reach (final review, 13/10/2026): a write that takes 0 bytes, an fsync that fails, a
     read-only key file, a key path that is not a regular file, a working directory that cannot be written, openssl gone
     since `which`, openssl that does not answer, and the JS pause on a full stderr that never grows past 50 ms."""
@@ -1216,21 +1289,32 @@ class TestNemesisFinal(unittest.TestCase):
     def setUpClass(cls):
         cls.d = tempfile.mkdtemp(prefix="ap2_nemfin_")
         cls.so = _shim(cls.d)
+        cls.site = None
+        if cls.so is None and not sys.platform.startswith("linux"):
+            cls.site = os.path.join(cls.d, "site")
+            os.makedirs(cls.site)
+            with open(os.path.join(cls.site, "sitecustomize.py"), "w", encoding="utf-8") as f:
+                f.write(_SITE_FAULTS)
 
     @classmethod
     def tearDownClass(cls):
         shutil.rmtree(cls.d, ignore_errors=True)
 
     def _env(self, **kw):
-        return dict(os.environ, LD_PRELOAD=self.so, **kw)
+        if self.so is not None:
+            return dict(os.environ, LD_PRELOAD=self.so, **kw)
+        return dict(os.environ, PYTHONPATH=self.site + os.pathsep + os.environ.get("PYTHONPATH", ""), **kw)
+
+    def _faults(self):
+        if self.so is None and self.site is None:
+            self.skipTest("no C compiler for the LD_PRELOAD shim (Linux)")
 
     def test_a_write_that_takes_0_bytes_is_74(self):
         """write(2) that returns 0 for a non-empty buffer took nothing and reported no error: the loop treats it as an error
         (a short write), it does not spin on it and does not exit with the verdict's code."""
-        if self.so is None:
-            self.skipTest("no C compiler for the LD_PRELOAD shim")
+        self._faults()
         cmds = [_PY[:1] + ["-u"] + _PY[1:] + ["verify", _VALID]]
-        if _NODE:
+        if _NODE and self.so is not None:   # Node's write(2) is reached by LD_PRELOAD only (Linux): see the next test
             cmds.append([_NODE, _JS, _VALID])
         for cmd in cmds:
             with self.subTest(cmd=cmd[:2]):
@@ -1244,8 +1328,7 @@ class TestNemesisFinal(unittest.TestCase):
     def test_an_fsync_that_fails_leaves_the_earlier_pack_and_key(self):
         """fsync(2) reports errors a write did not (EIO, a delayed ENOSPC): the pack and the key file are renamed onto the
         path only after it succeeds; on failure 74 (build) or OSError (save), and what was there stays."""
-        if self.so is None:
-            self.skipTest("no C compiler for the LD_PRELOAD shim")
+        self._faults()
         sub = tempfile.mkdtemp(dir=self.d)
         subprocess.run([sys.executable, os.path.join(_HERE, "examples", "make_samples.py")], cwd=sub, check=True,
                        capture_output=True)
@@ -1273,6 +1356,26 @@ class TestNemesisFinal(unittest.TestCase):
             self.assertEqual(f.read(), key)
         self.assertEqual(sorted(x for x in os.listdir(sub) if x.startswith(".")), [])
 
+    def test_a_write_that_takes_0_bytes_is_74_js(self):
+        """macOS and Windows: no LD_PRELOAD reaches Node's write(2). The equivalent at the next layer down that the JS
+        verifier calls: fs.writeSync replaced, before the verifier loads, by one that takes 0 bytes once on fd 1 (node
+        --import, module.syncBuiltinESMExports so the verifier's own `import { writeSync }` sees it)."""
+        if not _NODE:
+            self.skipTest("node needed")
+        pre = os.path.join(self.d, "zero_write.mjs")
+        with open(pre, "w", encoding="utf-8") as f:
+            f.write("import fs from 'node:fs'; import { syncBuiltinESMExports } from 'node:module';\n"
+                    "const real = fs.writeSync; let done = false;\n"
+                    "fs.writeSync = (fd, b, ...a) => { if (!done && fd === 1 && b.length) { done = true; return 0; } return real(fd, b, ...a); };\n"
+                    "syncBuiltinESMExports();\n")
+        import pathlib
+        with tempfile.TemporaryFile() as out:
+            p = subprocess.run([_NODE, "--import", pathlib.Path(pre).as_uri(), _JS, _VALID], stdin=subprocess.DEVNULL,
+                               stdout=out, stderr=subprocess.PIPE, timeout=60)
+        self.assertEqual(p.returncode, 74, p.stderr)
+        self.assertIn(b"short write", p.stderr)
+        self.assertEqual(p.stderr.count(b"\n"), 1)
+
     @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root writes a read-only file")
     def test_identity_save_refuses_a_read_only_key_file(self):
         """A key file its owner made read-only (chmod 400) was refused by 1.5.1 (PermissionError) and must not be replaced
@@ -1284,11 +1387,13 @@ class TestNemesisFinal(unittest.TestCase):
         os.chmod(k, 0o400)
         with open(k, "rb") as f:
             before = f.read()
+        self.addCleanup(os.chmod, k, 0o600)
         with self.assertRaises(PermissionError):
             sigsuite.ProducerIdentity.create().save(k)
         with open(k, "rb") as f:
             self.assertEqual(f.read(), before)
-        self.assertEqual(stat.S_IMODE(os.stat(k).st_mode), 0o400)
+        # Windows: 0o400 is the read-only attribute (the mode reads 0o444 there), which refuses the write the same way
+        self.assertEqual(stat.S_IMODE(os.stat(k).st_mode), 0o444 if _WIN else 0o400)
         self.assertEqual(os.listdir(sub), ["id.json"])
 
     def test_identity_save_to_a_path_that_is_not_a_regular_file_and_from_another_directory(self):
@@ -1298,8 +1403,7 @@ class TestNemesisFinal(unittest.TestCase):
         if hasattr(os, "geteuid") and os.geteuid() == 0:
             return
         ro, keys = tempfile.mkdtemp(dir=self.d), tempfile.mkdtemp(dir=self.d)
-        os.chmod(ro, 0o555)
-        self.addCleanup(os.chmod, ro, 0o755)
+        P.deny_writes_in(self, ro)   # 1.11.0: mode 0555, or a deny ACE on Windows
         here = os.getcwd()
         os.chdir(ro)   # the temporary file goes next to the key, not in the working directory
         try:
@@ -1313,11 +1417,7 @@ class TestNemesisFinal(unittest.TestCase):
         """The binary named by `which` no longer there (ENOENT at exec), and an openssl that gives no answer within the
         time limit: the check did not run here, so Ap2WriteError, never `tsa_verified: false` / "not valid"."""
         tsa = os.path.join(_VEC, "anchor_probe_tsa.crt")
-        slow = os.path.join(self.d, "slowbin")
-        os.makedirs(slow, exist_ok=True)
-        with open(os.path.join(slow, "openssl"), "w", encoding="utf-8") as f:
-            f.write('#!/bin/sh\nexec sleep 30\n')   # exec: the timeout's kill reaches the sleeping process itself
-        os.chmod(os.path.join(slow, "openssl"), 0o755)
+        slow = P.fake_tool(os.path.join(self.d, "slowbin"), "openssl", "import time; time.sleep(30)\n")   # 1.11.0: every system
         code = ("import shutil, sys; sys.path.insert(0, sys.argv[1]); import ap2_evidence as a\n"
                 "if sys.argv[4] == 'gone':\n w = shutil.which; shutil.which = lambda n, *x, **k: '/nonexistent/openssl' if n == 'openssl' else w(n, *x, **k)\n"
                 "else:\n a._verify_rfc3161.__defaults__ = (1, None)\n"
@@ -1333,19 +1433,19 @@ class TestNemesisFinal(unittest.TestCase):
         p = subprocess.run([sys.executable, "-c", code, _HERE, _VALID, tsa, "none"], capture_output=True, timeout=120)
         self.assertEqual(p.stdout.strip(), b"verdict True True", p.stderr)   # the control: the check runs and passes
 
-    @unittest.skipUnless(_NODE and os.path.exists("/proc/self/stat"), "node and /proc needed")
+    @unittest.skipUnless(_NODE, "node needed")
     def test_js_pause_on_a_full_stderr_stays_under_50_ms(self):
         """The JS loop waits 1 to 50 ms between retries of EAGAIN: once the reader drains a full non-blocking stderr, the
         usage line arrives within a few pauses, whenever that happens (three phases, so a doubling pause with no ceiling
         cannot pass by chance)."""
-        import fcntl
         lags = []
         for phase in (0.7, 1.0, 1.3):
             r, w = os.pipe()
-            fcntl.fcntl(w, fcntl.F_SETFL, fcntl.fcntl(w, fcntl.F_GETFL) | os.O_NONBLOCK)
+            P.set_nonblocking(w)   # 1.11.0: O_NONBLOCK, or PIPE_NOWAIT on Windows
             while True:
                 try:
-                    os.write(w, b"P" * 4096)
+                    if not os.write(w, b"P" * 4096):   # Windows: a full PIPE_NOWAIT pipe takes 0 bytes
+                        break
                 except BlockingIOError:
                     break
             p = subprocess.Popen([_NODE, _JS], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=w)

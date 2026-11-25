@@ -148,10 +148,17 @@ when the policy needs it).
 What the JS verifier cannot see: with stdout or stderr closed (`>&-`, `2>&-`) Node reopens the descriptor on `/dev/null`
 and the write succeeds, so the exit is the verdict's 0/1 (2 for usage); the Python CLI exits 74 there. In process, after
 text the caller wrote to a `utf-8-sig` pipe, the receipt carries a second byte order mark (the command line never does).
-Measured on Linux. Since 1.11.0 the CI also runs `test_receipt_not_written.py` on macOS, a full volume standing for
-`/dev/full` (13 of its 57 tests skip there), and skips all 57 on Windows (CI run 45517734453): what only that file
-measures is not measured on Windows (on Windows Python's `select` waits on sockets only, so a full non-blocking pipe
-there would be 74).
+Measured on Linux. Since 1.11.0 the CI runs `test_receipt_not_written.py` and
+`test_ap2_openssl_not_run_tsa.py` on all three through each system's equivalent (`_ap2_platform.py`): descriptors closed
+by Git's bash on Windows, a Job Object for RLIMIT_NPROC, a full volume where there is no per-process file-size limit
+(Windows) and for `/dev/full` (macOS, Windows), PIPE_NOWAIT for a non-blocking pipe, `ps` and GetProcessTimes for the CPU
+time `/proc` gives on Linux, an access list for a mode, and injected faults (a sitecustomize; for Node, `node --import`)
+where there is no LD_PRELOAD. On Windows a full non-blocking pipe is tried again every 5 ms (Python's `select` waits on
+sockets only there), as the JS verifier does everywhere. What skips, and why: on Windows the cases where openssl's
+temporary files cannot be written (tempfile falls back from an unwritable TEMP to `%SYSTEMROOT%\Temp`, `c:\temp` and the
+working directory, and Windows has no per-process file-size limit, so no setting of the child makes them all unwritable)
+and the FIFO planted at a name in a directory (Windows has named pipes only under `\\.\pipe\`); on every system
+`test_ap2_currency_table.py` without `CV_ISO4217_LIST` (ISO 4217 list one is not shipped).
 
 Or as a library: `build_evidence(...)` / `verify_evidence(...)`.
 

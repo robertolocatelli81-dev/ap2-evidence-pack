@@ -53,8 +53,8 @@ jobs:
           hdiutil create -size 4m -fs HFS+ -volname ap2full "$RUNNER_TEMP/full.dmg"
           hdiutil attach "$RUNNER_TEMP/full.dmg"
           : > /Volumes/ap2full/sink
-          dd if=/dev/zero of=/Volumes/ap2full/fill bs=4096 || true
-          dd if=/dev/zero of=/Volumes/ap2full/fill2 bs=1 || true   # to the last byte
+          # filled to the last byte by the tests (_ap2_platform.fill_volume), which also free room to put a file there
+          python -c "import sys; sys.path.insert(0, '.'); import _ap2_platform as P; P.fill_volume('/Volumes/ap2full')"
           if printf x > /Volumes/ap2full/probe; then echo "the volume is not full"; exit 1; fi
           echo "AP2_FULL_DIR=/Volumes/ap2full" >> "$GITHUB_ENV"
       - name: "Windows: a full volume, the equivalent of Linux's /dev/full (writes there fail with ENOSPC)"
@@ -67,9 +67,8 @@ jobs:
           diskpart /s $s
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path Q:\)) { throw "the full volume was not made (diskpart exit $LASTEXITCODE)" }
           New-Item -ItemType File Q:\sink | Out-Null
-          $f = [IO.File]::OpenWrite("Q:\fill")
-          foreach ($n in 65536, 4096, 512, 1) { $b = New-Object byte[] $n; try { while ($true) { $f.Write($b, 0, $n); $f.Flush() } } catch { } }
-          try { $f.Dispose() } catch { }
+          # filled to the last byte by the tests (_ap2_platform.fill_volume), which also free room to put a file there
+          python -c "import sys; sys.path.insert(0, '.'); import _ap2_platform as P; P.fill_volume('Q:\\')"
           $full = $false
           try { [IO.File]::WriteAllBytes("Q:\probe", [byte[]](1)) } catch [IO.IOException] { $full = $true }
           if (-not $full) { throw "the volume is not full: a 1-byte file was written" }
@@ -87,7 +86,9 @@ jobs:
         run: |
           set -e
           python --version
-          python -m pip install --disable-pip-version-check cryptography
+          python -m pip install --disable-pip-version-check cryptography build "setuptools>=68"
+          # 1.11.0: tomli where tomllib is not in the standard library, so test_packaging reads pyproject.toml there too
+          python -c "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)" || python -m pip install --disable-pip-version-check tomli
           python -c "import cryptography, sys; print('cryptography', cryptography.__version__, 'on', sys.platform)"
           if command -v node; then node --version; else echo "node: absent"; fi
           if command -v openssl; then openssl version; else echo "openssl: absent"; fi
@@ -201,7 +202,7 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11"
-      - run: pip install "cryptography==48.0.0"
+      - run: pip install "cryptography==48.0.0" build "setuptools>=68"
       - name: Every suite with the declared floor
         run: |
           set -e

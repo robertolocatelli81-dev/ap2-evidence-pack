@@ -36,7 +36,7 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
 import ap2_evidence as A  # noqa: E402
 
-NEEDS = unittest.skipUnless(shutil.which("openssl") and os.name == "posix", "needs openssl and a POSIX shell")
+NEEDS = unittest.skipUnless(shutil.which("openssl"), "needs openssl")   # 1.11.0: the fake openssl is a program on every system
 
 
 @NEEDS
@@ -58,11 +58,18 @@ class KeyIdStepNotRun(unittest.TestCase):
         return A._verify_rfc3161(self.tsr, self.K.DIGEST.hex(), tsa_cert=self.lab.j("ca.crt"))
 
     def _with_fake(self, name, case):
-        d = os.path.join(self.td, name)
-        os.makedirs(d)
-        with open(os.path.join(d, "openssl"), "w", encoding="utf-8") as f:
-            f.write('#!/bin/sh\n%s\nexec "%s" "$@"\n' % (case, self.real))
-        os.chmod(os.path.join(d, "openssl"), 0o755)
+        """An openssl in front of the real one: on the arguments `case` names (its first two) it crashes (POSIX: SIGKILL
+        to itself; Windows, which has no signals: a real access violation, exit 0xC0000005) or answers nothing for 45 s;
+        otherwise it runs the real openssl with the same arguments and streams. (1.11.0: a Python program on every
+        system, _ap2_platform.fake_tool; it was a POSIX shell script.)"""
+        import _ap2_platform as P
+        when, what = case
+        crash = "import ctypes; ctypes.string_at(0)" if os.name == "nt" else "import os, signal; os.kill(os.getpid(), signal.SIGKILL)"
+        act = {"crash": crash, "slow": "import time; time.sleep(45)"}[what]
+        code = ("import subprocess, sys\n"
+                "if ' '.join(sys.argv[1:3]) == %r:\n    %s\n"
+                "sys.exit(subprocess.run([%r] + sys.argv[1:]).returncode)\n") % (when, act, self.real)
+        d = P.fake_tool(os.path.join(self.td, name), "openssl", code)
         old = os.environ["PATH"]
         os.environ["PATH"] = d + os.pathsep + old
         try:
@@ -75,23 +82,23 @@ class KeyIdStepNotRun(unittest.TestCase):
         self.assertIs(self._verify()["tsa_verified"], True)
 
     def test_killed_in_cms_verify_is_not_run(self):
-        r = self._with_fake("kill_cms", 'case "$1 $2" in "cms -verify") kill -KILL $$;; esac')
+        r = self._with_fake("kill_cms", ("cms -verify", "crash"))
         self.assertIsNone(r["tsa_verified"], r)
         self.assertIn("not run here", r["tsa_note"])
         self.assertIn("_not_run", r)
 
     def test_killed_in_verify_purpose_is_not_run(self):
-        r = self._with_fake("kill_verify", 'case "$1 $2" in "verify -purpose") kill -KILL $$;; esac')
+        r = self._with_fake("kill_verify", ("verify -purpose", "crash"))
         self.assertIsNone(r["tsa_verified"], r)
-        self.assertIn("terminated by signal", r["tsa_note"])
+        self.assertIn("ended by exception 0xC0000005" if os.name == "nt" else "terminated by signal", r["tsa_note"])
 
     def test_no_answer_in_cms_verify_is_not_run(self):   # the first of the two calls has the same 30 s
-        r = self._with_fake("slow_cms", 'case "$1 $2" in "cms -verify") exec sleep 45;; esac')
+        r = self._with_fake("slow_cms", ("cms -verify", "slow"))
         self.assertIsNone(r["tsa_verified"], r)
         self.assertIn("no answer within 30 s", r["tsa_note"])
 
     def test_no_answer_is_not_run(self):
-        r = self._with_fake("slow", 'case "$1 $2" in "verify -purpose") exec sleep 45;; esac')
+        r = self._with_fake("slow", ("verify -purpose", "slow"))
         self.assertIsNone(r["tsa_verified"], r)
         self.assertIn("no answer within", r["tsa_note"])
 

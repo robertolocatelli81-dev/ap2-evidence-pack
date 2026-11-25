@@ -26,8 +26,11 @@ import zipfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 try:
     import tomllib
-except ModuleNotFoundError:  # Python < 3.11
-    tomllib = None
+except ModuleNotFoundError:  # Python < 3.11: tomli is the same parser, published apart (1.11.0: the CI installs it there)
+    try:
+        import tomli as tomllib
+    except ModuleNotFoundError:
+        tomllib = None
 
 
 def _load_pyproject(path):
@@ -35,7 +38,7 @@ def _load_pyproject(path):
         return tomllib.load(f)
 
 
-@unittest.skipIf(tomllib is None, "tomllib: Python >= 3.11")
+@unittest.skipIf(tomllib is None, "tomllib (Python >= 3.11) or tomli needed")
 class TestPyproject(unittest.TestCase):
     def test_pyproject_maps_pqcrypto_to_ap2_pqcrypto(self):
         st = _load_pyproject(os.path.join(HERE, "pyproject.toml"))["tool"]["setuptools"]
