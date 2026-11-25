@@ -109,13 +109,35 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           set -e
+          # counted, not run: the step above has run them (running them twice more here took 64 of 100 minutes on Windows).
+          # As a script: what unittest.main() would collect when it is reached; as a module: what the loader collects
+          cat > "$RUNNER_TEMP/count_tests.py" <<'PY'
+          import os, runpy, sys, unittest
+          load = unittest.defaultTestLoader
+          sys.path.insert(0, os.getcwd())
+          if sys.argv[2] == "module":
+              print(load.loadTestsFromName(sys.argv[1]).countTestCases())
+              sys.exit(len(load.errors) != 0)
+          def main(*args, **kwargs):
+              print(load.loadTestsFromModule(sys.modules["__main__"]).countTestCases())
+              raise SystemExit(0)
+          unittest.main = main
+          path, sys.argv = sys.argv[1] + ".py", [sys.argv[1] + ".py"]
+          runpy.run_path(path, run_name="__main__")
+          sys.exit("unittest.main() was not reached")
+          PY
+          check() {
+            m=$(basename "$1" .py); d=$(dirname "$1")
+            direct=$(cd "$d" && python "$RUNNER_TEMP/count_tests.py" "$m" script)
+            full=$(cd "$d" && python "$RUNNER_TEMP/count_tests.py" "$m" module)
+            echo "$1: as a script $direct, as a module $full"
+            [ "$direct" = "$full" ] && [ "$full" -gt 0 ]
+          }
+          # the control: a test after unittest.main() must be seen as hidden
+          printf 'import unittest\nclass A(unittest.TestCase):\n    def test_a(self): pass\nif __name__ == "__main__":\n    unittest.main()\nclass B(unittest.TestCase):\n    def test_b(self): pass\n' > "$RUNNER_TEMP/test_hidden.py"
+          if check "$RUNNER_TEMP/test_hidden.py"; then echo "::error::the control was not seen"; exit 1; fi
           for t in test_*.py pqcrypto/test_*.py; do
-            m=$(basename "$t" .py); d=$(dirname "$t")
-            # a failing file still prints its count: under pipefail its exit must not end this step (the step above judges it)
-            direct=$(cd "$d" && { python "$(basename "$t")" 2>&1 || true; } | sed -n 's/^Ran \([0-9]*\) test.*/\1/p' | tail -1)
-            full=$(cd "$d" && { python -m unittest "$m" 2>&1 || true; } | sed -n 's/^Ran \([0-9]*\) test.*/\1/p' | tail -1)
-            echo "$t: as a script $direct, as a module $full"
-            if [ "$direct" != "$full" ]; then echo "::error::$t runs $direct tests as a script but $full as a module"; exit 1; fi
+            check "$t" || { echo "::error::$t does not collect the same tests as a script and as a module"; exit 1; }
           done
       - name: "Gate — build the sample evidence, verify it (exit 0), tamper one artifact, verify again (MUST exit 1)"
         if: ${{ !cancelled() }}
