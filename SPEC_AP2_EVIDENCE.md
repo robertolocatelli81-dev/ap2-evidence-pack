@@ -3,7 +3,7 @@
 
 # ap2-evidence-pack — normative format v1.0 (2026-09-05), specification revision 1.11.1 (2026-11-25)
 
-> Revision 1.11.1 (2026-11-25): §3.1, the message of a usage error is not "one line" (the reference writes two). No verdict changes.
+> Revision 1.11.1 (2026-11-25): §3.1, the message of a usage error is not "one line" (the reference writes its usage and the reason). No verdict changes.
 > Revision 1.11.0 (2026-11-25; tagged, not released): §5, §6 step 6, §6.9 and §10, the downgrade of a hybrid producer block is named and closed.
 > Removing the `ml-dsa-65` entry of a hybrid block and setting `scheme` to `classical-only` leaves a block that verifies:
 > its classical signature is over the same digest, and `classical-only` is a scheme this format defines. Up to 1.10.0 such

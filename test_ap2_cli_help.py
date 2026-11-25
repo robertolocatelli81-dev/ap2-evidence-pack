@@ -104,14 +104,21 @@ class Help(unittest.TestCase):
 
     def test_a_path_that_names_no_file_is_two_lines_on_stderr(self):
         """SPEC §3.1 (1.11.1): a message on stderr, nothing on stdout. The reference writes its usage and the reason; up to
-        1.11.0 the SPEC said one line."""
+        1.11.0 the SPEC said one line. Two lines at 80 columns, the width argparse takes when COLUMNS is not set and
+        stderr is not a terminal; in a narrower one it wraps the usage (at 40 columns: three or four lines, by Python)."""
+        from unittest import mock
         missing = os.path.join(ROOT, "no-such-file.json")
         for args in (("verify", missing), ("restriction", missing)):
-            p = cli(*args)
+            with mock.patch.dict(os.environ, {"COLUMNS": "80"}):
+                p = cli(*args)
             self.assertEqual((p.returncode, p.stdout), (2, ""), args)
             lines = p.stderr.splitlines()
             self.assertEqual(len(lines), 2, p.stderr)
             self.assertTrue(lines[0].startswith("usage: ") and lines[1].startswith("ap2-evidence: error: "), p.stderr)
+            with mock.patch.dict(os.environ, {"COLUMNS": "40"}):
+                narrow = cli(*args)
+            self.assertEqual((narrow.returncode, narrow.stdout), (2, ""), args)
+            self.assertGreater(len(narrow.stderr.splitlines()), 2, narrow.stderr)   # the count is the width's, not the format's
 
 
 if __name__ == "__main__":

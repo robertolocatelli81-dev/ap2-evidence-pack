@@ -21,11 +21,15 @@ class CheckoutBytes(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.d, True)
 
     def _git(self, *args):
-        env = dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
-        for k in [k for k in env if k in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX")]:
-            del env[k]
+        # nothing of this machine's git decides the outcome: no GIT_* variable of the caller (a hook's GIT_DIR, a
+        # configuration given through GIT_CONFIG_COUNT or GIT_CONFIG_PARAMETERS, GIT_TEMPLATE_DIR), no system or user
+        # configuration, no system or user attributes file (a user's `* -text` made the control below fail)
+        env = {k: v for k, v in os.environ.items() if not k.upper().startswith("GIT_")}
+        env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_ATTR_NOSYSTEM="1")
+        none = os.path.join(self.d, "no-attributes")
+        open(none, "ab").close()
         subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false",
-                        *args], check=True, capture_output=True, env=env, timeout=120)
+                        "-c", "core.attributesFile=" + none, *args], check=True, capture_output=True, env=env, timeout=120)
 
     def _checkout(self, attributes: bool) -> bytes:
         """The bytes of a committed certificate in a clone with core.autocrlf=true."""
