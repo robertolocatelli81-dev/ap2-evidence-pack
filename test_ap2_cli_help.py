@@ -102,6 +102,17 @@ class Help(unittest.TestCase):
             self.assertEqual(p.returncode, 2, args)
             self.assertEqual(p.stdout, "", args)
 
+    def test_a_path_that_names_no_file_is_two_lines_on_stderr(self):
+        """SPEC §3.1 (1.11.1): a message on stderr, nothing on stdout. The reference writes its usage and the reason; up to
+        1.11.0 the SPEC said one line."""
+        missing = os.path.join(ROOT, "no-such-file.json")
+        for args in (("verify", missing), ("restriction", missing)):
+            p = cli(*args)
+            self.assertEqual((p.returncode, p.stdout), (2, ""), args)
+            lines = p.stderr.splitlines()
+            self.assertEqual(len(lines), 2, p.stderr)
+            self.assertTrue(lines[0].startswith("usage: ") and lines[1].startswith("ap2-evidence: error: "), p.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

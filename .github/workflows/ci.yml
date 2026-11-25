@@ -32,10 +32,10 @@ jobs:
           - {os: windows-latest, python: "3.13", tools: with-tools}
           - {os: windows-latest, python: "3.9", tools: with-tools}   # the declared floor, where os.fchmod does not exist
     steps:
-      # the bytes as committed: Git for Windows turns LF into CRLF by default (core.autocrlf=true); the vectors and the
-      # files a test compares byte for byte are read as they are in the repository
-      - name: check out without line-end conversion
-        run: git config --global core.autocrlf false
+      # Git for Windows turns LF into CRLF by default (core.autocrlf=true): asked for on every system, so .gitattributes is
+      # what keeps the committed bytes (1.11.1; up to 1.11.0 this step turned the conversion off)
+      - name: check out with line-end conversion asked for
+        run: git config --global core.autocrlf true
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false

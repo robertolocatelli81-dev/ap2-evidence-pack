@@ -1,6 +1,23 @@
 # Changelog
 
-## 1.11.0 — 2026-11-25 — the downgrade of a hybrid producer block, the same bytes on every system, one nesting bound on every Python
+## 1.11.1 — 2026-11-25 — 1.11.0, with three corrections made before it was released
+
+The first released version of 1.11: 1.11.0 was tagged (v1.11.0) and not released, neither on GitHub nor on PyPI; what it
+changes is in the section below and is in this version too. No verdict differs between the two.
+
+- SPEC §3.1 said that the usage error of an evidence path that names no file is "one line on stderr": the reference
+  writes two (its usage and the reason), the JS verifier one (its usage). The SPEC now says a message on stderr and
+  nothing on stdout, which is what both do; the entry of 1.10.0 below has the same words, and they were wrong there too.
+  `test_ap2_cli_help.py` counts the lines.
+- `.gitattributes` (`* -text`): a checkout has the committed bytes whatever `core.autocrlf` says. Git for Windows sets it
+  to true, and such a checkout of 1.10.0 turned the line ends of its text files: the receipt's `tsa_cert_sha256`
+  was another one, the verdict the same (measured on Linux with `anchor_valid` and its certificate with CRLF line ends). The CI now
+  asks for that conversion on every system instead of turning it off. `test_ap2_checkout_bytes.py`: the bytes of a clone
+  with `core.autocrlf=true`, and the control without the file.
+- `.coverage`, a coverage measurement committed by mistake, is removed (it named paths of the author's computer; it never
+  was in the wheel or the sdist of this version).
+
+## 1.11.0 — 2026-11-25 (tagged, not released) — the downgrade of a hybrid producer block, the same bytes on every system, one nesting bound on every Python
 
 A minor version: it adds refusals (README "Versioning"). A pack that was `valid` under a pinned producer set holding an
 `ml-dsa-65` key, with no `ml-dsa-65` signature in its block, is not any more; nothing else that was `valid` changes but under a pinned set outside its grammar (now the caller's

@@ -1,0 +1,2 @@
+# every file is checked out byte for byte as committed, whatever core.autocrlf says: tests and verifiers read bytes
+* -text

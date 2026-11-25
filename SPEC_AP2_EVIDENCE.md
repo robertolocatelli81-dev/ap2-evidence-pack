@@ -1,9 +1,10 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Copyright 2026 Roberto Locatelli -->
 
-# ap2-evidence-pack — normative format v1.0 (2026-09-05), specification revision 1.11.0 (2026-11-25)
+# ap2-evidence-pack — normative format v1.0 (2026-09-05), specification revision 1.11.1 (2026-11-25)
 
-> Revision 1.11.0 (2026-11-25): §5, §6 step 6, §6.9 and §10, the downgrade of a hybrid producer block is named and closed.
+> Revision 1.11.1 (2026-11-25): §3.1, the message of a usage error is not "one line" (the reference writes two). No verdict changes.
+> Revision 1.11.0 (2026-11-25; tagged, not released): §5, §6 step 6, §6.9 and §10, the downgrade of a hybrid producer block is named and closed.
 > Removing the `ml-dsa-65` entry of a hybrid block and setting `scheme` to `classical-only` leaves a block that verifies:
 > its classical signature is over the same digest, and `classical-only` is a scheme this format defines. Up to 1.10.0 such
 > a pack was `valid: true` with both producer keys pinned, also under `trust_set_complete` and `require_producer`;
@@ -501,7 +502,7 @@ padding on base64url, canonical trailing bits; a segment spelled any other way i
 verification failure of that artifact/signature, not a re-encoding.
 
 A path that names no file, or a regular file this process is not allowed to read, is not an evidence file: the command line
-reports it as a usage error (exit 2, one line on stderr, no receipt), as for `--tsa-cert` (1.10.0; up to 1.9.0 it was a
+reports it as a usage error (exit 2, a message on stderr, nothing on stdout, no receipt), as for `--tsa-cert` (1.10.0; up to 1.9.0 it was a
 refusal of class `malformed`, a statement about a pack that was never read). A FIFO, a device or a directory is the
 refusal above (`not a regular file`) whatever its permissions.
 
