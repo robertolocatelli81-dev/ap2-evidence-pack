@@ -1501,13 +1501,37 @@ def _not_used_note(header: Dict, pc) -> str:
 
 
 _JWK_PRIVATE = ("d", "p", "q", "dp", "dq", "qi", "oth", "k", "priv")   # RFC 7518 §6.2.2, §6.3.2, §6.4; RFC 9964 §3
+_JWK_SEALED = ("kty", "crv", "x", "y", "kid")   # 1.11.2 (SPEC §2): the members of a supplied key that are sealed, as of a JWKS key
+_URL_SEALED = re.compile(r"[Hh][Tt][Tt][Pp][Ss]?://(?:\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9._~-]+)(?::[0-9]{0,5})?(?:[/?#][!-\[\]-~]*)?")   # SPEC §2 (1.11.2)
 
 
 def _no_private_member(jwk: Dict, what: str) -> None:
-    """1.11.2 — a key the caller gives is sealed as given: one that carries a private member is refused before it is written."""
+    """1.11.2 (SPEC §2) — what is copied into the pack is public: a JWK with a private member is refused before it is written."""
     for m in _JWK_PRIVATE:
         if m in jwk:
             raise Ap2EvidenceError(f"issuer_key_private: {what} carries {m}, a private key member (RFC 7518 §6, RFC 9964 §3); give its public half")
+
+
+def _no_private_key_in_token(header: Dict, resolved: Dict) -> None:
+    """1.11.2 (SPEC §2): the header and resolved_claims copies would write in clear a private key the token carries."""
+    dp = resolved.get("delegate_payload")
+    cnfs = [x.get("cnf") for x in [resolved] + [y for y in (dp if isinstance(dp, list) else []) if isinstance(y, dict)]]
+    for what, jwk in [("the header jwk", header.get("jwk"))] + [("a cnf.jwk", c.get("jwk")) for c in cnfs if isinstance(c, dict)]:
+        if isinstance(jwk, dict):
+            _no_private_member(jwk, what)
+
+
+def _url_problem(url, https_only: bool = False) -> Optional[str]:
+    """1.11.2 (SPEC §2): why a URL the pack would carry is refused, or None. The reason never repeats the URL."""
+    if not isinstance(url, str) or not _URL_SEALED.fullmatch(url) or (https_only and not url.startswith("https://")):
+        return ("the URL must be " + ("https://" if https_only else "http:// or https://") + " and a host, with no user information (user:password@), "
+                "ASCII and without spaces (SPEC §2): it is sealed in the pack, so it is not repeated here")
+    return None
+
+
+def _nameable(s) -> str:
+    """1.11.2: a name as a message repeats it; one that could be a key (longer than any sensible name) is not repeated."""
+    return repr(s) if isinstance(s, str) and len(s) <= 32 else "(a name not repeated here)"
 
 
 def _snapshot_key(parsed: Dict, supplied_jwk: Optional[Dict] = None,
@@ -1527,12 +1551,15 @@ def _snapshot_key(parsed: Dict, supplied_jwk: Optional[Dict] = None,
         if not isinstance(supplied_jwk, dict) or not supplied_jwk:
             raise Ap2EvidenceError("a supplied key must be a non-empty JSON object, a JWK (SPEC §2 (b))")
         _no_private_member(supplied_jwk, "the supplied key")   # 1.11.2: up to 1.11.1 the pack carried its `d`
-        return {"jwk": supplied_jwk, "provenance_class": "supplied",
+        return {"jwk": {m: supplied_jwk[m] for m in _JWK_SEALED if m in supplied_jwk and (m != "kid" or isinstance(supplied_jwk[m], str))},
+                "provenance_class": "supplied",
                 "note": "key material supplied by the caller (caller vouches); "
                         "the caller's choice is the policy, whatever the header carries" + _not_used_note(header, "supplied")}
     if jwks_url is not None:
         if not isinstance(jwks_url, str) or not jwks_url.startswith("https://"):
             raise Ap2EvidenceError("JWKS URL must be a string starting https:// (TLS is the whole witness)")
+        if _url_problem(jwks_url, https_only=True):   # 1.11.2
+            raise Ap2EvidenceError("JWKS " + _url_problem(jwks_url, https_only=True))
         if "kid" in header and not isinstance(header["kid"], str):
             raise Ap2EvidenceError("the header kid is not a string (RFC 7515 §4.1.4): the JWKS key cannot be chosen")
         try:   # r7: an unreachable endpoint or a non-JSON body used to be a URLError/JSONDecodeError traceback
@@ -1838,9 +1865,8 @@ def _rfc3161_stamp(digest_hex: str, tsa_url: str, timeout: int = 20) -> Dict:
     """OPTIONAL RFC 3161 timestamp via openssl (graceful when absent). Its absence
     never invalidates the evidence — signatures and digests stand on their own."""
     import subprocess
-    from urllib.parse import urlparse
-    if urlparse(tsa_url).scheme not in ("http", "https"):
-        return {"anchored": False, "note": "TSA URL scheme not allowed (http/https only)"}
+    if _url_problem(tsa_url):   # a direct call: build and stamp refuse it before (1.11.2)
+        return {"anchored": False, "note": "TSA URL not allowed (http/https, a host, no user information; SPEC §2)"}
     exe = _which_absolute("openssl")   # 1.11.0: never the current folder (Windows)
     if not exe:
         return {"anchored": False, "note": "openssl absent (RFC 3161 optional)"}
@@ -2618,17 +2644,22 @@ def _build_evidence(artifacts: List[Dict], out_path: str,
     for what, given in (("keys", keys), ("jwks_urls", jwks_urls)):   # 1.7.2 (SPEC §2): a supplied key names an artifact of
         stray = [k for k in given if k not in names]               # this build; up to 1.7.1 a stray name was ignored in silence
         if stray:
-            raise Ap2EvidenceError(f"{what}: no artifact named {stray[0]!r} in this build (SPEC §2)")
+            raise Ap2EvidenceError(f"{what}: no artifact named {_nameable(stray[0])} in this build (SPEC §2)")
     for name, v in keys.items():   # 1.7.3 (SPEC §2 (b)): a value is checked by its presence, not its truth — measured on
         if not isinstance(v, dict) or not v:   # the 1.7.3 draft, keys {"m": None} built the pack with the header key (jwk_header)
             raise Ap2EvidenceError(f"keys[{name!r}]: a supplied key must be a non-empty JSON object, a JWK (SPEC §2 (b))")
     for name, v in jwks_urls.items():
         if not isinstance(v, str) or not v.startswith("https://"):
             raise Ap2EvidenceError(f"jwks_urls[{name!r}]: JWKS URL must be a string starting https:// (SPEC §2 (b))")
+        if _url_problem(v, https_only=True):
+            raise Ap2EvidenceError(f"jwks_urls[{name!r}]: " + _url_problem(v, https_only=True))
+    for u in ([tsa_url] if tsa_url else []) + list(extra_tsa_urls or []):   # 1.11.2: before any token is read or any TSA asked
+        if _url_problem(u):
+            raise Ap2EvidenceError("TSA: " + _url_problem(u))
     both = sorted(set(keys) & set(jwks_urls))   # 1.7.3 (SPEC §2 (b)): two sources named for one artifact is ambiguous
     if both:
         raise Ap2EvidenceError(f"artifact {both[0]!r}: both a supplied key and a JWKS URL — ambiguous, refused (SPEC §2 (b))")
-    not_used, in_clear = {}, {}
+    not_used, in_clear, not_sealed = {}, {}, {}
     entries, for_bindings = [], []
     # 1.9.0 (SPEC §2.1): an AP2 chain `<hop0>~~<hop1>...` given for name N becomes the artifacts N.0, N.1, ...; the key
     # named for N is the key of N.0, every later hop is verified with the previous hop's cnf.jwk (class chain_cnf)
@@ -2682,6 +2713,12 @@ def _build_evidence(artifacts: List[Dict], out_path: str,
                 check_chain_hop(parsed, v["resolved_claims"], done[a["chain_from"]]["compact"])
             except Ap2EvidenceError as e:
                 raise Ap2EvidenceError(f"artifact {a['name']!r}: {e} (build refused)") from e
+        try:
+            _no_private_key_in_token(parsed["header"], v["resolved_claims"])
+        except Ap2EvidenceError as e:
+            raise Ap2EvidenceError(f"artifact {a['name']!r}: {e} (build refused: the token itself discloses the key)") from e
+        if key["provenance_class"] == "supplied" and set(keys[a["key_for"]]) != set(key["jwk"]):
+            not_sealed[a["name"]] = sorted(_nameable(m) if len(str(m)) > 32 else str(m) for m in set(keys[a["key_for"]]) - set(key["jwk"]))
         done[a["name"]] = {"compact": parsed["compact"], "resolved_claims": v["resolved_claims"]}
         kb = verify_kb_jwt(parsed, v["resolved_claims"], chain_hop=a["chain_from"] is not None); kb.pop("_ignored", None)   # the receipt's report, not part of the sealed copy
         if kb.get("verified") is None:   # 1.8.1 (SPEC §9.2): sd_hash_ok of the holder-key-unknown branch is the receipt's,
@@ -2754,6 +2791,7 @@ def _build_evidence(artifacts: List[Dict], out_path: str,
             "rfc3161_anchored": evidence["rfc3161_timestamp"].get("anchored", False),
             "anchors_added": len(added), **({"anchors_failed": failed} if failed else {}),
             **({"key_material_not_used": not_used} if not_used else {}),   # 1.7.3 (SPEC §2 (d))
+            **({"key_members_not_sealed": not_sealed} if not_sealed else {}),   # 1.11.2 (SPEC §2)
             **({"reserved_names_in_clear": in_clear} if in_clear else {})}   # SPEC §6 step 2: reported, not refused
 
 
@@ -2763,6 +2801,8 @@ def add_anchor(path: str, tsa_url: str) -> Dict:
     only: it is not an RFC 4998 renewal. The token is requested for the digest RECOMPUTED from the sealed content, and
     the pack is refused unchanged when that differs from the declared digest (stamping a pack that does not verify would attest
     nothing). The digest and the producer signatures do not change: `anchors` lies outside them. Written atomically."""
+    if _url_problem(tsa_url):   # 1.11.2 (SPEC §2)
+        raise Ap2EvidenceError("TSA: " + _url_problem(tsa_url) + ": not stamped")
     path = os.path.realpath(path)   # a symlink is followed: the pack it names is stamped, the link stays a link
     # the read-modify-write under an exclusive lock on the directory: measured on b3edfc8, six concurrent stamps of one
     # pack all reported success and the file kept ONE anchor (the others lost), two raised FileNotFoundError
@@ -4551,6 +4591,9 @@ class _Parser(argparse.ArgumentParser):
     3.13 swallows it. Here the failed write is recorded and the exit becomes EX_IOERR in every version."""
     stderr_lost = False
 
+    def error(self, message):   # 1.11.2 (SPEC §2): argparse repeats what it did not recognise — a mistyped flag and its key or URL
+        super().error("unrecognized arguments" if message.startswith("unrecognized arguments:") else message)
+
     def _print_message(self, message, file=None):
         if not message:
             return
@@ -4701,13 +4744,13 @@ def _main(argv: Optional[List[str]] = None) -> int:
                    "--require-binding"):
             val = raw[i + 1] if i + 1 < len(raw) else None
             if val is None or val == "" or val.startswith("-"):
-                p.error(f"{tok} needs a value (got {val!r})")
+                p.error(f"{tok} needs a value (not empty, not starting with -)")   # 1.11.2: not repeated, a key can start with -
             i += 2; continue
         if tok.split("=", 1)[0] in ("--trusted-producer-key", "--key", "--jwks-url", "--tsa", "--subject", "--tsa-cert", "--trust-anchor", "--min-anchors",
                                     "--require-binding") and "=" in tok:
             val = tok.split("=", 1)[1]
             if val == "" or val.startswith("-"):
-                p.error(f"{tok.split('=', 1)[0]} needs a value (got {val!r})")
+                p.error(f"{tok.split('=', 1)[0]} needs a value (not empty, not starting with -)")
         i += 1
     a = p.parse_args(raw)
     if a.cmd == "build":
@@ -4716,17 +4759,18 @@ def _main(argv: Optional[List[str]] = None) -> int:
         def _pair(flag, spec):
             name, sep, path = spec.partition("=")
             if not sep or not name or not path:
-                p.error(f"{flag} expects name=path (got {spec!r})")
+                p.error(f"{flag} expects name=path" + (f" (got {spec!r})" if flag == "artifact" else ""))   # 1.11.2: a key or a URL is not repeated
             return name, path
 
         def _read(flag, path, as_json=False):
+            shown = repr(path) if flag == "artifact" else "the file given"   # 1.11.2: a key given in place of its file's name is not repeated
             try:
                 with open(path, encoding="utf-8") as f:
                     text = f.read()
             except OSError as e:
-                p.error(f"{flag}: cannot read {path!r} ({type(e).__name__})")
+                p.error(f"{flag}: cannot read {shown} ({type(e).__name__})")
             except ValueError as e:
-                p.error(f"{flag}: {path!r} is not valid JSON ({e})")
+                p.error(f"{flag}: {shown} is not valid JSON ({e})")
             if not as_json:
                 return text
             # 1.11.0 (SPEC §3.1): the nesting is counted on the text before the parser, bound MAX_JSON_DEPTH: a pack holding
@@ -4740,7 +4784,7 @@ def _main(argv: Optional[List[str]] = None) -> int:
             try:
                 return json.loads(text)
             except ValueError as e:
-                p.error(f"{flag}: {path!r} is not valid JSON ({e})")
+                p.error(f"{flag}: {shown} is not valid JSON ({e})")
 
         arts = []
         for spec in a.artifacts:
@@ -4755,7 +4799,7 @@ def _main(argv: Optional[List[str]] = None) -> int:
             for spec in specs:
                 name, val = _pair(flag, spec)
                 if name not in art_names:
-                    p.error(f"{flag}: no artifact named {name!r} in this build (artifacts: {', '.join(art_names)})")
+                    p.error(f"{flag}: no artifact named {_nameable(name)} in this build (artifacts: {', '.join(art_names)})")
                 if any(n == name for n, _ in out):
                     p.error(f"{flag}: {name!r} given more than once")
                 out.append((name, val))
@@ -4771,8 +4815,12 @@ def _main(argv: Optional[List[str]] = None) -> int:
             except Ap2EvidenceError as e:
                 return _refused(str(e))
             if not isinstance(keys[name], dict) or not keys[name]:   # a list was an AttributeError traceback; null and {}
-                p.error(f"--key: {path!r} is not a non-empty JSON object (a JWK)")   # fell back to the header key in silence
+                p.error("--key: the file given is not a non-empty JSON object (a JWK)")   # fell back to the header key in silence
         jwks = dict(jwks_pairs)
+        for flag, urls, only in (("--tsa", a.tsa, False), ("--jwks-url", jwks.values(), True)):   # 1.11.2 (SPEC §2): before the network
+            for u in urls:
+                if _url_problem(u, https_only=only):
+                    p.error(f"{flag}: " + _url_problem(u, https_only=only))
         try:
             res = build_evidence(arts, a.out, keys=keys, jwks_urls=jwks,
                                  tsa_url=(a.tsa[0] if a.tsa else None), subject=a.subject,
@@ -4788,6 +4836,8 @@ def _main(argv: Optional[List[str]] = None) -> int:
             p.error(f"evidence path needs a value (got {a.evidence!r})")
         if len(a.tsa) != 1:   # measured on b3edfc8: `--tsa A --tsa B` stamped B only, exit 0, A dropped in silence
             p.error(f"stamp takes exactly one --tsa (got {len(a.tsa)}): run it once per TSA")
+        if _url_problem(a.tsa[0]):
+            p.error("--tsa: " + _url_problem(a.tsa[0]))
         try:
             res = add_anchor(a.evidence, a.tsa[0])
         except Ap2WriteError as e:
@@ -4818,9 +4868,9 @@ def _main(argv: Optional[List[str]] = None) -> int:
             for spec in a.trusted_producer_key:
                 alg, sep, key = spec.partition("=")
                 if not sep or not alg or not key:
-                    p.error(f"--trusted-producer-key expects ALG=B64 (got {spec!r})")
+                    p.error("--trusted-producer-key expects ALG=B64")   # 1.11.2: the value is not repeated
                 if alg not in PIN_ALGS:   # 1.11.0 (SPEC §5): "ML-DSA-65=…" pinned nothing and the stripped block stayed valid
-                    p.error(f"--trusted-producer-key: {alg!r} is not a producer signature algorithm ({', '.join(PIN_ALGS)})")
+                    p.error(f"--trusted-producer-key: {_nameable(alg)} is not a producer signature algorithm ({', '.join(PIN_ALGS)})")
                 trusted.setdefault(alg, []).append(key)
         if _pack_unreadable(a.evidence):
             p.error(f"cannot read the evidence file {a.evidence!r}")

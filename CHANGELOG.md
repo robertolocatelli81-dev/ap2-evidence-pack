@@ -1,17 +1,29 @@
 # Changelog
 
-## 1.11.2 — 2026-11-26 — security: a private key given to `--key` is refused
+## 1.11.2 — 2026-11-26 — security: `build` sealed secrets given with a key or a URL
 
-- Security, `build --key` and `build_evidence(keys=…)` (SPEC §2): the key the caller gives is sealed in the pack as given,
-  and a JWK with its private member was sealed with it. The documents called it the verification key and did not say that
-  it must be the public one; a key that is not the issuer's is refused because the signature is checked, but a builder
-  who gave the issuer's own private JWK wrote `d` into the evidence file (measured on 1.8.0, 1.10.0 and 1.11.1 from PyPI; older versions not measured). Now a JWK with `d`, `p`,
-  `q`, `dp`, `dq`, `qi`, `oth`, `k` (RFC 7518 §6) or `priv` (RFC 9964 §3) is `issuer_key_private`: exit 1, no file, and
-  the reason names the member, never its value.
-  If you gave `--key` a private JWK to a version up to 1.11.1, the packs built with it carry that key: replace the key.
-  To look for it: an `artifacts[].key.jwk` with any of those members.
-- Verify is unchanged. `test_ap2_key_choice.py` (3 tests: 2 fail on 1.11.1, in 45 subcases and one command line; the third
-  is the control, the public JWK sealed as before).
+- Security, `build --key` and `build_evidence(keys=…)` (SPEC §2): the key the caller gives was sealed in the pack as given,
+  with every member of the JWK. The documents called it the verification key and did not say that it must be the public
+  one; a key that is not the issuer's is refused because the signature is checked, but a builder who gave the issuer's own
+  private JWK wrote `d` into the evidence file (measured on 1.8.0, 1.10.0 and 1.11.1 from PyPI; other versions not
+  measured). Now `key.jwk` holds `kty`, `crv`, `x`, `y` and a string `kid`, nothing else: other members are ignored (RFC
+  7517 §4) and named, never their values, in `key_members_not_sealed` of the result; `d`, `p`, `q`, `dp`, `dq`, `qi`,
+  `oth`, `k` (RFC 7518 §6) and `priv` (RFC 9964 §3) are `issuer_key_private`: exit 1, no file, the reason naming the
+  member. A token whose header `jwk` or `cnf.jwk` carries one of those is refused too: the pack's copy of the header and
+  of the claims would write it in clear beside the token (measured for the header on the same three versions).
+- Security, `build --tsa`, `build --jwks-url`, `stamp --tsa` (SPEC §2): a URL with a user name and a password was sealed
+  whole in `tsa_url` or `jwks_url` (measured on the same three versions; others not measured). Now it is a usage error (exit 2), before the network
+  and before a file, that does not repeat the URL; so is a URL without a host, not ASCII or with a space, which an error
+  note could have repeated. The path and the query are sealed as before: they must not carry a credential.
+- The usage errors of `--key`, `--jwks-url`, `--tsa` and `--trusted-producer-key`, and argparse's "unrecognized arguments",
+  do not repeat what was given (a key typed in place of its file's name was on stderr).
+- If you gave `--key` a private JWK, or a URL with a password, to a version up to 1.11.1, the packs built with it carry the
+  secret: replace it. To look for it: `artifacts[].key.jwk` with any member but the five above, and an `@` before the host
+  of a `tsa_url` or of a `jwks_url`.
+- Verify, the format and the 61 vectors are unchanged. A supplied key with a member the verifiers' profile refuses (a
+  float, an integer beyond 2^53, 511 levels) builds now: the member is not sealed. `test_ap2_secrets.py` (14 tests, 9 fail
+  on 1.11.1): a canary in every input that takes a key or a URL, searched in every output raw, hex, base64, base64url and
+  decimal, in both verifiers, `examples/` and the producer's identity; `test_ap2_key_choice.py` (3 tests: 2 fail on 1.11.1).
 
 ## 1.11.1 — 2026-11-25 — 1.11.0, with three corrections made before it was released
 

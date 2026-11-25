@@ -291,9 +291,11 @@ class TestBuildCommand(unittest.TestCase):
         p, out = self._build(compact)   # positive control: the same token builds
         self.assertEqual(p.returncode, 0, p.stderr)
         for name, text, rc, reason in (
-                ("float member", json.dumps(dict(jwk, ext=1.5)), 1, "float"),
+                # 1.11.2 (SPEC §2): a member that is not sealed cannot make the pack one the profile refuses (up to 1.11.1 it did)
+                ("float member", json.dumps(dict(jwk, ext=1.5)), 0, '"ext"'), ("float kid", json.dumps(dict(jwk, kid=1.5)), 0, '"kid"'),
+                ("integer beyond 2^53", json.dumps(dict(jwk, ext=2 ** 60)), 0, '"ext"'),
+                ("kid that is not Unicode", json.dumps(dict(jwk, kid="\ud800")), 1, "lone_surrogate"),   # one that is sealed still can
                 ("member 600 deep", json.dumps(dict(jwk, ext=json.loads("[" * 600 + "]" * 600))), 1, "json_too_deep"),
-                ("integer beyond 2^53", json.dumps(dict(jwk, ext=2 ** 60)), 1, "portable range"),
                 # 1.11.0 (SPEC §3.1): the nesting of a --key file is counted on the text, so a file too deep is the refusal of a
                 # pack that deep on every Python (up to 1.10.0: exit 2 where json's RecursionError came first, a depth that
                 # differs by Python, else exit 1)
@@ -310,6 +312,11 @@ class TestBuildCommand(unittest.TestCase):
             with self.subTest(key=name):
                 self.assertNotIn("Traceback", p.stderr)
                 self.assertIn(p.returncode, (1, 2) if rc is None else (rc,), p.stderr[-300:])   # None: 1, or 2 where json.load gives up first
+                if rc == 0:
+                    self.assertTrue(ap2.verify_evidence(out)["valid"])
+                    self.assertIn(reason, p.stdout)
+                    os.unlink(out)
+                    continue
                 self.assertFalse(os.path.exists(out))
                 self.assertIn(reason if p.returncode == 1 or rc is not None else "nests too deep", p.stderr)
 
@@ -476,8 +483,9 @@ class TestJwksBody(unittest.TestCase):
 
 
 class TestLibraryInputNotJson(unittest.TestCase):
-    """NEMESIS2 1.7.1: a supplied key `json.dumps` cannot serialise (library input only: the CLI reads JSON) is a refusal, not
-    the ValueError / TypeError it raised. Positive control: the same key without the member builds."""
+    """NEMESIS2 1.7.1: library input `json.dumps` cannot serialise (the CLI reads JSON) is a refusal, not the ValueError /
+    TypeError it raised. Positive control: the same key without the member builds. 1.11.2: a member of a supplied key that is
+    not sealed is never serialised; the refusal is seen on `subject`, which is."""
 
     def test_keys(self):
         tok = O._sign_compact(_SK, _NUM, '{"iss":"x"}')
@@ -490,8 +498,14 @@ class TestLibraryInputNotJson(unittest.TestCase):
         for name, key in (("a cycle", cyc), ("an integer of 5001 digits", dict(jwk, ext=10 ** 5000)), ("a set", dict(jwk, ext={1})),
                           ("bytes", dict(jwk, ext=b"x"))):
             with self.subTest(key=name):
+                r = ap2.build_evidence([{"name": "m", "sd_jwt": tok}], out, keys={"m": key})
+                self.assertEqual(r["key_members_not_sealed"], {"m": ["ext"]})
+                self.assertTrue(ap2.verify_evidence(out)["valid"]); os.unlink(out)
+        cyc = []; cyc.append(cyc)
+        for name, subject in (("a cycle", cyc), ("an integer of 5001 digits", 10 ** 5000), ("a set", {1}), ("bytes", b"x"), ("a float", 1.5)):
+            with self.subTest(subject=name):
                 with self.assertRaisesRegex(ap2.Ap2EvidenceError, r"^the pack would be refused by verify \(SPEC §3.1\)"):
-                    ap2.build_evidence([{"name": "m", "sd_jwt": tok}], out, keys={"m": key})
+                    ap2.build_evidence([{"name": "m", "sd_jwt": tok}], out, keys={"m": dict(jwk)}, subject=subject)
                 self.assertFalse(os.path.exists(out))
 
 

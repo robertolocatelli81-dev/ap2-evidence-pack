@@ -587,10 +587,11 @@ class Nesting(unittest.TestCase):
                                  "\u00a73.1): json_too_deep: nesting exceeds 512 \u2014 not built"})
                 self.assertFalse(os.path.exists(os.path.join(self.d, "o.json")))
 
-    def test_key_file_within_the_bound_is_read(self):   # control: 511 levels pass the count and are parsed; the pack would
-        p = self._build_with_key(self.jwk[:-1] + ', "zz": ' + _nested(511) + "}")   # nest deeper, so build refuses it as before
-        self.assertEqual(p.returncode, 1, p.stderr[-300:])
-        self.assertIn(b"json_too_deep", p.stderr)
+    def test_key_file_within_the_bound_is_read(self):   # control: 511 levels pass the count and are parsed; 1.11.2: the member
+        p = self._build_with_key(self.jwk[:-1] + ', "zz": ' + _nested(511) + "}")   # is ignored and not sealed (up to 1.11.1 it was, and the pack refused)
+        self.assertEqual(p.returncode, 0, p.stderr[-300:])
+        self.assertEqual(json.loads(p.stdout)["key_members_not_sealed"], {"a": ["zz"]})
+        os.unlink(os.path.join(self.d, "o.json"))
         p = self._build_with_key(self.jwk)   # and the key itself builds
         self.assertEqual(p.returncode, 0, p.stderr[-300:])
 

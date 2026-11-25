@@ -27,6 +27,7 @@ import tempfile
 import threading
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -207,12 +208,12 @@ class KeyChoiceLibrary(unittest.TestCase):
             self.fetched.append(url)
             if url == UNREACHABLE or not url.startswith("https://jwks."):
                 raise urllib.error.URLError("unreachable (test)")
-            return _Body(json.dumps({"keys": JWKS_SETS[url[len("https://jwks."):-len(".test/k")]]}).encode())
+            return _Body(json.dumps({"keys": JWKS_SETS[urllib.parse.unquote(url[len("https://jwks.test/"):])]}).encode())
         urllib.request.urlopen = fake
 
     @staticmethod
     def _url(name):
-        return "https://jwks." + name + ".test/k"
+        return "https://jwks.test/" + urllib.parse.quote(name, safe="")   # 1.11.2: a URL that is sealed has no spaces
 
     def test_generative_build_matches_the_spec_on_every_combination(self):
         tokens = {}

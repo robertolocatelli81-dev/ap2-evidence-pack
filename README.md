@@ -96,8 +96,9 @@ payment mandates the SDK at `e1ea56d` minted (`max` 10, 10.0, 0.29, 250, 1000 JP
 default; under the option it builds and verifies the five integral ones in both verifiers and refuses `0.29`.
 
 **The key the caller names is the policy (1.7.3, SPEC §2 (a)–(d)).** `--key name=jwk.json` or `--jwks-url
-name=https://…` is that artifact's verification key (the issuer's public JWK, sealed in the pack: one with a private member is
-refused since 1.11.2), whatever its protected header carries; the header's `x5c`, then
+name=https://…` is that artifact's verification key (the issuer's public JWK: since 1.11.2 its `kty`, `crv`, `x`, `y` and `kid`
+are sealed in the pack and nothing else of it, and one with a private member is refused; a URL is sealed as given, so it
+must not carry a credential — one with `user:password@` is refused — SPEC §2), whatever its protected header carries; the header's `x5c`, then
 `jwk`, is used only when the caller names none (draft-ietf-oauth-sd-jwt-vc-27 §2.5: the key comes from a mechanism
 "permitted for the given Issuer according to policy", and "The recipient's policy determines which mechanism applies to
 an Issuer; the SD-JWT VC does not"). Measured 2026-11-03 on 1.7.2: a `--jwks-url` for a token carrying
@@ -620,6 +621,7 @@ python3 test_ap2_sd_rules.py           # 1.7.0: RFC 9901 §7.1 steps 4 and 3.c.i
 python3 test_ap2_restriction.py        # 1.7.0: SPEC §11, the restriction record profile (the two open mandates of AP2's documentation, decoded verbatim)
 python3 test_ap2_chains.py             # 1.9.0: AP2 chains `~~`, receipts over the issuer JWT, --require-binding — goodmeta vectors, AP2 SDK chains, 400 generated chains, the hop rules in both verifiers, both verifiers (red on 1.8.x)
 python3 test_ap2_tsa_ess_ids.py        # 1.9.0: a TSA token whose ESS attribute lists more than one ESSCertID (RFC 2634 §5.4 / RFC 5035), with a local TSA (red on 1.8.x)
+python3 test_ap2_secrets.py            # 1.11.2: a canary in every input that takes a key or a URL, searched in every output of both verifiers and of build
 python3 test_ap2_depth.py              # 1.7.1: generated chains of nested disclosures around 512 and 1000 levels, up to 20000 — library, build, both verifiers; the 64 MiB bound at the byte for build, and stamp and sign_evidence on a pack 200 bytes under it (red on 1.7.0)
 python3 verifiers/schema_mutants.py --full   # the release measurement (16 503 mutations in 1.5.0); --py-root/--js point it at an older checkout = positive control
 python3 verifiers/differential_oracle.py   # Python vs Node on every vector, hostile file and CLI case (needs node)

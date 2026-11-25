@@ -3,7 +3,9 @@
 
 # ap2-evidence-pack — normative format v1.0 (2026-09-05), specification revision 1.11.2 (2026-11-26)
 
-> Revision 1.11.2 (2026-11-26): §2, a supplied key with a private member is refused by `build`; verify is unchanged.
+> Revision 1.11.2 (2026-11-26): §2, `build` seals the public members of a supplied key only (a closed list), refuses a
+> private member in it or in a token's header `jwk` or `cnf.jwk`, and refuses a URL with user information; verify is
+> unchanged, and so is every pack and vector there is.
 > Revision 1.11.1 (2026-11-25): §3.1, the message of a usage error is not "one line" (the reference writes its usage and the reason). No verdict changes.
 > Revision 1.11.0 (2026-11-25; tagged, not released): §5, §6 step 6, §6.9 and §10, the downgrade of a hybrid producer block is named and closed.
 > Removing the `ml-dsa-65` entry of a hybrid block and setting `scheme` to `classical-only` leaves a block that verifies:
@@ -197,10 +199,31 @@ name that is not an artifact. Up to 1.7.1 such a name was ignored in silence —
 nope=k.json` built the pack with the header keys (`jwk_header`) and exit 0; `--key payment=K1 --key payment=K2` used K2
 alone, exit 0 — so a mistyped name left the caller's trust decision out of the pack with no sign of it.
 
-1.11.2 — a supplied key is public. `key.jwk` is sealed as given, so `build` refuses (`issuer_key_private`, no file) a
-supplied JWK with a private member: `d`, `p`, `q`, `dp`, `dq`, `qi`, `oth`, `k` (RFC 7518 §6) or `priv` (RFC 9964 §3).
-Up to 1.11.1 the pack carried it (measured 2026-11-25 on 1.8.0, 1.10.0 and 1.11.1 from PyPI, with `d`). Verify is
-unchanged: a pack built before is read as it was.
+1.11.2 — nothing secret is sealed (NORMATIVE for a producer; the reference `build`). Verify is unchanged: a pack built
+before is read as it was. Read on 2026-11-25: RFC 7517 (Proposed Standard, May 2015, not updated), RFC 7518 (updated by
+RFC 9864, which does not touch §6), RFC 3986 (Internet Standard).
+
+- A supplied key (`--key`, `keys`): the sealed `key.jwk` holds, of the members given, `kty`, `crv`, `x`, `y` — the
+  parameters of an elliptic-curve public key, RFC 7518 §6.2.1, all that this format reads — and `kid` when it is a string
+  (RFC 7517 §4.5), as a `jwks_fetched` key has always been sealed. Every other member is ignored, as RFC 7517 §4 says
+  ("Additional members can be present in the JWK; if not understood by implementations encountering them, they MUST be
+  ignored"), and not sealed: `build` names them in its result (`key_members_not_sealed`), never their values. Up to
+  1.11.1 the JWK was sealed whole, whatever it carried (measured on 1.8.0, 1.10.0 and 1.11.1 from PyPI).
+- A private member — `d`, `p`, `q`, `dp`, `dq`, `qi`, `oth`, `k` (RFC 7518 §6) or `priv` (RFC 9964 §3) — is understood and
+  is no part of a public key: `issuer_key_private`, no file, the reason naming the member. The same in the `jwk` of a
+  token's protected header (RFC 7515 §4.1.3: "the public key") and in a `cnf.jwk` of its claims, at the top level or in
+  an element of `delegate_payload`: `sd_jwt_compact` holds the token as it is, and the `header` and `resolved_claims`
+  copies, which this format requires equal to it (§9.1), would write the key in clear beside it. Other members of a token
+  are the token's and are copied.
+- A URL given to `build` or `stamp` (`--tsa`, `--jwks-url`, `tsa_url`, `extra_tsa_urls`, `jwks_urls`) is sealed as given
+  (`rfc3161_timestamp.tsa_url`, `anchors[i].tsa_url`, `key.jwks_url`). It MUST be `http` or `https` (a JWKS: `https`)
+  followed by `//` and a host name or address, with an optional port, and no user information (RFC 3986 §3.2.1: an
+  application "should reject the storage of such data in unencrypted form"); ASCII, no space or control character, no
+  backslash. Any other is a usage error (exit 2; `Ap2EvidenceError` in the library) before the network is used and before
+  a file is written, and the message does not repeat the URL. Its path and query are sealed and reach whoever reads the
+  pack: they MUST NOT carry a credential, which this format cannot recognise there. Up to 1.11.1 a user name and a
+  password in such a URL were sealed (measured on 1.8.0, 1.10.0 and 1.11.1 from PyPI).
+- A usage error of `--key`, `--jwks-url`, `--tsa` and `--trusted-producer-key` does not repeat the value given.
 
 1.7.3 — the key the caller names is the policy (NORMATIVE for a producer; the reference `build`). draft-ietf-oauth-sd-jwt-vc-27
 (16 November 2026, the current revision on the IETF datatracker, read on 2026-11-17; the sentences quoted here are the
