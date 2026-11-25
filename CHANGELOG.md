@@ -6,8 +6,9 @@ A minor version: it adds refusals (README "Versioning"). A pack that was `valid`
 `ml-dsa-65` key, with no `ml-dsa-65` signature in its block, is not any more; nothing else that was `valid` changes but under a pinned set outside its grammar (now the caller's
 error) and, in the JS library, under a pin passed as one string, which no longer matches as a substring (both below); and
 every 1.10.0 vector keeps its expected file and is reproduced as before (all 59 by the reference, and by the JS
-verifier the 52 that do not need openssl). Of the 22 tests added, the 14 that state
-the new behaviour fail on v1.10.0 on Python 3.9, 3.13 and 3.14; the other 8 are controls that pass on both.
+verifier the 52 that do not need openssl). Of the 29 tests added, the 20 that state
+the new behaviour fail on v1.10.0 (as a failure or as an error) on Python 3.9, 3.13 and 3.14; the other 9 are controls
+that pass on both.
 
 - SPEC §5, §6 step 6, §6.9, §10, both verifiers: a pinned producer set that holds an `ml-dsa-65` key requires a valid
   `ml-dsa-65` signature under a pinned key. Removing the `ml-dsa-65` entry of a hybrid block and setting `scheme` to
@@ -32,7 +33,9 @@ the new behaviour fail on v1.10.0 on Python 3.9, 3.13 and 3.14; the other 8 are 
   the verifier; in the reference `None` there switched the rule off. Now each is the caller's error: a usage error (exit 2)
   on both command lines, `ValueError` in the reference, `TypeError` in the JS library. A changed behaviour: a pin under a
   name the format does not define (`--trusted-producer-key ml-dsa-87=…`, `{"ml-dsa-87": …}`) was ignored up to 1.10.0
-  and is now that error too.
+  and is now that error too. A key is a string that is not empty: `""` under `ml-dsa-65`, in either library, left the rule
+  off (the stripped pack `valid` beside the `ed25519` pin, measured on 2026-11-25 before the release), while `[""]` did
+  not; an empty key anywhere in the set is now that error (the command lines never passed one).
 - Files are written with `\n` on every system. `build`, `sign_evidence`, `stamp`, the private copy of `restriction` and
   `ProducerIdentity.save` opened their file in text mode without `newline=`, so on Windows every line end was `\r\n`
   (reported by cryptovalid-opencore's Windows port on 2026-11-24): the bytes of the pack, and the SHA-256 of the whole
@@ -48,7 +51,7 @@ the new behaviour fail on v1.10.0 on Python 3.9, 3.13 and 3.14; the other 8 are 
   exit 2 on 3.13 and exit 1 on 3.14 (v1.10.0). Now a key file deeper than 512 is the refusal `build` gives a pack that
   deep (exit 1, `json_too_deep: nesting exceeds 512`, no file) on every Python, and a JWKS body deeper than 512 is
   `JWKS body is not JSON: json_too_deep: nesting exceeds 512`. `test_ap2_depth.py` updated (two keys of its table).
-- CI: every push to any branch; Linux on Python 3.9, 3.10, 3.11, 3.12, 3.13 and 3.14, macOS and Windows on 3.13, each
+- CI: every push to any branch; Linux on Python 3.9, 3.10, 3.11, 3.12, 3.13 and 3.14, macOS on 3.13 and Windows on 3.9 and 3.13, each
   with node 24 and OpenSSL 3, and Linux 3.9 and 3.14 with node and openssl removed from the runner; every action pinned
   by commit SHA. In the cells without openssl and node, `test_ap2_conformance.py`,
   `test_ap2_evidence.py`, `test_ap2_restriction.py` and `verifiers/type_fuzz.py` skip, with the reason, what needs them:
@@ -69,11 +72,15 @@ the new behaviour fail on v1.10.0 on Python 3.9, 3.13 and 3.14; the other 8 are 
   before that; and an openssl that crashed (an NTSTATUS code such as 0xC0000005 as its exit code, Windows having no
   signals) is a check not run here, as a signal is on POSIX (SPEC §6.10), not openssl's answer.
 - `stamp` into a directory that does not let this user create a file is exit 74 at once on every system. Up to 1.10.0 it
-  used tempfile.mkstemp, which on Windows tries another name after a PermissionError whenever os.access calls the
-  directory writable, and os.access there reads only the read-only attribute, not the access list: into a directory
-  whose list denies writing, `stamp` tried name after name and did not end (CI, Windows, Python 3.9: the test was cut by
-  its 15-minute bound). The temporary file beside the pack (`stamp`, `sign`, `build`) and the private directories of
+  used tempfile.mkstemp, which on Windows tries another name after a PermissionError: up to Python 3.12 whenever os.access
+  calls the directory writable, and os.access there reads only the read-only attribute, not the access list, so into a
+  directory whose list denies writing `stamp` tried name after name and did not end (CI, Windows, Python 3.9: the test
+  was cut by its 15-minute bound); on Python 3.13 and 3.14 mkstemp stops after 20 names (measured on 3.13.15 and 3.14.8), and the same
+  code ended with 74 on Windows 3.13 in that run. The temporary file beside the pack (`stamp`, `sign`, `build`) and the private directories of
   openssl and of `restriction` are now created by the package, retrying only a name already taken, at most 64 times.
+  When the mode or, on Windows, the access list of that temporary file cannot be set, `stamp` now closes it before
+  removing it (its descriptor stayed open, measured on Linux; Windows cannot remove a file that is open — that case is
+  not measured on Windows).
 - The tools that print (`verifiers/*.py`, the conformance runner, the vector generators, `examples/make_samples.py`)
   write UTF-8 unless PYTHONIOENCODING names another encoding: on Windows the differential oracle printed `§` in the ANSI
   code page and the test that reads its output got nothing.

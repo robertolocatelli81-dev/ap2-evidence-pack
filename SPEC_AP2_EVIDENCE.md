@@ -810,8 +810,9 @@ and `trusted` but has none does not meet the set (§6 step 6; `pq_protected` is 
 verifies (the classical signature is over the same recomputed digest; `scheme` agrees with the entries), so up to 1.10.0
 that pack was `valid` under the very set that pinned the removed key — the strip showed only in `pq_protected` and
 `scheme`. A set without an `ml-dsa-65` key is unchanged: it accepts a `classical-only` block whose keys it pins, the
-block a signer writes when it has no ML-DSA-65 backend. The set is `{sig_alg: key or list of keys}` and `sig_alg` is one of
-`ed25519`, `ecdsa-p256` and `ml-dsa-65`: a set of another shape, or a key pinned under another name (`ML-DSA-65`), is an
+block a signer writes when it has no ML-DSA-65 backend. The set is `{sig_alg: key or list of keys}`, `sig_alg` is one of
+`ed25519`, `ecdsa-p256` and `ml-dsa-65` and a key is a string that is not empty: a set of another shape, an empty key, or a
+key pinned under another name (`ML-DSA-65`), is an
 error of the caller (`ValueError` in the reference, `TypeError` in the JS library, a usage error and exit 2 on both command
 lines), never a set that pins less than it says. **A pinned set is one producer's.** The format does not say which
 producer signed a pack, and a set does not say which of its keys a given pack must carry; so a set that joins the keys

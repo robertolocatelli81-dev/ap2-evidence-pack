@@ -1051,8 +1051,8 @@ export function verifyEvidence(path, opts = {}) {
   // 1.11.0 (SPEC §5): trusted is {sig_alg: key or list of keys} over the algorithms the format defines, as in the reference;
   // anything else is the caller's error (a Set or a number under "ml-dsa-65" switched the 1.11.0 rule off in silence)
   if ((opts.trusted ?? null) !== null && !(typeof opts.trusted === "object" && !Array.isArray(opts.trusted) && [null, Object.prototype].includes(Object.getPrototypeOf(opts.trusted))
-      && Object.keys(opts.trusted).every((k) => PIN_ALGS.includes(k) && (typeof opts.trusted[k] === "string" || (Array.isArray(opts.trusted[k]) && opts.trusted[k].every((x) => typeof x === "string"))))))
-    throw new TypeError("trusted must be {sig_alg: key or list of keys}, sig_alg one of " + PIN_ALGS.join(", "));
+      && Object.keys(opts.trusted).every((k) => PIN_ALGS.includes(k) && ((typeof opts.trusted[k] === "string" && opts.trusted[k] !== "") || (Array.isArray(opts.trusted[k]) && opts.trusted[k].every((x) => typeof x === "string" && x !== ""))))))
+    throw new TypeError("trusted must be {sig_alg: key or list of keys}, each key a non-empty string, sig_alg one of " + PIN_ALGS.join(", "));   // "" under "ml-dsa-65" switched the rule off (measured on aedfee6)
   // 1.7.2 (SPEC §3.1): acceptIntegralFloats, a boolean, default false; when true the receipt says so
   if (opts.acceptIntegralFloats !== undefined && typeof opts.acceptIntegralFloats !== "boolean") throw new TypeError("acceptIntegralFloats must be a boolean");
   // 1.9.0 (SPEC §6.9): requireBindings, a list of [in, commits_to] pairs of non-empty names, as the reference's require_bindings

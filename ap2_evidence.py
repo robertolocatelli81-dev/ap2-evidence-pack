@@ -2405,9 +2405,10 @@ def _create_exclusive(d: str, prefix: str, mode: int):
     """A new file in directory `d` with an unpredictable name, created O_EXCL (a fixed name could be a planted symlink),
     never following a link; returns (fd, path). Only a name already taken is tried again, at most 64 times; any other
     OSError is raised at once (1.11.0). tempfile.mkstemp, used by `stamp` up to 1.10.0, also retries a PermissionError on
-    Windows while os.access says the directory is writable — and os.access there reads only the read-only attribute, not
-    the access list — so `stamp` into a directory whose list denies writing tried name after name and never ended
-    (Windows, Python 3.9, CI run 45481354290: test_ap2_anchors cut by its 15-minute bound) instead of exit 74."""
+    Windows: up to Python 3.12 while os.access says the directory is writable — and os.access there reads only the
+    read-only attribute, not the access list — so `stamp` into a directory whose list denies writing tried name after name
+    and never ended (Windows, Python 3.9, CI run 45481354290: test_ap2_anchors cut by its 15-minute bound) instead of exit
+    74; on Python 3.13 and 3.14 mkstemp stops after 20 names (its TMP_MAX), and the Windows 3.13 cell of that run ended with 74."""
     import secrets
     flags = (os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
              | getattr(os, "O_BINARY", 0))
@@ -2722,19 +2723,22 @@ def add_anchor(path: str, tsa_url: str) -> Dict:
         ev.setdefault("anchors", []).append({"mechanism": "rfc3161", "tsr_b64": st["tsr_b64"], "tsa_url": tsa_url})
         _refuse_oversize(ev, "not stamped")   # 1.7.1 (SPEC §3.1): the anchor must not take the pack over 64 MiB; the pack is unchanged
         mode = os.stat(path).st_mode & 0o7777
-        tmp = None
+        tmp = fd = None
         try:   # a fresh, unpredictable name created O_EXCL (a fixed name could be a planted symlink: measured, it overwrote its target)
             fd, tmp = _create_exclusive(os.path.dirname(path) or ".", ".ap2-stamp-", 0o600)
             _fchmod(fd, tmp, mode)   # the pack keeps its permissions (0600 became 0644)
             if os.name == "nt":   # 1.11.0: and, on Windows, its access list (a mode sets only the read-only attribute there)
                 _sigsuite.win_copy_dacl(path, tmp)
             with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+                fd = None   # the file object owns the descriptor from here
                 json.dump(ev, f, ensure_ascii=False, indent=1, sort_keys=True)
                 f.flush(); os.fsync(f.fileno())
             os.replace(tmp, path); tmp = None
         except OSError as e:
             raise Ap2WriteError(f"cannot write the stamped pack: {type(e).__name__}: not stamped") from e
         finally:
+            if fd is not None:   # 1.11.0: the mode or the access list could not be set: closed before the file is removed, as in
+                os.close(fd)     # _write_pack_file (measured on aedfee6: the descriptor stayed open; Windows cannot remove an open file)
             if tmp is not None:
                 try:
                     os.unlink(tmp)
@@ -3366,12 +3370,16 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
         raise ValueError(f"accept_integral_floats must be a boolean (got {accept_integral_floats!r})")
     # 1.11.0 (SPEC §5): the pinned set is {sig_alg: key or list of keys} over the algorithms the format defines. Anything else
     # is the caller's error, never a set read in silence: a key pinned under "ML-DSA-65" was not an ml-dsa-65 key of the set
-    # (the stripped block stayed valid), and None under "ml-dsa-65" switched the rule off.
+    # (the stripped block stayed valid), and None under "ml-dsa-65" switched the rule off. A key is a string that is not
+    # empty: measured on aedfee6, "" under "ml-dsa-65" switched the rule off as None had (the stripped block valid beside
+    # the ed25519 pin, in both libraries) while [""] did not; the command lines never passed one ("alg=" is a usage error).
     if trusted_producer_keys is not None and not (isinstance(trusted_producer_keys, dict) and all(
-            isinstance(k, str) and k in PIN_ALGS and (isinstance(v, str) or (isinstance(v, (list, tuple, set, frozenset))
-                                                                           and all(isinstance(x, str) for x in v)))
+            isinstance(k, str) and k in PIN_ALGS and ((isinstance(v, str) and v != "")
+                                                      or (isinstance(v, (list, tuple, set, frozenset))
+                                                          and all(isinstance(x, str) and x != "" for x in v)))
             for k, v in trusted_producer_keys.items())):
-        raise ValueError("trusted_producer_keys must be {sig_alg: key or list of keys}, sig_alg one of " + ", ".join(PIN_ALGS))
+        raise ValueError("trusted_producer_keys must be {sig_alg: key or list of keys}, each key a non-empty string, sig_alg one of "
+                         + ", ".join(PIN_ALGS))
     if require_bindings is not None and not (isinstance(require_bindings, (list, tuple)) and all(
             isinstance(pr, (list, tuple)) and len(pr) == 2 and all(isinstance(x, str) and x for x in pr) for pr in require_bindings)):
         raise ValueError(f"require_bindings must be a list of (in, commits_to) pairs of non-empty names (got {require_bindings!r})")

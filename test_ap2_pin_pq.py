@@ -182,7 +182,10 @@ class PinHoldsMlDsa(unittest.TestCase):
     def test_pinned_set_of_another_type_is_an_error(self):
         e, q = PINS["ed25519"], PINS["ml-dsa-65"]
         for bad in ([e[0], q[0]], {"ed25519": e, "ml-dsa-65": None}, {"ed25519": e, "ml-dsa-65": 7}, {"ed25519": e, "ml-dsa-65": [q]},
-                    {"ed25519": e, "ml-dsa-65": {"k": q[0]}}, "ed25519=" + e[0], {"ed25519": e, 7: q}):
+                    {"ed25519": e, "ml-dsa-65": {"k": q[0]}}, "ed25519=" + e[0], {"ed25519": e, 7: q},
+                    # a key is a string that is not empty: measured on aedfee6, "" under "ml-dsa-65" left the stripped pack valid
+                    {"ed25519": e, "ml-dsa-65": ""}, {"ed25519": e, "ml-dsa-65": [""]}, {"ed25519": e, "ml-dsa-65": [q[0], ""]},
+                    {"ed25519": "", "ml-dsa-65": q}, {"ed25519": e, "ecdsa-p256": ("",)}):
             with self.subTest(bad=repr(bad)[:40]):
                 with self.assertRaises(ValueError):
                     A.verify_evidence(self.stripped, trusted_producer_keys=bad)
@@ -197,7 +200,9 @@ class PinHoldsMlDsa(unittest.TestCase):
         e, q = json.dumps(PINS["ed25519"]), json.dumps(PINS["ml-dsa-65"][0])
         bads = ["{ed25519: %s, 'ml-dsa-65': new Set([%s])}" % (e, q), "{ed25519: %s, 'ml-dsa-65': 7}" % e, "{ed25519: %s, 'ml-dsa-65': null}" % e,
                 "{ed25519: %s, 'ml-dsa-65': {0: %s}}" % (e, q), "{ed25519: %s, 'ml-dsa-65': [[%s]]}" % (e, q), "{ed25519: %s, 'ML-DSA-65': [%s]}" % (e, q),
-                "new Map([['ed25519', %s]])" % e, "[%s]" % q, "%s" % q]
+                "new Map([['ed25519', %s]])" % e, "[%s]" % q, "%s" % q,
+                "{ed25519: %s, 'ml-dsa-65': ''}" % e, "{ed25519: %s, 'ml-dsa-65': ['']}" % e, "{ed25519: %s, 'ml-dsa-65': [%s, '']}" % (e, q),
+                "{ed25519: '', 'ml-dsa-65': %s}" % q]   # a key is a string that is not empty ("" switched the rule off on aedfee6)
         code = ("import { verifyEvidence } from %s;\nconst out = [];\nfor (const t of [%s]) { try { out.push(verifyEvidence(%s, { trusted: t }).valid); }"
                 " catch (x) { out.push(x instanceof TypeError && /^trusted must be/.test(x.message) ? 'TypeError' : String(x)); } }\n"
                 "out.push(verifyEvidence(%s, { trusted: { ed25519: %s, 'ml-dsa-65': %s } }).policy.unmet);\n"

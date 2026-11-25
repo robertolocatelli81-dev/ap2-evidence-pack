@@ -148,8 +148,10 @@ when the policy needs it).
 What the JS verifier cannot see: with stdout or stderr closed (`>&-`, `2>&-`) Node reopens the descriptor on `/dev/null`
 and the write succeeds, so the exit is the verdict's 0/1 (2 for usage); the Python CLI exits 74 there. In process, after
 text the caller wrote to a `utf-8-sig` pipe, the receipt carries a second byte order mark (the command line never does).
-Measured on Linux only; Windows and macOS are not measured (on Windows Python's `select` waits on sockets only, so a full
-non-blocking pipe there would be 74).
+Measured on Linux. Since 1.11.0 the CI also runs `test_receipt_not_written.py` on macOS, a full volume standing for
+`/dev/full` (13 of its 57 tests skip there), and skips all 57 on Windows (CI run 45517734453): what only that file
+measures is not measured on Windows (on Windows Python's `select` waits on sockets only, so a full non-blocking pipe
+there would be 74).
 
 Or as a library: `build_evidence(...)` / `verify_evidence(...)`.
 

@@ -219,6 +219,140 @@ class Bytes(unittest.TestCase):
                 A.add_anchor(pack, "https://tsa.example")
         self.assertEqual(len(calls), 1)
 
+    def test_a_taken_name_is_tried_again_at_most_64_times(self):
+        """CHANGELOG 1.11.0: "retrying only a name already taken, at most 64 times". With every name taken, 64 tries and
+        FileExistsError (Ap2WriteError from `stamp`), for the temporary file and for the private directory; with one name
+        taken, the second try succeeds, in the directory asked for, under the prefix and with the mode asked for. Before
+        this test, 64 could become 63 or a loop without end and every suite stayed green."""
+        import secrets
+        import stat
+        calls = []
+        real_open, real_mkdir = os.open, os.mkdir
+        here = os.path.normcase(os.path.realpath(self.d))
+
+        def counting_open(path, flags, mode=0o777, **kw):
+            if flags & os.O_CREAT and os.path.normcase(os.path.realpath(os.path.dirname(path))) == here:
+                calls.append(path)
+            return real_open(path, flags, mode, **kw)
+
+        def counting_mkdir(path, *a, **kw):
+            calls.append(path)
+            return real_mkdir(path, *a, **kw)
+        taken = "00" * 8
+        with open(os.path.join(self.d, ".ap2-stamp-%s.tmp" % taken), "wb"):
+            pass
+        os.mkdir(os.path.join(self.d, "ap2-x-" + taken))
+        pack = os.path.join(self.d, "p.json")
+        shutil.copy(VECTOR, pack)
+        with mock.patch.object(secrets, "token_hex", lambda n=None: taken):
+            with mock.patch.object(os, "open", counting_open):
+                with self.assertRaises(FileExistsError):
+                    A._create_exclusive(self.d, ".ap2-stamp-", 0o600)
+                self.assertEqual(len(calls), 64)
+                calls.clear()
+                with mock.patch.object(A, "_rfc3161_stamp", lambda digest, url, timeout=20: {"anchored": True, "tsr_b64": "AA=="}):
+                    with self.assertRaisesRegex(A.Ap2WriteError, "cannot write the stamped pack: FileExistsError: not stamped"):
+                        A.add_anchor(pack, "https://tsa.example")
+                self.assertEqual(len(calls), 64)
+                calls.clear()
+            with mock.patch.object(os, "mkdir", counting_mkdir):
+                with self.assertRaises(FileExistsError):
+                    A._private_tmpdir("ap2-x-", self.d)
+            self.assertEqual(len(calls), 64)
+        names = iter([taken, "ab" * 8, taken, "cd" * 8])   # control: one name taken, the next one free
+        old_umask = os.umask(0)
+        try:
+            with mock.patch.object(secrets, "token_hex", lambda n=None: next(names)):
+                fd, p = A._create_exclusive(self.d, ".ap2-stamp-", 0o640)
+                os.close(fd)
+                t = A._private_tmpdir("ap2-x-", self.d)
+        finally:
+            os.umask(old_umask)
+        self.assertEqual((p, t), (os.path.join(self.d, ".ap2-stamp-%s.tmp" % ("ab" * 8)), os.path.join(self.d, "ap2-x-" + "cd" * 8)))
+        if os.name == "posix":   # on Windows a mode sets only the read-only attribute
+            self.assertEqual((stat.S_IMODE(os.stat(p).st_mode), stat.S_IMODE(os.stat(t).st_mode)), (0o640, 0o700))
+
+    def test_a_denied_temporary_directory_is_refused_at_once(self):
+        """The private directories of openssl and of `restriction`, under Windows' conditions for tempfile (the test above):
+        one attempt and Ap2WriteError. tempfile.mkdtemp tries again there, as the control shows; before this test, mkdtemp
+        put back in either place left every suite green."""
+        import tempfile
+        tempfile.gettempdir()   # found before tempfile is shown another system
+        calls = []
+        real_mkdir = os.mkdir
+
+        def denied(path, *a, **kw):
+            if os.path.basename(path).startswith(("ap2-openssl-", "ap2-restriction-")):
+                calls.append(path)
+                if len(calls) > 50:
+                    raise RuntimeError("still trying")
+                raise PermissionError(13, "Access is denied", path)
+            return real_mkdir(path, *a, **kw)
+
+        class WindowsSeenByTempfile:   # as above: os.name "nt" and os.access true, for tempfile alone
+            name = "nt"
+
+            def __getattr__(self, attr):
+                return getattr(os, attr)
+
+            @staticmethod
+            def access(*a, **k):
+                return True
+        pack = os.path.join(self.d, "p.json")
+        shutil.copy(VECTOR, pack)
+        with mock.patch.object(os, "mkdir", denied), mock.patch.object(tempfile, "_os", WindowsSeenByTempfile()):
+            with self.assertRaisesRegex(A.Ap2WriteError, "cannot write a temporary file for openssl: PermissionError"):
+                A._openssl_tmpdir()
+            self.assertEqual(len(calls), 1)
+            calls.clear()
+            with self.assertRaisesRegex(A.Ap2WriteError, "cannot write the private copy of the pack: PermissionError"):
+                A._verify_restrictions(pack)
+            self.assertEqual(len(calls), 1)
+            calls.clear()
+            with self.assertRaises((RuntimeError, PermissionError)):
+                tempfile.mkdtemp(prefix="ap2-openssl-")
+            self.assertGreater(len(calls), 1)   # control: tempfile tries again
+
+    def test_a_failed_stamp_closes_its_temporary_file_before_removing_it(self):
+        """When the mode (or, on Windows, the access list) of the new file cannot be set, `stamp` left the descriptor of its
+        temporary file open (measured on aedfee6, Linux: one descriptor more after the Ap2WriteError). Windows cannot remove
+        a file that is open, so the temporary file would have stayed beside the pack there. It is closed first, as
+        _write_pack_file does; the removal here sees whether the descriptor is still open."""
+        pack = os.path.join(self.d, "p.json")
+        shutil.copy(VECTOR, pack)
+        made, open_at_removal, modes = [], [], []
+        real_create, real_unlink = A._create_exclusive, os.unlink
+
+        def create(d, prefix, mode):
+            made.append(real_create(d, prefix, mode))
+            return made[-1]
+
+        def unlink(path, *a, **kw):
+            for fd, tmp in made:
+                if tmp == path:
+                    try:
+                        os.fstat(fd)
+                        open_at_removal.append(path)
+                    except OSError:
+                        pass
+            return real_unlink(path, *a, **kw)
+
+        def no_mode(fd, path, mode):
+            modes.append(os.fstat(fd).st_mode & 0o777)
+            raise PermissionError(1, "Operation not permitted")
+        with mock.patch.object(A, "_rfc3161_stamp", lambda digest, url, timeout=20: {"anchored": True, "tsr_b64": "AA=="}), \
+                mock.patch.object(A, "_create_exclusive", create), mock.patch.object(A, "_fchmod", no_mode), \
+                mock.patch.object(os, "unlink", unlink):
+            with self.assertRaisesRegex(A.Ap2WriteError, "cannot write the stamped pack: PermissionError: not stamped"):
+                A.add_anchor(pack, "https://tsa.example")
+        self.assertEqual(len(made), 1)
+        if os.name == "posix":   # until it has the pack's mode the new file is the user's alone, as mkstemp made it
+            self.assertEqual(modes, [0o600])
+        self.assertEqual(open_at_removal, [])
+        self.assertEqual([n for n in os.listdir(self.d) if n.startswith(".ap2-stamp-")], [])
+        with mock.patch.object(A, "_rfc3161_stamp", lambda digest, url, timeout=20: {"anchored": True, "tsr_b64": "AA=="}):
+            self.assertEqual(A.add_anchor(pack, "https://tsa.example")["anchors"], 1)   # control: the same pack is stamped
+
     def test_cli_receipt_has_no_cr(self):
         p = subprocess.run([sys.executable, os.path.join(ROOT, "ap2_evidence.py"), "verify", VECTOR], capture_output=True, timeout=120)
         self.assertEqual(p.returncode, 0, p.stderr)
