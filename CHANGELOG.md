@@ -10,6 +10,16 @@ verifier the 52 that do not need openssl). Of the 29 tests added, the 20 that st
 the new behaviour fail on v1.10.0 (as a failure or as an error) on Python 3.9, 3.13 and 3.14; the other 9 are controls
 that pass on both.
 
+- Security: the openssl the reference runs is never one in the current folder. Up to 1.10.0 it ran what
+  `shutil.which("openssl")` answered (`verify --tsa-cert`, `--trust-anchor`, `build --tsa`, `stamp`), and
+  `key_id_token_problem` ran a bare `openssl` by default. On Windows shutil.which, and the system's own lookup of a bare
+  name, look in the current folder before PATH (CPython 3.9 and 3.11 always, 3.13 unless
+  NoDefaultCurrentDirectoryInExePath is set), and on every system an empty or relative PATH entry is the current folder:
+  an `openssl.exe` placed beside the evidence was run. Now `_which_absolute` keeps only an absolute answer and searches
+  only the absolute folders of PATH (from omega-nucleo-comune `which_absolute`, dd6317f, itself from
+  cryptovalid-opencore `verifier.which`, f7883c9; same author, Apache-2.0). `test_ap2_which.py`: a planted openssl
+  that leaves a marker is not run (reached through an empty PATH entry on POSIX, through shutil.which's own rule on
+  Windows); with shutil.which put back, it is (the positive control).
 - SPEC §5, §6 step 6, §6.9, §10, both verifiers: a pinned producer set that holds an `ml-dsa-65` key requires a valid
   `ml-dsa-65` signature under a pinned key. Removing the `ml-dsa-65` entry of a hybrid block and setting `scheme` to
   `classical-only` leaves a block that verifies; up to 1.10.0 that pack was `valid: true` with both producer keys

@@ -1403,7 +1403,7 @@ def _verify_x5c_chain(x5c: List[str], trust_anchor: str, at_time: Optional[str] 
     Returns True/False, or None when openssl is absent (r9: unmeasurable is not the same as failed — `self_asserted_only`
     stays fail-closed either way); raises Ap2WriteError (1.5.2) when the check cannot be run here (see _run_openssl)."""
     import shutil
-    exe = shutil.which("openssl")
+    exe = _which_absolute("openssl")   # 1.11.0: never the current folder (Windows)
     if not exe:
         return None          # r9: not measurable here, which is not the same as "the chain failed"
     d = _openssl_tmpdir()
@@ -1826,12 +1826,11 @@ def check_chain_hop(parsed: Dict, resolved: Dict, prev_compact: str) -> Dict:
 def _rfc3161_stamp(digest_hex: str, tsa_url: str, timeout: int = 20) -> Dict:
     """OPTIONAL RFC 3161 timestamp via openssl (graceful when absent). Its absence
     never invalidates the evidence — signatures and digests stand on their own."""
-    import shutil
     import subprocess
     from urllib.parse import urlparse
     if urlparse(tsa_url).scheme not in ("http", "https"):
         return {"anchored": False, "note": "TSA URL scheme not allowed (http/https only)"}
-    exe = shutil.which("openssl")
+    exe = _which_absolute("openssl")   # 1.11.0: never the current folder (Windows)
     if not exe:
         return {"anchored": False, "note": "openssl absent (RFC 3161 optional)"}
     try:   # 1.5.2: the query comes from openssl's stdout, not a temporary file (with none writable, tempfile.mkdtemp() raised
@@ -2182,13 +2181,49 @@ def _ski_policies_shape(el):
     return True
 
 
-def key_id_token_problem(der, digest_hex, ca_file, at, tmp, exe="openssl"):
+def _which_absolute(name: str) -> Optional[str]:
+    """shutil.which, never the current folder (1.11.0, security). On Windows shutil.which looks in the current folder
+    before PATH (CPython 3.9 and 3.11 always, 3.13 unless NoDefaultCurrentDirectoryInExePath is set), and on every system
+    an empty or relative PATH entry is the current folder: an openssl placed beside the evidence would be the one found
+    and run. An answer that is not an absolute path is dropped, and only the absolute folders of PATH are searched; a name
+    with a path separator is refused. From omega-nucleo-comune nucleo/programs.py `which_absolute` (dd6317f, same author,
+    Apache-2.0), itself from cryptovalid-opencore verifier.which (f7883c9)."""
+    seps = {os.sep, os.altsep, "/", "\\"} - {None}
+    if (not isinstance(name, str) or name in ("", ".", "..") or "\0" in name or any(c in name for c in seps)
+            or (os.name == "nt" and ":" in name)):
+        raise ValueError("not a bare program name: %r" % (name,))
+    import shutil
+    exe = shutil.which(name)
+    if exe is not None and os.path.isabs(exe):
+        return exe
+    if os.name == "nt":
+        exts = [e for e in os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(os.pathsep) if e]
+        names = [name] if any(name.lower().endswith(e.lower()) for e in exts) else [name + e for e in exts]
+    else:
+        names = [name]
+    for folder in os.environ.get("PATH", "").split(os.pathsep):
+        if os.path.isabs(folder):
+            for n in names:
+                path = os.path.join(folder, n)
+                if os.path.isfile(path) and os.access(path, os.X_OK):
+                    return path
+    return None
+
+
+def key_id_token_problem(der, digest_hex, ca_file, at, tmp, exe=None):
     """the checks of `openssl ts -verify -digest D -CAfile CA -attime T`, made one by one for a token whose signer is
     named by subjectKeyIdentifier: None when they hold, else why not. `tmp` is an empty private directory. Raises
     KeyIdCheckNotRun or (1.10.0) Ap2WriteError when openssl could not run a step here, or a temporary file it needs could
-    not be written: never a "why not"."""
+    not be written: never a "why not". `exe` (1.11.0): the openssl to run, by default the one _which_absolute finds; a
+    bare name is looked up the same way (a bare "openssl" given to the system would be looked up in the current folder
+    first on Windows)."""
     import hashlib
     import os
+    if exe is None or not (isinstance(exe, str) and os.path.isabs(exe)):
+        found = _which_absolute("openssl" if exe is None else exe)
+        if found is None:
+            raise Ap2WriteError("cannot run openssl here: FileNotFoundError: %s" % os.strerror(errno.ENOENT))
+        exe = found
     try:
         token = _ski_token(der)
         ci = _ski_items(_ski_one(token, "ContentInfo", 0x30), "ContentInfo")
@@ -2341,7 +2376,7 @@ def _verify_rfc3161(tsr_b64: str, expected_digest_hex: str, timeout: int = 15, t
     out = {"verified": bool(info["granted"] and imprint_ok is True), "granted": info["granted"], "imprint_ok": imprint_ok, "gen_time": info.get("gen_time"), "tsa_verified": None}
     if tsa_cert is None:
         return out
-    exe = shutil.which("openssl")
+    exe = _which_absolute("openssl")   # 1.11.0: never the current folder (Windows)
     if not exe:
         out["tsa_note"] = "openssl absent — TSA signature/chain NOT verified"; return out
     try:
