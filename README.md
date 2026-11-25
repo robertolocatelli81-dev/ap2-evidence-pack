@@ -96,7 +96,8 @@ payment mandates the SDK at `e1ea56d` minted (`max` 10, 10.0, 0.29, 250, 1000 JP
 default; under the option it builds and verifies the five integral ones in both verifiers and refuses `0.29`.
 
 **The key the caller names is the policy (1.7.3, SPEC §2 (a)–(d)).** `--key name=jwk.json` or `--jwks-url
-name=https://…` is that artifact's verification key, whatever its protected header carries; the header's `x5c`, then
+name=https://…` is that artifact's verification key (the issuer's public JWK, sealed in the pack: one with a private member is
+refused since 1.11.2), whatever its protected header carries; the header's `x5c`, then
 `jwk`, is used only when the caller names none (draft-ietf-oauth-sd-jwt-vc-27 §2.5: the key comes from a mechanism
 "permitted for the given Issuer according to policy", and "The recipient's policy determines which mechanism applies to
 an Issuer; the SD-JWT VC does not"). Measured 2026-11-03 on 1.7.2: a `--jwks-url` for a token carrying
