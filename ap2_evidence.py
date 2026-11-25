@@ -1500,6 +1500,16 @@ def _not_used_note(header: Dict, pc) -> str:
             "a jku or x5u is never fetched)") if names else ""
 
 
+_JWK_PRIVATE = ("d", "p", "q", "dp", "dq", "qi", "oth", "k", "priv")   # RFC 7518 §6.2.2, §6.3.2, §6.4; RFC 9964 §3
+
+
+def _no_private_member(jwk: Dict, what: str) -> None:
+    """1.11.2 — a key the caller gives is sealed as given: one that carries a private member is refused before it is written."""
+    for m in _JWK_PRIVATE:
+        if m in jwk:
+            raise Ap2EvidenceError(f"issuer_key_private: {what} carries {m}, a private key member (RFC 7518 §6, RFC 9964 §3); give its public half")
+
+
 def _snapshot_key(parsed: Dict, supplied_jwk: Optional[Dict] = None,
                   jwks_url: Optional[str] = None, timeout: int = 20) -> Dict:
     """Choose the verification key and record WHERE it came from (provenance class).
@@ -1516,6 +1526,7 @@ def _snapshot_key(parsed: Dict, supplied_jwk: Optional[Dict] = None,
     if supplied_jwk is not None:
         if not isinstance(supplied_jwk, dict) or not supplied_jwk:
             raise Ap2EvidenceError("a supplied key must be a non-empty JSON object, a JWK (SPEC §2 (b))")
+        _no_private_member(supplied_jwk, "the supplied key")   # 1.11.2: up to 1.11.1 the pack carried its `d`
         return {"jwk": supplied_jwk, "provenance_class": "supplied",
                 "note": "key material supplied by the caller (caller vouches); "
                         "the caller's choice is the policy, whatever the header carries" + _not_used_note(header, "supplied")}

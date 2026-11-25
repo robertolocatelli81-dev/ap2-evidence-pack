@@ -566,5 +566,46 @@ class CoordinateBelowP(unittest.TestCase):
         self.assertEqual(p.stdout.split(), ["true"] * 4 + ["false"] * 3, p.stderr)
 
 
+
+class ASuppliedKeyIsPublic(unittest.TestCase):
+    """1.11.2 (SPEC §2): key.jwk is sealed as given. Up to 1.11.1 a supplied JWK with its private member was sealed with it
+    (measured on 1.8.0, 1.10.0 and 1.11.1 from PyPI: the issuer's `d` was in the evidence file)."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.sk, self.jwk = T._make_signer()
+        self.tok = T._make_sd_jwt(self.sk, {"iss": "https://i.example", "vct": "mandate.x", "iat": 1700000000}, {"a": "b"})
+        self.secret = T._b64u(self.sk.private_numbers().private_value.to_bytes(32, "big"))
+        self.out = os.path.join(self.d, "e.json")
+
+    def test_every_private_member_is_refused_before_a_file_is_written(self):
+        for member in ("d", "p", "q", "dp", "dq", "qi", "oth", "k", "priv"):
+            for value in (self.secret, "", None, 1, []):
+                with self.subTest(member=member, value=value):
+                    with self.assertRaisesRegex(ap2.Ap2EvidenceError, "^issuer_key_private: ") as e:
+                        ap2.build_evidence([{"name": "m", "sd_jwt": self.tok}], self.out, keys={"m": dict(self.jwk, **{member: value})})
+                    self.assertNotIn(self.secret, str(e.exception))   # the reason names the member, never its value
+                    self.assertEqual(os.listdir(self.d), [])
+
+    def test_the_public_half_is_sealed_as_before(self):   # the control
+        ap2.build_evidence([{"name": "m", "sd_jwt": self.tok}], self.out, keys={"m": self.jwk})
+        with open(self.out, encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["artifacts"][0]["key"]["jwk"], self.jwk)
+
+    def test_the_command_line_too(self):
+        key, tok = os.path.join(self.d, "k.json"), os.path.join(self.d, "t.sdjwt")
+        with open(tok, "w", encoding="utf-8", newline="\n") as f:
+            f.write(self.tok)
+        with open(key, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(dict(self.jwk, d=self.secret), f)
+        p = subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(ap2.__file__)), "ap2_evidence.py"), "build", self.out,
+                            "m=" + tok, "--key", "m=" + key], capture_output=True, text=True, encoding="utf-8", timeout=120)
+        self.assertEqual(p.returncode, 1, p.stderr)
+        self.assertIn("issuer_key_private", p.stderr)
+        self.assertNotIn(self.secret, p.stdout + p.stderr)
+        self.assertFalse(os.path.exists(self.out))
+
+
 if __name__ == "__main__":
     unittest.main()
