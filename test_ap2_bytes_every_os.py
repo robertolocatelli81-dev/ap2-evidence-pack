@@ -180,20 +180,31 @@ class Bytes(unittest.TestCase):
         import tempfile
         calls = []
         real_open = os.open
+        here = os.path.normcase(os.path.realpath(self.d))   # Windows: add_anchor's realpath gives the long name of RUNNER~1
 
         def denied(path, flags, mode=0o777, **kw):
-            if os.path.dirname(path) == self.d and flags & os.O_CREAT:   # a new file there: the directory denies writing
+            if os.path.normcase(os.path.realpath(os.path.dirname(path))) == here and flags & os.O_CREAT:   # a new file there
                 calls.append(path)
                 if len(calls) > 50:
                     raise RuntimeError("still trying")
                 raise PermissionError(13, "Access is denied", path)
             return real_open(path, flags, mode, **kw)
+
+        class WindowsSeenByTempfile:   # tempfile's own view of the system, the conditions of Windows (os.name "nt", os.access
+            name = "nt"                # true): patched in tempfile only, so the package never takes its Windows branches here
+
+            def __getattr__(self, attr):
+                return getattr(os, attr)
+
+            @staticmethod
+            def access(*a, **k):
+                return True
         with mock.patch.object(os, "open", denied):
             with self.assertRaises(PermissionError):
                 A._create_exclusive(self.d, ".ap2-stamp-", 0o600)
             self.assertEqual(len(calls), 1)
             calls.clear()
-            with mock.patch.object(tempfile._os, "name", "nt"), mock.patch.object(tempfile._os, "access", lambda *a, **k: True):
+            with mock.patch.object(tempfile, "_os", WindowsSeenByTempfile()):
                 with self.assertRaises((RuntimeError, PermissionError)):   # 3.14 stops at TMP_MAX; 51 tries are enough here
                     tempfile.mkstemp(dir=self.d)
             self.assertGreater(len(calls), 1)   # control: tempfile tries again
@@ -202,7 +213,7 @@ class Bytes(unittest.TestCase):
         calls.clear()
         with mock.patch.object(A, "_rfc3161_stamp", lambda digest, url, timeout=20: {"anchored": True, "tsr_b64": "AA=="}), \
                 mock.patch.object(os, "open", denied), mock.patch.object(A, "_lock_directory", lambda d: (lambda: None)), \
-                mock.patch.object(tempfile._os, "name", "nt"), mock.patch.object(tempfile._os, "access", lambda *a, **k: True):
+                mock.patch.object(tempfile, "_os", WindowsSeenByTempfile()):
             # Windows' conditions for tempfile too: up to 1.10.0 (mkstemp) this call tried again and again
             with self.assertRaisesRegex(A.Ap2WriteError, "cannot write the stamped pack: PermissionError: not stamped"):
                 A.add_anchor(pack, "https://tsa.example")
