@@ -1,9 +1,9 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Copyright 2026 Roberto Locatelli -->
 
-# ap2-evidence-pack — normative format v1.0 (2026-09-05), specification revision 1.11.0 (2026-11-24)
+# ap2-evidence-pack — normative format v1.0 (2026-09-05), specification revision 1.11.0 (2026-11-25)
 
-> Revision 1.11.0 (2026-11-24): §5, §6 step 6, §6.9 and §10, the downgrade of a hybrid producer block is named and closed.
+> Revision 1.11.0 (2026-11-25): §5, §6 step 6, §6.9 and §10, the downgrade of a hybrid producer block is named and closed.
 > Removing the `ml-dsa-65` entry of a hybrid block and setting `scheme` to `classical-only` leaves a block that verifies:
 > its classical signature is over the same digest, and `classical-only` is a scheme this format defines. Up to 1.10.0 such
 > a pack was `valid: true` with both producer keys pinned, also under `trust_set_complete` and `require_producer`;

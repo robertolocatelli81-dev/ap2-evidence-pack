@@ -1,14 +1,14 @@
 # Changelog
 
-## 1.11.0 — 2026-11-24 — the downgrade of a hybrid producer block, the same bytes on every system, one nesting bound on every Python
+## 1.11.0 — 2026-11-25 — the downgrade of a hybrid producer block, the same bytes on every system, one nesting bound on every Python
 
 A minor version: it adds refusals (README "Versioning"). A pack that was `valid` under a pinned producer set holding an
 `ml-dsa-65` key, with no `ml-dsa-65` signature in its block, is not any more; nothing else that was `valid` changes but under a pinned set outside its grammar (now the caller's
 error) and, in the JS library, under a pin passed as one string, which no longer matches as a substring (both below); and
 every 1.10.0 vector keeps its expected file and is reproduced as before (all 59 by the reference, and by the JS
-verifier the 52 that do not need openssl). Of the 37 tests added, 26
-fail on v1.10.0 (as a failure or as an error) on Python 3.9, 3.13 and 3.14 on Linux, and the other 11 pass on both; on
-1.11.0 all 37 pass there.
+verifier the 52 that do not need openssl). Of the 49 tests added, 36
+fail on v1.10.0 (as a failure or as an error) on Python 3.9, 3.13 and 3.14 on Linux, and the other 13 pass on both; on
+1.11.0 all 49 pass there.
 
 - Security: the openssl the reference runs is never one in the current folder. Up to 1.10.0 it ran what
   `shutil.which("openssl")` answered (`verify --tsa-cert`, `--trust-anchor`, `build --tsa`, `stamp`), and
@@ -16,11 +16,12 @@ fail on v1.10.0 (as a failure or as an error) on Python 3.9, 3.13 and 3.14 on Li
   name, look in the current folder before PATH (CPython 3.9 and 3.11 always, 3.13 unless
   NoDefaultCurrentDirectoryInExePath is set), and on every system an empty or relative PATH entry is the current folder:
   an `openssl.exe` placed beside the evidence was run. Now `_which_absolute` keeps only an absolute answer and searches
-  only the absolute folders of PATH, on Windows those that name a drive or a share (`\tools` is absolute to Python up to
-  3.12, not from 3.13, and is a folder of the current drive) (from omega-nucleo-comune `which_absolute`, dd6317f, itself from
-  cryptovalid-opencore `verifier.which`, f7883c9; same author, Apache-2.0). `test_ap2_which.py`: a planted openssl
-  that leaves a marker is not run (reached through an empty PATH entry on POSIX, through shutil.which's own rule on
-  Windows); with shutil.which put back, it is (the positive control).
+  only the absolute folders of PATH, on Windows those that name a drive (`C:\`) or a server and a share, by one rule
+  on every Python and not by ntpath (`\tools`, a folder of the current drive, is absolute to it up to 3.12 and not
+  from 3.13; `\\server` alone has a drive for it from 3.11 and none on 3.9; any character before a colon is a drive) (from cryptovalid-opencore
+  `verifier.which`, f7883c9, by the same author). `test_ap2_which.py`: a planted openssl that leaves a marker is not run
+  by any of the three places that run openssl (reached through an empty PATH entry on POSIX, through shutil.which's own rule on Windows); with
+  shutil.which put back, each runs it (the positive control).
 - SPEC §5, §6 step 6, §6.9, §10, both verifiers: a pinned producer set that holds an `ml-dsa-65` key requires a valid
   `ml-dsa-65` signature under a pinned key. Removing the `ml-dsa-65` entry of a hybrid block and setting `scheme` to
   `classical-only` leaves a block that verifies; up to 1.10.0 that pack was `valid: true` with both producer keys
@@ -87,14 +88,17 @@ fail on v1.10.0 (as a failure or as an error) on Python 3.9, 3.13 and 3.14 on Li
   4096 bytes: a BufferedWriter given more than its buffer had handed part of it to the pipe before raising, and that part
   came again at every retry (a receipt of about 98 KB arrived as 47 MB, CI run 45561704870, Windows, Python 3.9, before the
   release). The JS verifier's `writeSync` takes 0 bytes there with no error and was exit 74 with the usage line lost; on
-  Windows 0 on anything but a regular file is now waited for (CI run 45575984198: both pass on Python 3.9 and 3.13, node 24).
+  Windows 0 on anything but a regular file is now waited for (CI run 45575984198, Windows, Python 3.9 and 3.13, node
+  24.22.3: the tests of both pass; the one failure of that run, on 3.13, is the `\tools` case of the first point).
 - `stamp` into a directory that does not let this user create a file is exit 74 at once on every system. Up to 1.10.0 it
   used tempfile.mkstemp, which on Windows tries another name after a PermissionError: up to Python 3.12 whenever os.access
   calls the directory writable, and os.access there reads only the read-only attribute, not the access list, so into a
   directory whose list denies writing `stamp` tried name after name and did not end (CI, Windows, Python 3.9: the test
   was cut by its 15-minute bound); on Python 3.13 and 3.14 mkstemp stops after 20 names (measured on 3.13.15 and 3.14.8), and the same
   code ended with 74 on Windows 3.13 in that run. The temporary file beside the pack (`stamp`, `sign`, `build`) and the private directories of
-  openssl and of `restriction` are now created by the package, retrying only a name already taken, at most 64 times.
+  openssl and of `restriction` are now created by the package, retrying only a name already taken, at most 64 times
+  (on Windows a name is taken when anything is there, a link or a folder too, and it is not opened: creating a file at
+  a link to a name that does not exist creates that name there, measured on Windows before the release).
   When the mode or, on Windows, the access list of that temporary file cannot be set, `stamp` now closes it before
   removing it (its descriptor stayed open, measured on Linux; Windows cannot remove a file that is open — that case is
   not measured on Windows).

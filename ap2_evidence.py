@@ -2181,10 +2181,18 @@ def _ski_policies_shape(el):
     return True
 
 
+_WINDOWS_ABSOLUTE = re.compile(r"[A-Za-z]:[\\/]|[\\/]{2}[^\\/]+[\\/]+[^\\/]")
+
+
 def _is_absolute(path: str) -> bool:
-    """os.path.isabs, and on Windows with a drive or a share: `\\tools` is absolute to Python up to 3.12 and not from 3.13,
-    and names a folder of whatever drive is current (CI run 45575984198, 1.11.0)."""
-    return os.path.isabs(path) and (os.name != "nt" or os.path.splitdrive(path)[0] != "")
+    """An absolute path. On Windows one that names a drive (`C:\\`, `c:/`) or a server and a share (`\\\\server\\share`), by
+    this rule and not by ntpath, whose answers change with the Python: `\\tools` (a folder of whatever drive is current) is
+    absolute to isabs up to 3.12 and not from 3.13 (CI run 45575984198); `\\\\server` with no share has a drive for
+    splitdrive from 3.11 and none on 3.9, where `\\\\server\\share` with nothing after it is not absolute; and any character
+    before a colon is a drive to both (measured with ntpath on 3.9, 3.11, 3.13 and 3.14, 1.11.0)."""
+    if os.name == "nt":
+        return _WINDOWS_ABSOLUTE.match(path) is not None
+    return os.path.isabs(path)
 
 
 def _which_absolute(name: str) -> Optional[str]:
@@ -2192,8 +2200,7 @@ def _which_absolute(name: str) -> Optional[str]:
     before PATH (CPython 3.9 and 3.11 always, 3.13 unless NoDefaultCurrentDirectoryInExePath is set), and on every system
     an empty or relative PATH entry is the current folder: an openssl placed beside the evidence would be the one found
     and run. An answer that is not an absolute path is dropped, and only the absolute folders of PATH are searched; a name
-    with a path separator is refused. From omega-nucleo-comune nucleo/programs.py `which_absolute` (dd6317f, same author,
-    Apache-2.0), itself from cryptovalid-opencore verifier.which (f7883c9)."""
+    with a path separator is refused. From cryptovalid-opencore verifier.which (f7883c9), by the same author."""
     seps = {os.sep, os.altsep, "/", "\\"} - {None}
     if (not isinstance(name, str) or name in ("", ".", "..") or "\0" in name or any(c in name for c in seps)
             or (os.name == "nt" and ":" in name)):
@@ -2445,7 +2452,8 @@ def _verify_one(parsed: Dict, key: Dict) -> Dict:
 def _create_exclusive(d: str, prefix: str, mode: int):
     """A new file in directory `d` with an unpredictable name, created O_EXCL (a fixed name could be a planted symlink),
     never following a link; returns (fd, path). Only a name already taken is tried again, at most 64 times; any other
-    OSError is raised at once (1.11.0). tempfile.mkstemp, used by `stamp` up to 1.10.0, also retries a PermissionError on
+    OSError is raised at once (1.11.0). On Windows a name is taken when anything is there, a link or a folder too, and is
+    not opened. tempfile.mkstemp, used by `stamp` up to 1.10.0, also retries a PermissionError on
     Windows: up to Python 3.12 while os.access says the directory is writable — and os.access there reads only the
     read-only attribute, not the access list — so `stamp` into a directory whose list denies writing tried name after name
     and never ended (Windows, Python 3.9, CI run 45481354290: test_ap2_anchors cut by its 15-minute bound) instead of exit
@@ -2455,6 +2463,8 @@ def _create_exclusive(d: str, prefix: str, mode: int):
              | getattr(os, "O_BINARY", 0))
     for _ in range(64):
         p = os.path.join(d, "%s%s.tmp" % (prefix, secrets.token_hex(8)))
+        if os.name == "nt" and os.path.lexists(p):   # Windows has no O_NOFOLLOW: creating at a link to a name that does
+            continue                                 # not exist creates that name, and a folder there is PermissionError
         try:
             return os.open(p, flags, mode), p
         except FileExistsError:
@@ -4378,7 +4388,7 @@ def _wait_writable(buf) -> None:
     not gone; one that goes away makes the next write EPIPE). `select` sleeps in the kernel and Python retries it after a
     signal (PEP 475). The descriptor is asked for only here: a byte stream with no descriptor (an io.BytesIO under a
     TextIOWrapper, as pytest's capsys) never blocks. On Windows `select` waits on sockets only: there the full pipe is
-    tried again after 5 ms, as the JS verifier does everywhere (1.11.0; up to 1.10.0 it was reported as 74)."""
+    tried again after 5 ms (the JS verifier: after 1 to 50 ms, on every system) (1.11.0; up to 1.10.0 it was reported as 74)."""
     if os.name == "nt":
         import time
         time.sleep(0.005)

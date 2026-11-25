@@ -132,7 +132,7 @@ class TestJsVerify(unittest.TestCase):
             rc, out, err = _run([_NODE, _JS, path], "file")
             self.assertEqual(rc, code, err)
             self.assertIs(json.loads(out.decode("utf-8"))["valid"], code == 0)
-            self.assertEqual(out, subprocess.run([_NODE, _JS, path], capture_output=True).stdout)
+            self.assertEqual(out, subprocess.run([_NODE, _JS, path], capture_output=True, timeout=300).stdout)
             self.assertEqual(err, b"")
 
     def test_lost_receipt_is_74_with_one_line_on_stderr(self):
@@ -470,6 +470,28 @@ def _cpu_seconds(pid):
     return P.cpu_seconds(pid)
 
 
+def _read_to_end(r, p, limit=64 << 20, seconds=300):
+    """What the child `p` writes to the pipe `r` until it closes it, and never without an end (1.11.0): a child that goes
+    on writing (a receipt repeated at every retry arrived as 47 MB) is killed past `limit` bytes and that is an
+    AssertionError; one that never closes the pipe is killed after `seconds`, so the read ends and its exit code tells."""
+    killer = threading.Timer(seconds, p.kill)
+    killer.daemon = True
+    killer.start()
+    chunks, total = [], 0
+    try:
+        while True:
+            b = os.read(r, 1 << 16)
+            if not b:
+                return b"".join(chunks)
+            chunks.append(b)
+            total += len(b)
+            if total > limit:
+                p.kill()
+                raise AssertionError("the child wrote more than %d bytes and did not stop" % limit)
+    finally:
+        killer.cancel()
+
+
 def _run_prefilled(cmd, which=1, env=None, cwd=None, other_devfull=False, other_limit=None):
     """fd `which` (1 = stdout, 2 = stderr) is a NON-BLOCKING pipe that is already full when the process starts, and
     nobody reads it for a while: the process must wait asleep, as on a blocking pipe — still alive, and in some 1-second
@@ -516,18 +538,14 @@ def _run_prefilled(cmd, which=1, env=None, cwd=None, other_devfull=False, other_
         if c1 - c0 < 0.2:
             idle = True
             break
-    chunks = []
-    while True:
-        b = os.read(r, 1 << 16)
-        if not b:
-            break
-        chunks.append(b)
-    os.close(r)
+    try:
+        data = _read_to_end(r, p)
+    finally:
+        os.close(r)
     rc = p.wait(timeout=120)
     other.seek(0)
     rest = other.read()
     other.close()
-    data = b"".join(chunks)
     return idle, rc, (data[filled:] if data[:filled] == b"P" * filled else None), rest
 
 
@@ -1384,6 +1402,41 @@ class TestNemesisFinal(unittest.TestCase):   # 1.11.0: every system (faults: LD_
         self.assertIn(b"short write", p.stderr)
         self.assertEqual(p.stderr.count(b"\n"), 1)
 
+    def test_js_0_bytes_is_waited_for_on_windows_on_what_is_not_a_regular_file(self):
+        """Windows' rule of the JS verifier, measured on every system: `process.platform` is made "win32" before the
+        verifier loads (it reads it nowhere else) and fs.writeSync takes 0 bytes three times on fd 2, where the usage
+        line goes. On a pipe that is a full pipe: waited for, the line whole, exit 2. On a regular file, and where fstat
+        cannot say what fd 2 is, it is the short write (74, nothing written). With the platform left as it is, 0 bytes
+        on a pipe is 74 outside Windows."""
+        if not _NODE:
+            self.skipTest("node needed")
+        import pathlib
+
+        def run(platform, to, fstat_fails=False):
+            pre = os.path.join(self.d, "zero3_%s_%s_%s.mjs" % (platform, to, fstat_fails))
+            with open(pre, "w", encoding="utf-8") as f:
+                f.write("import fs from 'node:fs'; import { syncBuiltinESMExports } from 'node:module';\n"
+                        + ("Object.defineProperty(process, 'platform', { value: 'win32' });\n" if platform == "win32" else "")
+                        + "const real = fs.writeSync; let left = 3;\n"
+                        "fs.writeSync = (fd, b, ...a) => { if (left && fd === 2 && b.length) { left--; return 0; } return real(fd, b, ...a); };\n"
+                        + ("const stat = fs.fstatSync; fs.fstatSync = (fd, ...a) => { if (fd === 2) throw new Error('fstat fails'); return stat(fd, ...a); };\n"
+                           if fstat_fails else "")
+                        + "syncBuiltinESMExports();\n")
+            cmd = [_NODE, "--import", pathlib.Path(pre).as_uri(), _JS]   # no pack: the usage line, exit 2
+            if to == "pipe":
+                p = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, timeout=60)
+                return p.returncode, p.stderr
+            with tempfile.TemporaryFile() as err:
+                p = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=err, timeout=60)
+                err.seek(0)
+                return p.returncode, err.read()
+        usage = subprocess.run([_NODE, _JS], stdin=subprocess.DEVNULL, capture_output=True, timeout=60).stderr
+        self.assertTrue(usage.startswith(b"usage: "), usage)
+        self.assertEqual(run("win32", "pipe"), (2, usage))
+        for case in (("win32", "file"), ("win32", "pipe", True)) + ((("here", "pipe"),) if not _WIN else ()):
+            with self.subTest(case=case):
+                self.assertEqual(run(*case), (74, b""))
+
     @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root writes a read-only file")
     def test_identity_save_refuses_a_read_only_key_file(self):
         """A key file its owner made read-only (chmod 400) was refused by 1.5.1 (PermissionError) and must not be replaced
@@ -1441,6 +1494,27 @@ class TestNemesisFinal(unittest.TestCase):   # 1.11.0: every system (faults: LD_
         p = subprocess.run([sys.executable, "-c", code, _HERE, _VALID, tsa, "none"], capture_output=True, timeout=120)
         self.assertEqual(p.stdout.strip(), b"verdict True True", p.stderr)   # the control: the check runs and passes
 
+    def test_a_read_to_the_end_of_a_pipe_has_an_end(self):
+        """_read_to_end, with its two controls: a child that goes on writing is killed past the limit (it writes 64 MiB
+        and not without end, so this test itself ends whatever the helper does), one that writes nothing more and stays
+        is killed after the seconds given (and what it wrote before is returned)."""
+        for code, kw, ends in (("import os\nfor _ in range(1024): os.write(1, b'x' * 65536)", {"limit": 1 << 20}, "limit"),
+                               ("import os, time\nos.write(1, b'abc'); time.sleep(600)", {"seconds": 2}, "seconds")):
+            with self.subTest(ends=ends):
+                r, w = os.pipe()
+                p = subprocess.Popen([sys.executable, "-c", code], stdin=subprocess.DEVNULL, stdout=w, stderr=subprocess.DEVNULL)
+                os.close(w)
+                try:
+                    if ends == "limit":
+                        with self.assertRaises(AssertionError):
+                            _read_to_end(r, p, **kw)
+                    else:
+                        self.assertEqual(_read_to_end(r, p, **kw), b"abc")
+                finally:
+                    os.close(r)
+                    p.kill()
+                    self.assertNotEqual(p.wait(timeout=60), 0)
+
     @unittest.skipUnless(_NODE, "node needed")
     def test_js_pause_on_a_full_stderr_stays_under_50_ms(self):
         """The JS loop waits 1 to 50 ms between retries of EAGAIN: once the reader drains a full non-blocking stderr, the
@@ -1463,14 +1537,12 @@ class TestNemesisFinal(unittest.TestCase):   # 1.11.0: every system (faults: LD_
             p = subprocess.Popen([_NODE, _JS], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=w)
             os.close(w)
             time.sleep(phase)
-            t0, data = time.monotonic(), b""
-            while True:
-                b = os.read(r, 1 << 16)
-                if not b:
-                    break
-                data += b
+            t0 = time.monotonic()
+            try:
+                data = _read_to_end(r, p)
+            finally:
+                os.close(r)
             lags.append(time.monotonic() - t0)
-            os.close(r)
             self.assertEqual(p.wait(timeout=60), 2)
             self.assertTrue(data.lstrip(b"P").startswith(b"usage: "), data[-80:])
         self.assertLess(max(lags), 0.4, lags)

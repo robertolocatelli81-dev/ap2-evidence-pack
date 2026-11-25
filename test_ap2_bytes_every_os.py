@@ -94,6 +94,29 @@ def _text_calls_without_encoding(path):
     return bad
 
 
+class _StandInPipe(io.RawIOBase):
+    """A full non-blocking pipe as Windows shows it to Python before 3.12: every second call takes nothing and is ENOSPC,
+    the others take at most 4096 bytes. It breaks (EPIPE) after 200 calls, so a writer that never ends is ended."""
+    def __init__(self, calls=0):
+        self.got, self.n, self.done = bytearray(), calls, False
+
+    def writable(self):
+        return True
+
+    def write(self, b):
+        import errno
+        if self.done:
+            return len(b)
+        self.n += 1
+        if self.n > 200:
+            raise OSError(errno.EPIPE, "stand-in: too many calls")
+        if self.n % 2 == 0:
+            raise OSError(errno.ENOSPC, "No space left on device")
+        b = bytes(b)[:4096]
+        self.got += b
+        return len(b)
+
+
 class Bytes(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp(prefix="ap2bytes_")
@@ -244,16 +267,22 @@ class Bytes(unittest.TestCase):
         os.mkdir(os.path.join(self.d, "ap2-x-" + taken))
         pack = os.path.join(self.d, "p.json")
         shutil.copy(VECTOR, pack)
-        with mock.patch.object(secrets, "token_hex", lambda n=None: taken):
+        tries = []   # the names drawn: one for each try (on Windows a taken name is not opened, so os.open is not the count)
+
+        def token(n=None):
+            tries.append(n)
+            return taken
+        with mock.patch.object(secrets, "token_hex", token):
             with mock.patch.object(os, "open", counting_open):
                 with self.assertRaises(FileExistsError):
                     A._create_exclusive(self.d, ".ap2-stamp-", 0o600)
-                self.assertEqual(len(calls), 64)
+                self.assertEqual((len(tries), len(calls)), (64, 0 if os.name == "nt" else 64))
                 calls.clear()
+                tries.clear()
                 with mock.patch.object(A, "_rfc3161_stamp", lambda digest, url, timeout=20: {"anchored": True, "tsr_b64": "AA=="}):
                     with self.assertRaisesRegex(A.Ap2WriteError, "cannot write the stamped pack: FileExistsError: not stamped"):
                         A.add_anchor(pack, "https://tsa.example")
-                self.assertEqual(len(calls), 64)
+                self.assertEqual((len(tries), len(calls)), (64, 0 if os.name == "nt" else 64))
                 calls.clear()
             with mock.patch.object(os, "mkdir", counting_mkdir):
                 with self.assertRaises(FileExistsError):
@@ -271,6 +300,41 @@ class Bytes(unittest.TestCase):
         self.assertEqual((p, t), (os.path.join(self.d, ".ap2-stamp-%s.tmp" % ("ab" * 8)), os.path.join(self.d, "ap2-x-" + "cd" * 8)))
         if os.name == "posix":   # on Windows a mode sets only the read-only attribute
             self.assertEqual((stat.S_IMODE(os.stat(p).st_mode), stat.S_IMODE(os.stat(t).st_mode)), (0o640, 0o700))
+
+    def test_on_windows_a_name_where_anything_is_counts_as_taken_and_is_not_opened(self):
+        """Windows has no O_NOFOLLOW: O_CREAT|O_EXCL at a link to a name that does not exist creates that name, and a
+        folder at the name is PermissionError, not "taken" (measured on Windows by the common core's CI before the
+        release). There a name where anything is, is tried again without being opened. On Windows for real (the link
+        where the user may make one); on every system with os.name made "nt"."""
+        import secrets
+        for what in ("link", "folder"):
+            taken, free = ("11" * 8, "22" * 8) if what == "link" else ("33" * 8, "44" * 8)
+            at = os.path.join(self.d, ".ap2-stamp-%s.tmp" % taken)
+            target = os.path.join(self.d, "target-" + what)
+            if what == "folder":
+                os.mkdir(at)
+            else:
+                try:
+                    os.symlink(target, at)   # to a name that does not exist
+                except (OSError, NotImplementedError) as e:   # Windows without the privilege to make links
+                    if os.name != "nt":
+                        raise
+                    print("no symbolic link here (%s): the link case is not measured" % type(e).__name__, file=sys.stderr)
+                    continue
+            names = iter([taken, free])
+            opened, real_open = [], os.open
+
+            def spy(path, *a, **kw):
+                opened.append(path)
+                return real_open(path, *a, **kw)
+            with self.subTest(what=what), mock.patch.object(A.os, "name", "nt"), mock.patch.object(os, "open", spy), \
+                    mock.patch.object(secrets, "token_hex", lambda n=None: next(names)):
+                fd, p = A._create_exclusive(self.d, ".ap2-stamp-", 0o600)
+                os.close(fd)
+                self.assertNotIn(at, opened)   # POSIX refuses both by itself (O_EXCL, O_NOFOLLOW): the rule is seen here
+                self.assertEqual(p, os.path.join(self.d, ".ap2-stamp-%s.tmp" % free))
+                self.assertFalse(os.path.exists(target), "the name the link points to was created")
+                self.assertTrue(os.path.islink(at) if what == "link" else os.path.isdir(at))
 
     def test_a_denied_temporary_directory_is_refused_at_once(self):
         """The private directories of openssl and of `restriction`, under Windows' conditions for tempfile (the test above):
@@ -360,26 +424,7 @@ class Bytes(unittest.TestCase):
         full (ENOSPC) once. On "Windows" the receipt arrives once, whole; the control (one write of everything, as on
         POSIX) repeats its start, until the stand-in breaks after 200 calls: without that end it would fill the memory."""
         import errno as _errno
-
-        class Pipe(io.RawIOBase):
-            def __init__(self):
-                self.got, self.n, self.done = bytearray(), 0, False
-
-            def writable(self):
-                return True
-
-            def write(self, b):
-                if self.done:
-                    return len(b)
-                self.n += 1
-                if self.n > 200:
-                    raise OSError(_errno.EPIPE, "stand-in: too many calls")
-                if self.n % 2 == 0:
-                    raise OSError(_errno.ENOSPC, "No space left on device")
-                b = bytes(b)[:4096]
-                self.got += b
-                return len(b)
-
+        Pipe = _StandInPipe
         text = "".join("%06d\n" % i for i in range(5000))   # 35 000 bytes
         for name in ("nt", "posix"):
             raw = Pipe()
@@ -396,6 +441,113 @@ class Bytes(unittest.TestCase):
                     self.assertEqual(e.exception.errno, _errno.EPIPE)
                     self.assertEqual(bytes(raw.got[:8192]), text.encode("ascii")[:4096] * 2)
             raw.done = True   # what the control left in the buffer is written when it is collected, with no error printed
+
+    def test_text_left_unflushed_and_the_last_flush_are_waited_for_on_a_full_windows_pipe(self):
+        """The pipe is full (ENOSPC) at the first flush, which carries text the caller left in the stream, and again at
+        the last one: both are waited for, and what arrives is the caller's text and then the receipt, once."""
+        import errno as _errno
+        raw = _StandInPipe(calls=1)   # the next call, the first flush, finds it full
+        stream = io.TextIOWrapper(io.BufferedWriter(raw, 8192), encoding="utf-8", newline="\n")
+        stream.write("the caller's line\n")
+        waits = []
+        with mock.patch.object(A.os, "name", "nt"), mock.patch.object(A, "_wait_writable", waits.append), \
+                mock.patch.object(A, "_full_pipe_error", lambda e, b: e.errno == _errno.ENOSPC):
+            A._write_all(stream, "receipt\n")
+        self.assertEqual(bytes(raw.got), b"the caller's line\nreceipt\n")
+        self.assertEqual(len(waits), 2, waits)   # the first flush and the last, once each
+        raw.done = True
+
+    def test_the_pieces_on_windows_are_4096_bytes_and_one_write_elsewhere(self):
+        """The number the CHANGELOG states, counted: on Windows the byte stream is given 4096 bytes at a time (the last
+        piece what is left), under the 8192 of the buffer Python gives a pipe; elsewhere everything in one write."""
+        self.assertGreaterEqual(io.DEFAULT_BUFFER_SIZE, 2 * 4096)
+        text = "".join("%06d\n" % i for i in range(5000))   # 35 000 bytes
+        for name, want in (("nt", [4096] * 8 + [35000 - 8 * 4096]), ("posix", [35000])):
+            sizes = []
+
+            class Counting(io.BufferedWriter):
+                def write(self, b):
+                    sizes.append(len(b))
+                    return super().write(b)
+            raw = io.BytesIO()
+            stream = io.TextIOWrapper(Counting(raw, 8192), encoding="utf-8", newline="\n")
+            with self.subTest(os_name=name), mock.patch.object(A.os, "name", name):
+                A._write_all(stream, text)
+                self.assertEqual(sizes, want)
+                self.assertEqual(raw.getvalue(), text.encode("ascii"))
+
+        class Lying(io.BufferedWriter):   # a count over the piece given, once: bytes would be skipped in silence
+            lied = False
+
+            def write(self, b):
+                n = super().write(b)
+                if not self.lied:
+                    self.lied, n = True, n + 1
+                return n
+        stream = io.TextIOWrapper(Lying(io.BytesIO(), 8192), encoding="utf-8", newline="\n")
+        with mock.patch.object(A.os, "name", "nt"), self.assertRaises(OSError) as e:
+            A._write_all(stream, text)
+        self.assertIn("short write", str(e.exception))
+
+    def test_a_full_pipe_is_enospc_on_a_pipe_on_windows_and_nothing_else(self):
+        """_full_pipe_error with Windows' two calls stood in (GetFileType by handle: 3 a pipe, 1 a disk file, 2 a
+        character device): true for ENOSPC on a pipe alone, so a full disk stays the error it is; false when the
+        descriptor cannot be asked, for another errno, for BlockingIOError, and on any other system."""
+        import errno as _errno
+        import types
+        kinds = {7: 3, 8: 1, 9: 2}
+        ctypes_ = types.SimpleNamespace(windll=types.SimpleNamespace(kernel32=types.SimpleNamespace(GetFileType=kinds.__getitem__)))
+
+        def handle(fd):
+            if fd not in kinds:
+                raise OSError(_errno.EBADF, "Bad file descriptor")
+            return fd
+        msvcrt_ = types.SimpleNamespace(get_osfhandle=handle)
+
+        class Buf:
+            def __init__(self, fd):
+                self.fd = fd
+
+            def fileno(self):
+                if self.fd is None:
+                    raise ValueError("no descriptor")
+                return self.fd
+        full = OSError(_errno.ENOSPC, "No space left on device")
+        with mock.patch.dict(sys.modules, {"ctypes": ctypes_, "msvcrt": msvcrt_}):
+            with mock.patch.object(A.os, "name", "nt"):
+                got = [A._full_pipe_error(full, Buf(7)), A._full_pipe_error(full, Buf(8)), A._full_pipe_error(full, Buf(9)),
+                       A._full_pipe_error(full, Buf(None)), A._full_pipe_error(full, Buf(10)),
+                       A._full_pipe_error(OSError(_errno.EPIPE, "Broken pipe"), Buf(7)),
+                       A._full_pipe_error(BlockingIOError(_errno.ENOSPC, "x"), Buf(7))]
+            self.assertEqual(got, [True, False, False, False, False, False, False])
+            with mock.patch.object(A.os, "name", "posix"):
+                self.assertFalse(A._full_pipe_error(full, Buf(7)))
+
+    def test_the_wait_on_windows_is_a_pause_and_asks_for_no_descriptor(self):
+        with mock.patch.object(A.os, "name", "nt"):
+            self.assertIsNone(A._wait_writable(io.BytesIO()))
+        with mock.patch.object(A.os, "name", "posix"), self.assertRaises(OSError):   # the control: select needs one
+            A._wait_writable(io.BytesIO())
+
+    def test_only_a_volume_made_for_the_test_is_filled(self):
+        """_ap2_platform.fill_volume writes until the volume is full. AP2_FULL_DIR naming a folder of the system's disk
+        would fill that disk: a volume over FILL_LIMIT is refused, with nothing written."""
+        import _ap2_platform as P
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        if shutil.disk_usage(d).total <= P.FILL_LIMIT:
+            self.skipTest("the temporary directory is itself on a volume under FILL_LIMIT")
+        open(os.path.join(d, "sink"), "wb").close()
+
+        def no_write(*a, **k):   # this test itself never fills a disk: without the refusal it fails here, nothing written
+            raise AssertionError("fill_volume was about to write on a volume over FILL_LIMIT")
+        with mock.patch.object(P, "open", no_write, create=True):
+            with self.assertRaises(RuntimeError):
+                P.fill_volume(d)
+            with mock.patch.dict(os.environ, {"AP2_FULL_DIR": d}), mock.patch.object(P.sys, "platform", "darwin"), \
+                    self.assertRaises(RuntimeError):
+                P.full_sink()
+        self.assertEqual(os.listdir(d), ["sink"])
 
     def test_cli_receipt_has_no_cr(self):
         p = subprocess.run([sys.executable, os.path.join(ROOT, "ap2_evidence.py"), "verify", VECTOR], capture_output=True, timeout=120)

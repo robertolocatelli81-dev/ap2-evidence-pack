@@ -21,9 +21,19 @@ def full_sink():
     return None
 
 
+FILL_LIMIT = 64 << 20   # bytes: the CI's volumes are 4 MB (macOS) and 16 MB (Windows)
+
+
 def fill_volume(d):
     """Fill the volume of directory `d` to its last byte with files ap2-fill-<n> (blocks of 64 KiB, then down to 1 byte;
-    a write that does not fit raises ENOSPC). Idempotent: a full volume takes nothing more."""
+    a write that does not fit raises ENOSPC). Idempotent: a full volume takes nothing more. Only a volume made for the
+    test is filled: one larger than FILL_LIMIT (AP2_FULL_DIR naming a folder of the system's disk) is refused with
+    nothing written."""
+    import shutil
+    total = shutil.disk_usage(d).total
+    if total > FILL_LIMIT:
+        raise RuntimeError("AP2_FULL_DIR: %r is on a volume of %d bytes; only a volume made for the tests, of at most "
+                           "%d bytes, is filled" % (d, total, FILL_LIMIT))
     n = len([x for x in os.listdir(d) if x.startswith("ap2-fill-")])
     for size in (65536, 4096, 512, 1):
         try:
