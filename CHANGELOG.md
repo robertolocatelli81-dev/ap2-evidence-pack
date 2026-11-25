@@ -21,7 +21,7 @@
   secret: replace it. To look for it: `artifacts[].key.jwk` with any member but the five above, and an `@` before the host
   of a `tsa_url` or of a `jwks_url`.
 - Verify, the format and the 61 vectors are unchanged. A supplied key with a member the verifiers' profile refuses (a
-  float, an integer beyond 2^53, 511 levels) builds now: the member is not sealed. `test_ap2_secrets.py` (14 tests, 9 fail
+  float, an integer beyond 2^53, 511 levels) builds now: the member is not sealed. `test_ap2_secrets.py` (15 tests, 10 fail
   on 1.11.1): a canary in every input that takes a key or a URL, searched in every output raw, hex, base64, base64url and
   decimal, in both verifiers, `examples/` and the producer's identity; `test_ap2_key_choice.py` (3 tests: 2 fail on 1.11.1).
 

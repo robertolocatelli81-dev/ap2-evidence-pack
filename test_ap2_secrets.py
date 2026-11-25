@@ -169,6 +169,13 @@ class SuppliedKeys(Base):
         self.clean()
         self.assertNotIn("key_members_not_sealed", ap2.build_evidence([{"name": "m", "sd_jwt": self.tok}], self.pack, keys={"m": dict(self.jwk, kid="k1")}))
 
+    def test_names_are_repeated_up_to_32_characters(self):
+        self.assertEqual(ap2._nameable("n" * 32), repr("n" * 32))
+        self.assertEqual(ap2._nameable("n" * 33), "(a name not repeated here)")
+        self.assertEqual(ap2._nameable(5), "(a name not repeated here)")
+        r = ap2.build_evidence([{"name": "m", "sd_jwt": self.tok}], self.pack, keys={"m": dict(self.jwk, **{"n" * 32: 1, "o" * 33: 2})})
+        self.assertEqual(r["key_members_not_sealed"], {"m": ["(a name not repeated here)", "n" * 32]})
+
     def test_library_misuse(self):
         for kw in ({"keys": {"m": self.d64}}, {"keys": {"m": [self.d64]}}, {"keys": {"m": self.pem()}}, {"keys": {"m": self.sk}}, {"keys": {"m": {"d": self.d64}}}, {"keys": {self.d64: self.jwk}},
                    {"keys": [self.d64]}, {"keys": {"m": {"kty": "OKP", "crv": "Ed25519", "x": self.jwk["x"], "d": self.d64}}}, {"keys": {"m": {"kty": "oct", "k": self.d64}}},
@@ -217,7 +224,8 @@ class Tokens(Base):
 class Urls(Base):
     BAD = ("https://u:{p}@h/", "http://u:{p}@h/x", "https://{p}@h", "https://u:{p}@[::1]:8/", "HTTPS://u:{p}@h/", "https:/u:{p}@h/", "https:u:{p}@h/", "https:///u:{p}@h/", "//u:{p}@h/", "u:{p}@h", "{p}",
            "https://u:{p}%40h/", "https://u:{p}\\@h/", "https://h\\@u:{p}/", "https://h /{p}", "https://h/\t{p}", "https://h/\n{p}", "https://h/\x00{p}", "https://é/{p}", "https://h/é{p}", "https://u:{p}@h@i/",
-           "ftp://u:{p}@h/", "file:///{p}", "https://", "https:///x", "https://h:99999{p}/", " https://h/{p}", "https://h/{p} ")
+           "ftp://u:{p}@h/", "file:///{p}", "https://", "https:///x", "https://h:99999{p}/", " https://h/{p}", "https://h/{p} ", "https://{p}%40h/", "https://h/\\{p}", "https://h/{p}\x7f", "https:{p}/", "https:/{p}/",
+           "https://[u:{p}@h]/", "https://[{p}]/", "https://h?\\{p}", "https://h#\u00e9{p}")
     GOOD = ("http://h", "https://h/", "https://h:8080/a@b?c=d@e#f@g", "https://[::1]:8/", "HTTP://tsa.example/tsr", "https://127.0.0.1/%20x", "https://h_x.example:/", "https://h?x")
 
     def bad(self):
@@ -245,6 +253,8 @@ class Urls(Base):
                                  (ap2.build_evidence, ([{"name": "m", "sd_jwt": self.tok}], self.pack), {"jwks_urls": {"m": u}}), (ap2.add_anchor, (good, u), {})):
                     r, text = self.call(f, *a, **kw)
                     self.assertIsInstance(r, ap2.Ap2EvidenceError, u); self.none(u, *text); self.assertEqual(os.listdir(self.out), [])
+                    if "jwks_urls" in kw:
+                        self.assertRegex(str(r), "^jwks_urls\\['m'\\]: ")   # with the other arguments, before any token is read
                 self.assertEqual(ap2._rfc3161_stamp("0" * 64, u)["anchored"], False)
                 self.none(u, ap2._rfc3161_stamp("0" * 64, u))
                 self.call(ap2._snapshot_key, ap2.parse_sd_jwt(self.tok), None, u)
