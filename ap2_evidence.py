@@ -4410,9 +4410,14 @@ def _write_all(stream, text: str) -> None:
         stream.flush()
         return
     data = memoryview(_text_layer_bytes(stream, buf, text))
+    # Windows before Python 3.12 reports a full non-blocking pipe as ENOSPC with no count, and a BufferedWriter given more
+    # than its buffer can have handed part of it to the pipe before raising: retried whole, that part came twice (CI run
+    # 45561704870, Windows, Python 3.9: a 29 KB receipt arrived as 47 MB). There it is written in pieces of 4096 bytes, under
+    # the buffer's 8192: each is copied whole into the buffer or not at all (a flush that fails keeps what it did not write).
+    step = 4096 if os.name == "nt" else len(data)
     while data:
         try:
-            n = buf.write(data)
+            n = buf.write(data[:step])
             waited = False
         except BlockingIOError as e:   # buffered stream on a full non-blocking pipe: part of it taken
             n, waited = e.characters_written, True
@@ -4422,7 +4427,7 @@ def _write_all(stream, text: str) -> None:
             n, waited = 0, True
         if n is None:   # raw stream on a full non-blocking pipe: nothing taken
             n, waited = 0, True
-        if n < 0 or n > len(data) or (n == 0 and not waited):
+        if n < 0 or n > min(len(data), step) or (n == 0 and not waited):
             raise OSError(f"short write: {len(data)} bytes not written")
         data = data[n:]
         if data and waited:

@@ -1,32 +1,13 @@
-name: ci
-# Every push to any branch and every pull request (1.11.0). Linux on every Python from the declared floor (3.9) to 3.14,
-# macOS and Windows, each with the optional tools (node 24 for the JS verifier, OpenSSL 3 for the TSA and x5c checks), and
-# Linux without them (both removed from the runner: the suites must skip what needs them, with the reason, and pass).
-on:
-  push:
-  pull_request:
+name: windows-probe
+on: {push: {branches: [ci-prova-diag-1.11.0]}}
 permissions:
   contents: read
 jobs:
-  tests:
-    name: tests (python ${{ matrix.python }}, ${{ matrix.os }}, ${{ matrix.tools }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ matrix.os == 'windows-latest' && 150 || 60 }}   # Windows 3.13 took 55 minutes in run 45467635237
-    defaults:
-      run:
-        shell: bash
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-24.04]   # 3.9 has no build for ubuntu-26.04 (ubuntu-latest from 2026-10-19)
-        python: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
-        tools: [with-tools]
-        include:
-          - {os: ubuntu-24.04, python: "3.9", tools: without-tools}
-          - {os: ubuntu-24.04, python: "3.14", tools: without-tools}
-          - {os: macos-latest, python: "3.13", tools: with-tools}
-          - {os: windows-latest, python: "3.13", tools: with-tools}
-          - {os: windows-latest, python: "3.9", tools: with-tools}   # the declared floor, where os.fchmod does not exist
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults: {run: {shell: bash}}
+    strategy: {fail-fast: false, matrix: {python: ["3.9", "3.13"], tools: [with-tools]}}
     steps:
       # the bytes as committed: Git for Windows turns LF into CRLF by default (core.autocrlf=true); the vectors and the
       # files a test compares byte for byte are read as they are in the repository
@@ -42,21 +23,6 @@ jobs:
         if: matrix.tools == 'with-tools'
         with:
           node-version: "24"   # OpenSSL >= 3.5 inside node: the JS verifier checks ML-DSA-65 too
-      - name: "macOS: OpenSSL 3 before the system's LibreSSL (the reference needs OpenSSL 3.0 options)"
-        if: runner.os == 'macOS' && matrix.tools == 'with-tools'
-        run: |
-          brew list openssl@3 >/dev/null 2>&1 || brew install openssl@3
-          echo "$(brew --prefix openssl@3)/bin" >> "$GITHUB_PATH"
-      - name: "macOS: a full volume, the equivalent of Linux's /dev/full (writes there fail with ENOSPC)"
-        if: runner.os == 'macOS'
-        run: |
-          hdiutil create -size 4m -fs HFS+ -volname ap2full "$RUNNER_TEMP/full.dmg"
-          hdiutil attach "$RUNNER_TEMP/full.dmg"
-          : > /Volumes/ap2full/sink
-          # filled to the last byte by the tests (_ap2_platform.fill_volume), which also free room to put a file there
-          python -c "import sys; sys.path.insert(0, '.'); import _ap2_platform as P; P.fill_volume('/Volumes/ap2full')"
-          if printf x > /Volumes/ap2full/probe; then echo "the volume is not full"; exit 1; fi
-          echo "AP2_FULL_DIR=/Volumes/ap2full" >> "$GITHUB_ENV"
       - name: "Windows: a full volume, the equivalent of Linux's /dev/full (writes there fail with ENOSPC)"
         if: runner.os == 'Windows'
         shell: pwsh
@@ -73,234 +39,32 @@ jobs:
           try { [IO.File]::WriteAllBytes("Q:\probe", [byte[]](1)) } catch [IO.IOException] { $full = $true }
           if (-not $full) { throw "the volume is not full: a 1-byte file was written" }
           "AP2_FULL_DIR=Q:\" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
-      - name: "without-tools: node and openssl removed from the runner (not hidden from one step: from every step after this)"
-        if: matrix.tools == 'without-tools'
+      - run: python -m pip install --disable-pip-version-check cryptography tomli
+      - name: what node sees of a full PIPE_NOWAIT pipe
         run: |
-          set -e
-          for t in node openssl; do
-            while p=$(command -v "$t"); do sudo mv "$p" "$p.removed-by-ci"; hash -r; done
-          done
-          if command -v node || command -v openssl; then echo "::error::a tool is still on PATH"; exit 1; fi
-          echo "node and openssl are absent"
-      - name: "interpreter, tools and the one dependency (cryptography: Ed25519/P-256 and, from 48, ML-DSA-65)"
+          cat > probe.mjs <<'J'
+          import { fstatSync, writeSync } from "node:fs";
+          const o = []; const t = (k, f) => { try { const v = f(); o.push(k + " " + v); } catch (e) { o.push(k + " THROW " + e.code + " " + e.message); } };
+          t("node", () => process.version);
+          t("fstat", () => { const st = fstatSync(2); return "fifo=" + st.isFIFO() + " file=" + st.isFile() + " mode=" + st.mode; });
+          for (const len of [1, 100, 5000]) t("write" + len, () => writeSync(2, Buffer.alloc(len, 88), 0, len));
+          console.log(o.join("\n"));
+          J
+          cat > probe.py <<'P'
+          import os, subprocess, shutil
+          import _ap2_platform as P
+          r, w = os.pipe(); P.set_nonblocking(w); tot = 0
+          while True:
+              try:
+                  n = os.write(w, b"P" * 4096)
+                  if not n: break
+                  tot += n
+              except OSError as e:
+                  print("filled", tot, repr(e)); break
+          p = subprocess.run([shutil.which("node"), "probe.mjs"], stdout=subprocess.PIPE, stderr=w)
+          print(tot, p.returncode, p.stdout.decode())
+          P
+          python probe.py
+      - name: tests
         run: |
-          set -e
-          python --version
-          python -m pip install --disable-pip-version-check cryptography build "setuptools>=68"
-          # 1.11.0: tomli where tomllib is not in the standard library, so test_packaging reads pyproject.toml there too
-          python -c "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)" || python -m pip install --disable-pip-version-check tomli
-          python -c "import cryptography, sys; print('cryptography', cryptography.__version__, 'on', sys.platform)"
-          if command -v node; then node --version; else echo "node: absent"; fi
-          if command -v openssl; then openssl version; else echo "openssl: absent"; fi
-      - name: Unit + conformance tests (every suite in the repo, fail-closed; every file runs, the failures are listed at the end)
-        run: |
-          failed=""
-          # a file that hangs is ended after 15 minutes with the traceback of every thread (faulthandler), and the rest runs:
-          # on Windows 3.9 a hang in test_ap2_anchors.py used up the whole job (run 45467635237) and named nothing
-          for t in test_*.py pqcrypto/test_*.py; do echo "== $t"
-            (cd "$(dirname "$t")" && python -c "import faulthandler, runpy, sys; faulthandler.dump_traceback_later(900, exit=True); sys.argv = sys.argv[1:]; runpy.run_path(sys.argv[0], run_name='__main__')" "$(basename "$t")") || failed="$failed $t"
-          done
-          if [ -n "$failed" ]; then echo "::error::failed:$failed"; exit 1; fi
-      - name: "Every test in every module is actually collected (a stray unittest.main() once hid 13 tests from CI)"
-        if: ${{ !cancelled() }}
-        run: |
-          set -e
-          for t in test_*.py pqcrypto/test_*.py; do
-            m=$(basename "$t" .py); d=$(dirname "$t")
-            # a failing file still prints its count: under pipefail its exit must not end this step (the step above judges it)
-            direct=$(cd "$d" && { python "$(basename "$t")" 2>&1 || true; } | sed -n 's/^Ran \([0-9]*\) test.*/\1/p' | tail -1)
-            full=$(cd "$d" && { python -m unittest "$m" 2>&1 || true; } | sed -n 's/^Ran \([0-9]*\) test.*/\1/p' | tail -1)
-            echo "$t: as a script $direct, as a module $full"
-            if [ "$direct" != "$full" ]; then echo "::error::$t runs $direct tests as a script but $full as a module"; exit 1; fi
-          done
-      - name: "Gate — build the sample evidence, verify it (exit 0), tamper one artifact, verify again (MUST exit 1)"
-        if: ${{ !cancelled() }}
-        run: |
-          set -e
-          T=$(mktemp -d); cp -r . "$T"; cd "$T"
-          python examples/make_samples.py > /dev/null
-          python ap2_evidence.py build out.json checkout=checkout.sdjwt payment=payment.sdjwt > /dev/null
-          python ap2_evidence.py verify out.json > /dev/null
-          python - <<'PY'
-          import json
-          with open("out.json", encoding="utf-8") as fh:
-              d = json.load(fh)
-          v = d["artifacts"][0]["sd_jwt_compact"]
-          d["artifacts"][0]["sd_jwt_compact"] = v[:30] + ("A" if v[30] != "A" else "B") + v[31:]
-          with open("tampered.json", "w", encoding="utf-8", newline="\n") as fh:
-              json.dump(d, fh)
-          PY
-          if python ap2_evidence.py verify tampered.json > /dev/null; then
-            echo "::error::the verifier accepted a tampered evidence pack"; exit 1; fi
-          echo "tampered pack rejected (exit 1), intact pack accepted (exit 0)"
-      - name: "Differential oracle: Python reference vs Node verifier on every vector, hostile file and CLI case"
-        if: ${{ !cancelled() && (matrix.tools == 'with-tools') }}
-        run: python verifiers/differential_oracle.py
-      - name: "without-tools — the differential oracle compares with the Node verifier, which this cell has removed"
-        if: ${{ !cancelled() && (matrix.tools == 'without-tools') }}
-        run: echo "skipped with its reason - no node here; the oracle runs in every with-tools cell"
-      - name: "Ablation: the strict layers removed from a copy of the reference must turn the suite red"
-        if: ${{ !cancelled() }}
-        env:
-          PYTHON: python
-        run: bash verifiers/lax_python_ablation.sh
-      - name: "Every malformed input gets a VERDICT, never a traceback (with its own crashing-verifier control)"
-        if: ${{ !cancelled() }}
-        run: python verifiers/type_fuzz.py
-      - name: "The DISTRIBUTED package, not the repository: build the wheel, install it alone in a clean venv, import and verify a vector"
-        if: ${{ !cancelled() }}
-        run: |
-          set -e
-          RT=$(cd "$RUNNER_TEMP" && pwd)   # a POSIX path on Windows too (D:\a\_temp is /d/a/_temp in Git's bash): globs work on it
-          python -m pip install -q build
-          python -m build --wheel --outdir "$RT/dist" .
-          python -m venv "$RT/pkgvenv"
-          vb="$RT/pkgvenv/bin"; [ -d "$vb" ] || vb="$RT/pkgvenv/Scripts"
-          "$vb/python" -m pip install -q "$RT"/dist/*.whl          # no other install: the wheel must bring what it needs
-          # -I keeps this checkout off sys.path: measured 2026-10-05, without it `python -c` and `python -m` run from the
-          # checkout imported ./ap2_evidence.py and ./pqcrypto/sigsuite.py (the repository, not the wheel) and the step was
-          # green for the wrong reason. The asserts name the origin, so the step cannot go green on the checkout again.
-          "$vb/python" -I - <<'PY'
-          import os, sys, ap2_evidence, sigsuite, ap2_nist_beacon
-          for m in (ap2_evidence, sigsuite, ap2_nist_beacon):
-              assert os.path.realpath(m.__file__).startswith(os.path.realpath(sys.prefix)), m.__file__
-          assert os.path.basename(os.path.dirname(sigsuite.__file__)) == "ap2_pqcrypto", sigsuite.__file__
-          print("import ok", ap2_evidence.EVIDENCE_FORMAT, sigsuite.__file__)
-          PY
-          "$vb/python" -I -m ap2_evidence verify spec/vectors/ap2/valid_signed.json > /dev/null   # ML-DSA-65 from cryptography
-          # 1.8.0: the installed ACVP test finds its vectors in the wheel (the 1.7.3 wheel shipped the test without them)
-          (cd "$RT" && "$vb/python" -I -m unittest ap2_pqcrypto.test_acvp_mldsa65)
-          echo "the published package imports and verifies on its own"
-      - name: "The wheel carries the ACVP vectors, positive control included (test_ap2_wheel_contents.py on the checkout, 1.10.0)"
-        if: ${{ !cancelled() }}
-        run: |
-          python -m pip install -q build "setuptools>=68"
-          python test_ap2_wheel_contents.py 2>&1 | tee "$RUNNER_TEMP/wheel_contents.txt"
-          test "${PIPESTATUS[0]}" -eq 0
-          if grep -q "skipped" "$RUNNER_TEMP/wheel_contents.txt"; then echo "::error::test_ap2_wheel_contents.py skipped: its positive control did not run"; exit 1; fi
-      - name: "Wheel — no path shared with PyPI's pqcrypto (1.3.0): the suite ships as ap2_pqcrypto/"
-        if: ${{ !cancelled() }}
-        run: |
-          set -e
-          RT=$(cd "$RUNNER_TEMP" && pwd)
-          python - "$RT"/dist/*.whl <<'PY'
-          import sys, zipfile
-          names = zipfile.ZipFile(sys.argv[1]).namelist()
-          assert "ap2_pqcrypto/sigsuite.py" in names, "no ap2_pqcrypto/sigsuite.py"
-          assert not any(n.startswith("pqcrypto/") for n in names), "the wheel ships pqcrypto/"
-          print("the wheel ships ap2_pqcrypto/ and no pqcrypto/")
-          PY
-
-  floor:
-    # pyproject declares cryptography >= 48: the floor is measured, not asserted (ML-DSA-65 works from 48.0.0)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: "3.11"
-      - run: pip install "cryptography==48.0.0" build "setuptools>=68"
-      - name: Every suite with the declared floor
-        run: |
-          set -e
-          for t in test_*.py pqcrypto/test_*.py; do echo "== $t"; python "$t"; done
-
-  downstream-cryptovalid:
-    # cryptovalid-opencore >= 0.18.0 imports `ap2_evidence` from THIS package (its `ap2` extra) and ships no copy.
-    # The other side of that link is asked the same question on every change here: build the wheel from this checkout,
-    # clone cryptovalid-opencore master and run its AP2 tests against it — a skipped AP2 test is a red, not a green.
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    needs: tests
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: "3.11"
-      - name: "The wheel from this checkout (what cryptovalid installs), alone in a venv with cryptography"
-        run: |
-          set -e
-          python -m pip install -q build
-          python -m build --wheel --outdir "$RUNNER_TEMP/dist" .
-          python -m venv "$RUNNER_TEMP/venv"
-          "$RUNNER_TEMP/venv/bin/pip" install -q "$RUNNER_TEMP/dist"/*.whl cryptography
-      - name: "cryptovalid-opencore master — a clone that ships no ap2_evidence.py and no pqcrypto/ (else its tests would test the copy, not this package)"
-        run: |
-          set -e
-          git clone --quiet --depth 1 https://github.com/robertolocatelli81-dev/cryptovalid-opencore "$RUNNER_TEMP/cvo"
-          cd "$RUNNER_TEMP/cvo"
-          for f in ap2_evidence.py pqcrypto; do
-            if [ -e "$f" ]; then echo "::error::cryptovalid-opencore master ships $f: the clone would shadow this package"; exit 1; fi
-          done
-          "$RUNNER_TEMP/venv/bin/python" -I -c "import ap2_evidence, sys; assert ap2_evidence.__file__.startswith(sys.prefix), ap2_evidence.__file__; print('ap2_evidence from', ap2_evidence.__file__)"
-      - name: "cryptovalid's AP2 suites against this wheel — every AP2 test must RUN"
-        working-directory: ${{ runner.temp }}/cvo
-        run: |
-          set -e
-          for t in test_verify_evidence test_mcp test_audit_v1_types test_verifier_depth test_packaging; do
-            echo "== $t"
-            CV_REQUIRE_CRYPTO=1 "$RUNNER_TEMP/venv/bin/python" -m unittest -v "$t" 2>&1 | tee "$RUNNER_TEMP/$t.log"
-            test "${PIPESTATUS[0]}" -eq 0
-            if grep -iE "ap2.*\.\.\. skipped" "$RUNNER_TEMP/$t.log"; then echo "::error::$t skipped an AP2 test"; exit 1; fi
-          done
-      - name: "Gate through cryptovalid's front-end: a pack built here passes `verify_evidence.py ap2` and `auto` (exit 0); tampered, exit 1"
-        run: |
-          set -e
-          T=$(mktemp -d); cp -r . "$T"; cd "$T"
-          "$RUNNER_TEMP/venv/bin/python" examples/make_samples.py > /dev/null
-          "$RUNNER_TEMP/venv/bin/ap2-evidence" build ev.json checkout=checkout.sdjwt payment=payment.sdjwt > /dev/null
-          "$RUNNER_TEMP/venv/bin/python" "$RUNNER_TEMP/cvo/verify_evidence.py" ap2 ev.json > /dev/null
-          "$RUNNER_TEMP/venv/bin/python" "$RUNNER_TEMP/cvo/verify_evidence.py" auto ev.json > /dev/null   # needs cvo >= the auto-detect fix
-          "$RUNNER_TEMP/venv/bin/python" - <<'PY'
-          import json
-          with open("ev.json", encoding="utf-8") as fh:
-              d = json.load(fh)
-          v = d["artifacts"][0]["sd_jwt_compact"]
-          d["artifacts"][0]["sd_jwt_compact"] = v[:30] + ("A" if v[30] != "A" else "B") + v[31:]
-          with open("tampered.json", "w", encoding="utf-8", newline="\n") as fh:
-              json.dump(d, fh)
-          PY
-          if "$RUNNER_TEMP/venv/bin/python" "$RUNNER_TEMP/cvo/verify_evidence.py" ap2 tampered.json > /dev/null; then
-            echo "::error::cryptovalid's front-end accepted a tampered pack"; exit 1; fi
-          echo "pass on the built pack, refusal on the tampered one, through cryptovalid-opencore master"
-
-  third-verifier:
-    # The differential oracle compares two verifiers written by the same author: a MISREADING of the specification lands
-    # identically in both and they agree. This job asks a stack written by other people — Google's AP2 SDK over the
-    # `sd-jwt` reference implementation — the same questions about the same tokens. `sd-jwt` is deliberately NOT pinned:
-    # if a future release changes the declared divergence, this job turns red and the declaration gets re-measured
-    # instead of quietly staying in the README.
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: "3.11"
-      - name: "Third-party stack (pinned commit of google-agentic-commerce/AP2)"
-        run: |
-          set -e
-          git clone --quiet https://github.com/google-agentic-commerce/AP2 /tmp/ap2sdk
-          git -C /tmp/ap2sdk checkout --quiet e1ea56db72a6385bce3e5c1112b3a56ce60acb43
-          pip install -q cryptography jwcrypto sd-jwt pydantic
-      - name: "Cross-check: the third stack on every vector and every hostile mandate, with its positive controls"
-        env:
-          AP2_SDK_PATH: /tmp/ap2sdk/code/sdk/python
-        run: python verifiers/sdk_crosscheck.py --hostile
-      - name: "Ablation: a seeded divergence MUST turn that bench red (a bench that cannot report one proves nothing)"
-        env:
-          AP2_SDK_PATH: /tmp/ap2sdk/code/sdk/python
-          AP2_XCHECK_SEED_DIVERGENCE: "1"
-        run: |
-          set +e; python verifiers/sdk_crosscheck.py --hostile > /tmp/seeded.txt; rc=$?; set -e
-          # Exit alone is not the promise: a crash also exits non-zero. The run must REPORT the seeded divergence.
-          if [ "$rc" -eq 0 ] || ! grep -q "SEEDED:" /tmp/seeded.txt; then
-            echo "::error::a seeded divergence was not reported (rc=$rc)"; tail -5 /tmp/seeded.txt; exit 1; fi
-          echo "seeded divergence reported and exit $rc, as required"
+          rc=0; for t in test_receipt_not_written.py test_ap2_bytes_every_os.py test_ap2_which.py test_js_receipt_pipe.py; do echo "== $t"; python $t || rc=1; done; exit $rc

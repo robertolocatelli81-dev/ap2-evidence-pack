@@ -1239,7 +1239,9 @@ const EX_IOERR = 74;
 // bytes is an error. Before, writeSync(2) threw EAGAIN there and the usage line was lost with exit 74 (measured
 // 13/10/2026: stderr on a non-blocking pipe already full at start, read 1 s later).
 const pauseMs = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-function isPipe(fd) { try { return fstatSync(fd).isFIFO(); } catch { return false; } }
+// 1.11.0: a pipe on Windows is not always a FIFO to fstat (CI run 45561704870: the 0 was still read as a short write);
+// what stays an error is 0 on a regular file, where nothing else can explain it
+function isRegularFile(fd) { try { return fstatSync(fd).isFile(); } catch { return true; } }
 function writeAllSync(fd, data) {
   const buf = typeof data === "string" ? Buffer.from(data, "utf8") : data; let off = 0, pause = 1;
   while (off < buf.length) {
@@ -1247,7 +1249,7 @@ function writeAllSync(fd, data) {
     try { n = writeSync(fd, buf, off, buf.length - off); } catch (e) { if (e.code !== "EAGAIN") throw e; pauseMs(pause); pause = Math.min(pause * 2, 50); continue; }
     // 1.11.0: on Windows a full non-blocking pipe takes 0 bytes with no error (CI run 45547984550): that is EAGAIN there;
     // 0 on anything else (a regular file) is still the short write it is
-    if (n === 0 && process.platform === "win32" && isPipe(fd)) { pauseMs(pause); pause = Math.min(pause * 2, 50); continue; }
+    if (n === 0 && process.platform === "win32" && !isRegularFile(fd)) { pauseMs(pause); pause = Math.min(pause * 2, 50); continue; }
     if (!(n > 0)) throw new Error(`short write: ${buf.length - off} bytes not written`);
     off += n; pause = 1;
   }
