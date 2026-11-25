@@ -45,13 +45,13 @@ Mandate token of AP2's documentation (google-agentic-commerce/AP2 at `e1ea56d`, 
 `test_ap2_restriction.py`):
 
 ```bash
-pip install ap2-evidence-pack==1.11.1
+pip install ap2-evidence-pack==1.11.2
 git clone --depth 1 https://github.com/robertolocatelli81-dev/ap2-evidence-pack && cd ap2-evidence-pack/spec/vectors/beacon
 python3 -c "import json, ap2_nist_beacon as B; L=lambda f: json.load(open(f))['pulse']; c=open('cert_chain2.pem').read(); [print(B.verify_pair(L(a), L(b), c, B.PINNED)['reason'] or 'verified', a) for a, b in (('chain2_2030310.json', 'chain2_2030309.json'), ('chain2_2030309.json', 'chain2_2030310.json'))]"
 cd ../../.. && python3 -c "import base64, json, ap2_evidence as A, test_ap2_restriction as T; h = json.loads(base64.urlsafe_b64decode(T.AP2_PAY_OPEN.split('.')[0] + '==')); print(h); print(A.check_jose_header(h, 'example+sd-jwt', ['ES256'])); print(A.check_jose_profile(h, 'sd-jwt-vc', ['ES256']))"
 ```
 
-Output (measured on 2026-11-25 on the 1.11.1 tree, Python 3.13, network off; the same five lines as 1.10.0 gave on 2026-11-22):
+Output (measured on 2026-11-25 on the 1.11.2 tree, Python 3.13, network off; the same five lines as 1.10.0 gave on 2026-11-22):
 
 ```
 verified chain2_2030310.json

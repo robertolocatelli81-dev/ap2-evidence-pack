@@ -1,8 +1,9 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Copyright 2026 Roberto Locatelli -->
 
-# ap2-evidence-pack — normative format v1.0 (2026-09-05), specification revision 1.11.1 (2026-11-25)
+# ap2-evidence-pack — normative format v1.0 (2026-09-05), specification revision 1.11.2 (2026-11-26)
 
+> Revision 1.11.2 (2026-11-26): §2, a supplied key with a private member is refused by `build`; verify is unchanged.
 > Revision 1.11.1 (2026-11-25): §3.1, the message of a usage error is not "one line" (the reference writes its usage and the reason). No verdict changes.
 > Revision 1.11.0 (2026-11-25; tagged, not released): §5, §6 step 6, §6.9 and §10, the downgrade of a hybrid producer block is named and closed.
 > Removing the `ml-dsa-65` entry of a hybrid block and setting `scheme` to `classical-only` leaves a block that verifies:
@@ -195,6 +196,11 @@ name given twice to the same flag, and `build_evidence` refuses (`Ap2EvidenceErr
 name that is not an artifact. Up to 1.7.1 such a name was ignored in silence — measured 2026-11-02 on 1.7.1: `--key
 nope=k.json` built the pack with the header keys (`jwk_header`) and exit 0; `--key payment=K1 --key payment=K2` used K2
 alone, exit 0 — so a mistyped name left the caller's trust decision out of the pack with no sign of it.
+
+1.11.2 — a supplied key is public. `key.jwk` is sealed as given, so `build` refuses (`issuer_key_private`, no file) a
+supplied JWK with a private member: `d`, `p`, `q`, `dp`, `dq`, `qi`, `oth`, `k` (RFC 7518 §6) or `priv` (RFC 9964 §3).
+Up to 1.11.1 the pack carried it (measured 2026-11-25 on 1.8.0, 1.10.0 and 1.11.1 from PyPI, with `d`). Verify is
+unchanged: a pack built before is read as it was.
 
 1.7.3 — the key the caller names is the policy (NORMATIVE for a producer; the reference `build`). draft-ietf-oauth-sd-jwt-vc-27
 (16 November 2026, the current revision on the IETF datatracker, read on 2026-11-17; the sentences quoted here are the

@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.11.2 — 2026-11-26 — security: a private key given to `--key` is refused
+
+- Security, `build --key` and `build_evidence(keys=…)` (SPEC §2): the key the caller gives is sealed in the pack as given,
+  and a JWK with its private member was sealed with it. The documented value is the issuer's public JWK, and a wrong key is
+  refused because the signature is checked; but a builder who gave the issuer's own private JWK wrote `d` into the
+  evidence file (measured on 1.8.0, 1.10.0 and 1.11.1 from PyPI; older versions not measured). Now a JWK with `d`, `p`,
+  `q`, `dp`, `dq`, `qi`, `oth`, `k` (RFC 7518 §6) or `priv` (RFC 9964 §3) is `issuer_key_private`: exit 1, no file, and
+  the reason names the member, never its value.
+  If you gave `--key` a private JWK to a version up to 1.11.1, the packs built with it carry that key: replace the key.
+  To look for it: an `artifacts[].key.jwk` with any of those members.
+- Verify is unchanged. `test_ap2_key_choice.py` (3 tests: 2 fail on 1.11.1, in 45 subcases and one command line; the third
+  is the control, the public JWK sealed as before).
+
 ## 1.11.1 — 2026-11-25 — 1.11.0, with three corrections made before it was released
 
 The first released version of 1.11: 1.11.0 was tagged (v1.11.0) and not released, neither on GitHub nor on PyPI; what it
