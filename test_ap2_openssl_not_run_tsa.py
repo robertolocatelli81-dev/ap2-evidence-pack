@@ -64,7 +64,7 @@ class KeyIdStepNotRun(unittest.TestCase):
         system, _ap2_platform.fake_tool; it was a POSIX shell script.)"""
         import _ap2_platform as P
         when, what = case
-        crash = "import ctypes; ctypes.string_at(0)" if os.name == "nt" else "import os, signal; os.kill(os.getpid(), signal.SIGKILL)"
+        crash = P.WIN_CRASH.strip().replace("\n", "; ") if os.name == "nt" else "import os, signal; os.kill(os.getpid(), signal.SIGKILL)"
         act = {"crash": crash, "slow": "import time; time.sleep(45)"}[what]
         code = ("import subprocess, sys\n"
                 "if ' '.join(sys.argv[1:3]) == %r:\n    %s\n"

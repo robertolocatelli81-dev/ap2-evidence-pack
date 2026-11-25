@@ -4366,6 +4366,10 @@ def _write_all(stream, text: str) -> None:
             if buf is None:
                 raise
             _wait_writable(buf)
+        except OSError as e:
+            if buf is None or not _full_pipe_error(e, buf):
+                raise
+            _wait_writable(buf)
     if buf is None:
         stream.write(text)
         stream.flush()
@@ -4377,6 +4381,10 @@ def _write_all(stream, text: str) -> None:
             waited = False
         except BlockingIOError as e:   # buffered stream on a full non-blocking pipe: part of it taken
             n, waited = e.characters_written, True
+        except OSError as e:   # Windows before Python 3.12: ENOSPC for that pipe, nothing taken (1.11.0)
+            if not _full_pipe_error(e, buf):
+                raise
+            n, waited = 0, True
         if n is None:   # raw stream on a full non-blocking pipe: nothing taken
             n, waited = 0, True
         if n < 0 or n > len(data) or (n == 0 and not waited):
@@ -4390,6 +4398,24 @@ def _write_all(stream, text: str) -> None:
             return
         except BlockingIOError:
             _wait_writable(buf)
+        except OSError as e:
+            if not _full_pipe_error(e, buf):
+                raise
+            _wait_writable(buf)
+
+
+def _full_pipe_error(e: OSError, buf) -> bool:
+    """A full non-blocking pipe as Windows reports it before Python 3.12: OSError ENOSPC (errno 28), not BlockingIOError
+    (CI run 45547984550, Windows, Python 3.9). True only for that errno on a descriptor that is a pipe (GetFileType
+    FILE_TYPE_PIPE), so a disk that is full stays the error it is."""
+    if os.name != "nt" or e.errno != errno.ENOSPC or isinstance(e, BlockingIOError):
+        return False
+    try:
+        import ctypes
+        import msvcrt
+        return ctypes.windll.kernel32.GetFileType(msvcrt.get_osfhandle(buf.fileno())) == 3   # FILE_TYPE_PIPE
+    except (OSError, ValueError, AttributeError):
+        return False
 
 
 def _emit(text: str) -> Optional[str]:

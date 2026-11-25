@@ -51,7 +51,7 @@ def _run(cmd, mode, cwd=None, stderr_mode="capture"):
     with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
         stdout, close, close_after = out, [], None
         if mode == "devfull":
-            stdout = close_after = open(_FULL, "wb")
+            stdout = close_after = open(full_sink(), "wb")
         elif mode == "pipe":
             r, w = os.pipe()
             os.close(r)
@@ -61,7 +61,7 @@ def _run(cmd, mode, cwd=None, stderr_mode="capture"):
             close.append(1)
         se = err
         if stderr_mode == "devfull":
-            se = open(_FULL, "wb")
+            se = open(full_sink(), "wb")
         elif stderr_mode == "closed":   # fd 2 closed before exec
             se = None
             close.append(2)
@@ -87,7 +87,9 @@ class TestPythonVerify(unittest.TestCase):
             self.assertEqual(err, b"")
 
     def test_lost_receipt_is_74_with_one_line_on_stderr(self):
-        for mode, why in (("devfull", b"No space left on device"), ("pipe", b"Broken pipe"), ("closed", b"stdout is closed")):
+        # Windows: a write to a pipe whose reader is gone is ERROR_NO_DATA, which CPython reports as EINVAL there
+        for mode, why in (("devfull", b"No space left on device"), ("pipe", b"Invalid argument" if _WIN else b"Broken pipe"),
+                          ("closed", b"stdout is closed")):
             for path in (_VALID, _INVALID):
                 with self.subTest(mode=mode, input=os.path.basename(path)):
                     rc, _, err = _run(_PY + ["verify", path], mode)
@@ -403,7 +405,7 @@ def _run_err(cmd, emode, cwd=None):
     with tempfile.TemporaryFile() as out:
         se, close = None, ()
         if emode == "full":
-            se = open(_FULL, "wb")
+            se = open(full_sink(), "wb")
         else:
             close = (2,)
         try:
@@ -482,13 +484,17 @@ def _run_prefilled(cmd, which=1, env=None, cwd=None, other_devfull=False, other_
             n = os.write(w, b"P" * 4096)
         except BlockingIOError:
             break
-        if not n:   # Windows: a PIPE_NOWAIT pipe that is full takes 0 bytes instead of raising
+        except OSError as e:   # Windows before Python 3.12: a full PIPE_NOWAIT pipe is ENOSPC
+            if not (_WIN and e.errno == errno.ENOSPC):
+                raise
+            break
+        if not n:   # Windows: a PIPE_NOWAIT pipe that is full can take 0 bytes instead of raising
             break
         filled += n
     other = tempfile.TemporaryFile()
     if _WIN and other_limit is not None:   # no per-process file-size limit there: the full volume is its equivalent
         other_devfull, other_limit = True, None
-    dest = open(_FULL, "wb") if other_devfull else other
+    dest = open(full_sink(), "wb") if other_devfull else other
     try:   # other_limit: the other stream is a regular file that stops growing at that many bytes
         p = P.popen(cmd, fsize=other_limit, stdin=subprocess.DEVNULL, stdout=w if which == 1 else dest,
                     stderr=w if which == 2 else dest, cwd=cwd, env=dict(os.environ, **(env or {})))
@@ -645,7 +651,8 @@ class TestWholeOrWaited(unittest.TestCase):   # 1.11.0: every system (non-blocki
         idle, rc, got, err = _run_prefilled([sys.executable, "-c", code, _HERE, _VALID], 1)
         self.assertTrue(idle, "no 1-second window under 0.2 s of CPU: a spin, or it never waited")
         self.assertEqual((rc, err), (0, b""))
-        self.assertEqual(got, b"before\n" + receipt)
+        # the caller's own line goes through its own text layer: "\r\n" on Windows (the receipt keeps "\n" everywhere)
+        self.assertEqual(got, b"before" + os.linesep.encode("ascii") + receipt)
 
     def test_encodings_are_the_text_layers(self):
         """The receipt's bytes are the ones Python's own stdout text layer writes for the same text, in five encodings (a
@@ -702,7 +709,8 @@ class TestWholeOrWaited(unittest.TestCase):   # 1.11.0: every system (non-blocki
         finally:
             sys.stdout = saved
         head, _, rest = s.buffer.getvalue().decode("utf-8").partition("\n")
-        self.assertEqual((rc, head, json.loads(rest)["valid"]), (0, "before", True))
+        # "before\n" went through the caller's own wrapper, which writes os.linesep ("\r\n" on Windows)
+        self.assertEqual((rc, head + "\n", json.loads(rest)["valid"]), (0, "before" + os.linesep, True))
 
 
 class TestPackWrittenWholeOrNotAtAll(unittest.TestCase):
@@ -1035,7 +1043,7 @@ class TestOpensslTemporaryFiles(unittest.TestCase):
             json.loads(written.decode("utf-8", "replace"))   # nothing (or a cut) — never a complete receipt
         if _FULL is None:
             self.skipTest(NO_FULL)
-        with open(_FULL, "wb") as fo:   # the control: no openssl failure, only the write — the same branch
+        with open(full_sink(), "wb") as fo:   # the control: no openssl failure, only the write — the same branch
             p = subprocess.run(_PY + ["verify", os.path.join(_VEC, "anchor_valid.json")], stdin=subprocess.DEVNULL, stdout=fo,
                                stderr=subprocess.PIPE, timeout=300)
         self.assertEqual(p.returncode, 74, p.stderr)
@@ -1087,7 +1095,7 @@ class TestOpensslTemporaryFiles(unittest.TestCase):
         fake = tempfile.mkdtemp(dir=self.d)
         # 1.11.0: a program on every system (_ap2_platform.fake_tool). The crash: SIGSEGV on POSIX; on Windows, which has
         # no signals, a real access violation (a read at address 0), exit code 0xC0000005
-        crash = ("import ctypes; ctypes.string_at(0)\n" if _WIN else "import os, signal; os.kill(os.getpid(), signal.SIGSEGV)\n")
+        crash = (P.WIN_CRASH if _WIN else "import os, signal; os.kill(os.getpid(), signal.SIGSEGV)\n")
         P.fake_tool(os.path.join(fake, "crash"), "openssl", crash)
         P.fake_tool(os.path.join(fake, "no"), "openssl", "import sys; print('Verification: FAILED'); sys.exit(1)\n")
         cases = ((_PY + ["verify", os.path.join(_VEC, "anchor_valid.json"), "--tsa-cert", os.path.join(_VEC, "anchor_probe_tsa.crt"),
@@ -1447,6 +1455,10 @@ class TestNemesisFinal(unittest.TestCase):   # 1.11.0: every system (faults: LD_
                     if not os.write(w, b"P" * 4096):   # Windows: a full PIPE_NOWAIT pipe takes 0 bytes
                         break
                 except BlockingIOError:
+                    break
+                except OSError as e:   # Windows before Python 3.12: ENOSPC
+                    if not (_WIN and e.errno == errno.ENOSPC):
+                        raise
                     break
             p = subprocess.Popen([_NODE, _JS], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=w)
             os.close(w)

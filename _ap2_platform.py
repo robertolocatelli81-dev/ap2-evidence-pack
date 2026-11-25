@@ -48,6 +48,7 @@ def full_volume_with(tc, name, data=b""):
     p = os.path.join(d, name)
     with open(p, "wb") as f:
         f.write(data)
+    tc.addCleanup(fill_volume, d)   # last: the volume is full again for whoever opens the sink next
     tc.addCleanup(lambda: os.path.exists(p) and os.remove(p))
     fill_volume(d)
     return p
@@ -278,6 +279,7 @@ def volume_dir(tc):
     import secrets
     sub = os.path.join(d, "t" + secrets.token_hex(4))
     os.mkdir(sub)
+    tc.addCleanup(fill_volume, d)   # last: the volume is full again for whoever opens the sink next
     tc.addCleanup(shutil.rmtree, sub, True)
     return sub
 
@@ -302,3 +304,11 @@ def unfill_volume(d):
 NO_TEMP_LIMIT = ("no per-process file-size limit on Windows, and tempfile there falls back from an unwritable TEMP to "
                  "%SYSTEMROOT%\\Temp, c:\\temp and the working directory, so no setting of this process makes every "
                  "temporary directory unwritable for the child alone")
+
+
+# A crash on Windows that nothing in the process can catch (ctypes turns an access violation in a foreign call into a
+# Python OSError: CI run 45547984550): RaiseFailFastException with an exception record whose code is
+# STATUS_ACCESS_VIOLATION, so the process ends at once with exit code 0xC0000005, as a crashed openssl would.
+WIN_CRASH = ("import ctypes\n"
+             "rec = (ctypes.c_ulong * 40)(); rec[0] = 0xC0000005\n"
+             "ctypes.windll.kernel32.RaiseFailFastException(ctypes.byref(rec), None, 0)\n")
