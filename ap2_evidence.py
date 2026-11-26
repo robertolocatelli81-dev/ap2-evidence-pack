@@ -1895,7 +1895,20 @@ def _rfc3161_stamp(digest_hex: str, tsa_url: str, timeout: int = 20) -> Dict:
     except Ap2WriteError:   # 1.5.3: openssl not started here (fork refused, no descriptor) or silent past `timeout`:
         raise               # stamp exits 74 with the pack unchanged; build records it as a note (_rfc3161_stamp_noted)
     except Exception as e:  # noqa: BLE001
-        return {"anchored": False, "note": f"{type(e).__name__}: {str(e)[:80]}"}
+        return {"anchored": False, "note": _net_reason(e)}
+
+
+def _net_reason(e: BaseException) -> str:
+    """1.11.2: what is sealed about a TSA that could not be asked: the kinds of the errors and the HTTP status or errno, never
+    their text, which can carry the URL or what a library made of it (up to 1.11.1 a password in the URL reached the note)."""
+    import urllib.error
+    if isinstance(e, urllib.error.HTTPError):
+        return f"HTTPError: {e.code}"
+    r = getattr(e, "reason", None) if isinstance(e, urllib.error.URLError) else None
+    if isinstance(r, BaseException):
+        n = getattr(r, "errno", None)
+        return f"{type(e).__name__}: {type(r).__name__}" + (f" [Errno {n}]" if isinstance(n, int) else "")
+    return type(e).__name__
 
 
 def _rfc3161_stamp_noted(digest_hex: str, tsa_url: str) -> Dict:

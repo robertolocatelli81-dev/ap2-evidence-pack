@@ -201,7 +201,7 @@ alone, exit 0 — so a mistyped name left the caller's trust decision out of the
 
 1.11.2 — nothing secret is sealed (NORMATIVE for a producer; the reference `build`). Verify is unchanged: a pack built
 before is read as it was. Read on 2026-11-25: RFC 7517 (Proposed Standard, May 2015, not updated), RFC 7518 (updated by
-RFC 9864, which does not touch §6), RFC 3986 (Internet Standard).
+RFC 9864, which does not touch §6), RFC 3986 (Internet Standard; updated by RFC 7320 and RFC 8820, not in §3.2.1: read on 2026-11-26).
 
 - A supplied key (`--key`, `keys`): the sealed `key.jwk` holds, of the members given, `kty`, `crv`, `x`, `y` — the
   parameters of an elliptic-curve public key, RFC 7518 §6.2.1, all that this format reads — and `kid` when it is a string
@@ -221,8 +221,9 @@ RFC 9864, which does not touch §6), RFC 3986 (Internet Standard).
   application "should reject the storage of such data in unencrypted form"); ASCII, no space or control character, no
   backslash. Any other is a usage error (exit 2; `Ap2EvidenceError` in the library) before the network is used and before
   a file is written, and the message does not repeat the URL. Its path and query are sealed and reach whoever reads the
-  pack: they MUST NOT carry a credential, which this format cannot recognise there. Up to 1.11.1 a user name and a
-  password in such a URL were sealed (measured on 1.8.0, 1.10.0 and 1.11.1 from PyPI).
+  pack: they MUST NOT carry a credential, which this format cannot recognise there. Up to 1.11.1 the password of
+  such a URL was sealed: in `rfc3161_timestamp.note` when the URL had no port, whole in `tsa_url` when a proxy answered
+  (measured on 1.8.0, 1.10.0 and 1.11.1 from PyPI).
 - A usage error of `--key`, `--jwks-url`, `--tsa` and `--trusted-producer-key` does not repeat the value given.
 
 1.7.3 — the key the caller names is the policy (NORMATIVE for a producer; the reference `build`). draft-ietf-oauth-sd-jwt-vc-27

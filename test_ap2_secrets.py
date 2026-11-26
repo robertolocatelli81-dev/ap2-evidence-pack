@@ -225,8 +225,8 @@ class Urls(Base):
     BAD = ("https://u:{p}@h/", "http://u:{p}@h/x", "https://{p}@h", "https://u:{p}@[::1]:8/", "HTTPS://u:{p}@h/", "https:/u:{p}@h/", "https:u:{p}@h/", "https:///u:{p}@h/", "//u:{p}@h/", "u:{p}@h", "{p}",
            "https://u:{p}%40h/", "https://u:{p}\\@h/", "https://h\\@u:{p}/", "https://h /{p}", "https://h/\t{p}", "https://h/\n{p}", "https://h/\x00{p}", "https://é/{p}", "https://h/é{p}", "https://u:{p}@h@i/",
            "ftp://u:{p}@h/", "file:///{p}", "https://", "https:///x", "https://h:99999{p}/", " https://h/{p}", "https://h/{p} ", "https://{p}%40h/", "https://h/\\{p}", "https://h/{p}\x7f", "https:{p}/", "https:/{p}/",
-           "https://[u:{p}@h]/", "https://[{p}]/", "https://h?\\{p}", "https://h#\u00e9{p}")
-    GOOD = ("http://h", "https://h/", "https://h:8080/a@b?c=d@e#f@g", "https://[::1]:8/", "HTTP://tsa.example/tsr", "https://127.0.0.1/%20x", "https://h_x.example:/", "https://h?x")
+           "https://[u:{p}@h]/", "https://[{p}]/", "https://h?\\{p}", "https://h#\u00e9{p}", "https://h:123456/{p}")
+    GOOD = ("http://h", "https://h/", "https://h:8080/a@b?c=d@e#f@g", "https://[::1]:8/", "HTTP://tsa.example/tsr", "https://127.0.0.1/%20x", "https://h_x.example:/", "https://h?x", "https://h:65535/")
 
     def bad(self):
         return [u.format(p=self.password) for u in self.BAD]
@@ -255,6 +255,8 @@ class Urls(Base):
                     self.assertIsInstance(r, ap2.Ap2EvidenceError, u); self.none(u, *text); self.assertEqual(os.listdir(self.out), [])
                     if "jwks_urls" in kw:
                         self.assertRegex(str(r), "^jwks_urls\\['m'\\]: ")   # with the other arguments, before any token is read
+                    if f is ap2.add_anchor:
+                        self.assertRegex(str(r), "^TSA: .*: not stamped$")   # stamp's own check, before the pack is read
                 self.assertEqual(ap2._rfc3161_stamp("0" * 64, u)["anchored"], False)
                 self.none(u, ap2._rfc3161_stamp("0" * 64, u))
                 self.call(ap2._snapshot_key, ap2.parse_sd_jwt(self.tok), None, u)
@@ -388,6 +390,26 @@ class Producer(Base):
         walk({"a": [{"kty": "EC", "d": "x"}]}, "control")
         self.assertEqual(hits, [("control", "d")])
 
+
+
+class TheTsaNoteCarriesNoText(unittest.TestCase):
+    """1.11.2: an error asking a TSA is sealed by its kinds, errno and HTTP status: its text can carry the URL."""
+
+    def test_no_text_of_the_error(self):
+        import http.client
+        import urllib.error
+        from unittest import mock
+        canary = "pw-CANARY-7f3e"
+        cases = [(http.client.InvalidURL("nonnumeric port: '%s@host'" % canary), "InvalidURL"),
+                 (urllib.error.URLError(ConnectionRefusedError(111, canary)), "URLError: ConnectionRefusedError [Errno 111]"),
+                 (urllib.error.URLError(canary), "URLError"),
+                 (urllib.error.HTTPError("https://h/" + canary, 503, canary, {}, None), "HTTPError: 503"),
+                 (ValueError(canary), "ValueError")]
+        for exc, want in cases:
+            with self.subTest(exc=type(exc).__name__), mock.patch("urllib.request.urlopen", side_effect=exc):
+                r = ap2._rfc3161_stamp("00" * 32, "https://tsa.example/")
+                self.assertEqual((r["anchored"], r["note"]), (False, want))
+                self.assertNotIn(canary, json.dumps(r))
 
 if __name__ == "__main__":
     unittest.main()

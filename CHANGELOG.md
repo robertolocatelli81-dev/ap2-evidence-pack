@@ -11,17 +11,26 @@
   `oth`, `k` (RFC 7518 §6) and `priv` (RFC 9964 §3) are `issuer_key_private`: exit 1, no file, the reason naming the
   member. A token whose header `jwk` or `cnf.jwk` carries one of those is refused too: the pack's copy of the header and
   of the claims would write it in clear beside the token (measured for the header on the same three versions).
-- Security, `build --tsa`, `build --jwks-url`, `stamp --tsa` (SPEC §2): a URL with a user name and a password was sealed
-  whole in `tsa_url` or `jwks_url` (measured on the same three versions; others not measured). Now it is a usage error (exit 2), before the network
+- Security, `build --tsa`, `build --jwks-url`, `stamp --tsa` (SPEC §2): the password of a URL given with user information
+  ended in the pack. Measured on the same three versions (others not measured): `build --tsa https://user:password@host/`,
+  with no port, wrote the password in `rfc3161_timestamp.note` (the error of the HTTP library repeats it: `nonnumeric
+  port: 'password@host'`), and with an HTTP proxy that answered the URL was sealed whole in `tsa_url`; `stamp` and a
+  second `--tsa` printed that error, or the URL, and did not write it. A `--jwks-url` with one was not fetched there
+  (no file); `build_evidence` with the fetch replaced sealed it whole in `jwks_url`. Now it is a usage error (exit 2), before the network
   and before a file, that does not repeat the URL; so is a URL without a host, not ASCII or with a space, which an error
   note could have repeated. The path and the query are sealed as before: they must not carry a credential.
+  The note of a TSA that could not be asked now holds the kinds of the errors, the HTTP status and the errno, never their
+  text, which can carry the URL.
 - The usage errors of `--key`, `--jwks-url`, `--tsa` and `--trusted-producer-key`, and argparse's "unrecognized arguments",
-  do not repeat what was given (a key typed in place of its file's name was on stderr).
+  do not repeat what was given (a key typed in place of its file's name was on stderr), but for a name of at most 32
+  characters before the `=`, which a message still names.
 - If you gave `--key` a private JWK, or a URL with a password, to a version up to 1.11.1, the packs built with it carry the
-  secret: replace it. To look for it: `artifacts[].key.jwk` with any member but the five above, and an `@` before the host
-  of a `tsa_url` or of a `jwks_url`.
+  secret: replace it. To look for it: `artifacts[].key.jwk` with any member but the five above; an `@` before the host
+  of a `tsa_url` or of a `jwks_url`, and an `@` in the `note` of `rfc3161_timestamp`; and, for a token that carried a
+  private key itself, one of the nine members above in `artifacts[].header.jwk` or in a `cnf.jwk` of
+  `artifacts[].resolved_claims`.
 - Verify, the format and the 61 vectors are unchanged. A supplied key with a member the verifiers' profile refuses (a
-  float, an integer beyond 2^53, 511 levels) builds now: the member is not sealed. `test_ap2_secrets.py` (15 tests, 10 fail
+  float, an integer beyond 2^53, 511 levels) builds now: the member is not sealed. `test_ap2_secrets.py` (16 tests, 11 fail
   on 1.11.1): a canary in every input that takes a key or a URL, searched in every output raw, hex, base64, base64url and
   decimal, in both verifiers, `examples/` and the producer's identity; `test_ap2_key_choice.py` (3 tests: 2 fail on 1.11.1).
 

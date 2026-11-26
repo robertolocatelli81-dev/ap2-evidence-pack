@@ -569,7 +569,7 @@ class CoordinateBelowP(unittest.TestCase):
 
 
 class ASuppliedKeyIsPublic(unittest.TestCase):
-    """1.11.2 (SPEC §2): key.jwk is sealed as given. Up to 1.11.1 a supplied JWK with its private member was sealed with it
+    """1.11.2 (SPEC §2): key.jwk holds the public members of the key given. Up to 1.11.1 a supplied JWK with its private member was sealed with it
     (measured on 1.8.0, 1.10.0 and 1.11.1 from PyPI: the issuer's `d` was in the evidence file)."""
 
     def setUp(self):
