@@ -406,7 +406,11 @@ class TheTsaNoteCarriesNoText(unittest.TestCase):
                  (urllib.error.HTTPError("https://h/" + canary, 503, canary, {}, None), "HTTPError: 503"),
                  (ValueError(canary), "ValueError")]
         for exc, want in cases:
-            with self.subTest(exc=type(exc).__name__), mock.patch("urllib.request.urlopen", side_effect=exc):
+            # the network is reached with or without openssl here: a query is played (a CI cell runs without openssl)
+            query = type("R", (), {"returncode": 0, "stdout": b"q", "stderr": b""})()
+            with self.subTest(exc=type(exc).__name__), mock.patch("urllib.request.urlopen", side_effect=exc), \
+                    mock.patch.object(ap2, "_which_absolute", lambda name: "/opt/openssl"), \
+                    mock.patch.object(ap2, "_run_openssl", lambda cmd, timeout, **kw: query):
                 r = ap2._rfc3161_stamp("00" * 32, "https://tsa.example/")
                 self.assertEqual((r["anchored"], r["note"]), (False, want))
                 self.assertNotIn(canary, json.dumps(r))
